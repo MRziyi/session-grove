@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="zh-CN">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light"><title>Session Grove</title><link rel="stylesheet" href="/style.css"></head>
+<body>
+  <aside class="sidebar">
+    <a class="brand" href="/" aria-label="Session Grove 首页"><span class="brand-mark">⑂</span><span>Session<br><strong>Grove</strong></span></a>
+    <div class="workspace-label">YOUR WORKSPACE <span id="mode"></span></div>
+    <button class="side-action" id="inbox"><span>▣</span> 收纳箱 <span class="small">Import</span></button>
+    <div class="section-label">项目 <button id="add-project" aria-label="新建项目">＋</button></div>
+    <nav id="projects" aria-label="项目"></nav>
+    <div class="section-label active-label">本机 Active <span id="active-count">0</span></div>
+    <div id="active-list" class="active-list"></div>
+    <div class="sidebar-bottom"><button id="sync-settings">⇅ <span>同步与设置</span></button><div class="device"><span class="online-dot"></span><span id="device-name">本地资料库</span></div><small>Local first. Yours to keep.</small></div>
+  </aside>
+  <main>
+    <header><div class="breadcrumb">Workspace <span>/</span> <strong id="project-breadcrumb">Projects</strong></div><div class="header-actions"><span id="capture-state">本地保存</span><button id="collect" class="quiet">↻ 收纳更新</button><button id="review-active" class="button small-button">Active 清单 <span id="pending-count">0</span></button></div></header>
+    <div class="project-heading"><div><div class="eyebrow">PROJECT GROVE</div><h1 id="project-name">你的会话，从这里生长。</h1><p id="project-description">按项目组织上下文，把当前需要的分支带回 Agent。</p></div><button id="new-branch" class="button primary">＋ 新会话</button></div>
+    <div class="workspace-toolbar"><div class="view-tabs" role="tablist"><button id="graph-view" class="selected" role="tab" aria-selected="true">⑂ 分支图</button><button id="list-view" role="tab" aria-selected="false">☷ 列表</button></div><div class="filters"><label class="search"><span>⌕</span><input id="search" placeholder="查找分支…" aria-label="查找分支"></label><label class="archive-filter"><input id="show-archived" type="checkbox"> 显示归档</label></div></div>
+    <div class="workspace"><section id="graph-panel" aria-label="项目分支图"><div id="graph-viewport"><div id="graph-world"></div></div><div class="graph-footer"><span><i class="legend-dot"></i> Active <span class="legend-line"></span> 上下文继承</span><div><button id="zoom-out" aria-label="缩小">−</button><span id="zoom-label">100%</span><button id="zoom-in" aria-label="放大">＋</button><button id="zoom-reset" aria-label="重置缩放">适应</button></div></div></section><aside id="inspector" aria-label="分支详情"><div class="inspector-empty"><span>⑂</span><h2>每条分支，都有来处。</h2><p>选择一个节点，查看上下文、检查点和更新来源。</p></div></aside></div>
+    <footer><span id="project-stats">0 branches</span><span>SESSION GROVE <span class="version">0.1.0</span></span></footer>
+  </main>
+  <dialog id="dialog"><form id="dialog-form"><div class="dialog-heading"><h2 id="dialog-title"></h2><button type="button" id="dialog-close" aria-label="关闭">×</button></div><div id="dialog-content"></div><p id="dialog-error" role="alert"></p><div id="dialog-actions"><button type="button" id="dialog-cancel" class="button">取消</button><button type="submit" id="dialog-submit" class="button primary">保存</button></div></form></dialog>
+  <div id="toast" role="status" aria-live="polite"></div>
+  <script type="module" src="/app.js"></script>
+</body>
+</html>

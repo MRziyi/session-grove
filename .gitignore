@@ -1,0 +1,6 @@
+node_modules/
+.grove/
+*.sqlite*
+.DS_Store
+coverage/
+test-results/
