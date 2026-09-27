@@ -9,9 +9,14 @@ if (args.includes('--help')) {
     console.log(`Session Grove\n\nnode bin/session-grove.js [--demo] [--port 7421] [--data-dir PATH]\n  --codex-home PATH   Codex native store (default CODEX_HOME or ~/.codex)\n  --claude-home PATH  Claude native store (default CLAUDE_CONFIG_DIR or ~/.claude)\n\n--demo uses isolated sample sessions and never reads personal session directories.`);
     process.exit(0);
 }
-const value = (key, fallback) => { const i = args.indexOf(key); if (i === -1)
-    return fallback; if (!args[i + 1] || args[i + 1].startsWith('--'))
-    throw new Error(`${key} requires a value`); return args[i + 1]; };
+const value = (key, fallback) => {
+    const i = args.indexOf(key);
+    if (i === -1)
+        return fallback;
+    if (!args[i + 1] || args[i + 1].startsWith('--'))
+        throw new Error(`${key} requires a value`);
+    return args[i + 1];
+};
 const demo = args.includes('--demo');
 const root = path.resolve(value('--data-dir', demo ? '.grove/demo' : path.join(os.homedir(), '.session-grove')));
 fs.mkdirSync(root, { recursive: true, mode: 0o700 });
@@ -35,17 +40,21 @@ catch (e) {
 fs.writeFileSync(lock, String(process.pid), { flag: 'wx', mode: 0o600 });
 const roots = demo ? { codex: path.join(root, 'native/codex'), claude: path.join(root, 'native/claude') } : { codex: path.resolve(value('--codex-home', process.env.CODEX_HOME || path.join(os.homedir(), '.codex'))), claude: path.resolve(value('--claude-home', process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude'))) };
 const app = createApp({ root, roots, demo, guard: demo ? () => { } : undefined });
-if (demo)
+if (demo) {
     seedDemo(app.store, roots);
+    app.native.refreshLocal();
+}
 const port = Number(value('--port', '7421'));
 if (!Number.isInteger(port) || port < 0 || port > 65535)
     throw new Error('Invalid port');
 app.server.listen(port, '127.0.0.1', () => console.log(`Session Grove${demo ? ' · isolated demo' : ''}\nhttp://127.0.0.1:${app.server.address().port}\nLibrary: ${root}`));
 app.server.on('error', e => { console.error(e.message); process.exitCode = 1; app.server.close(); });
-process.on('exit', () => { try {
-    if (fs.readFileSync(lock, 'utf8') === String(process.pid))
-        fs.rmSync(lock);
-}
-catch { } });
+process.on('exit', () => {
+    try {
+        if (fs.readFileSync(lock, 'utf8') === String(process.pid))
+            fs.rmSync(lock);
+    }
+    catch { }
+});
 for (const signal of ['SIGINT', 'SIGTERM'])
     process.on(signal, () => app.server.close(() => process.exit(0)));

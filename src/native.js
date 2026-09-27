@@ -35,6 +35,17 @@ export class Native {
         this.catalog.clear();
         for (const agent of ['codex', 'claude']) {
             const root = this.roots[agent];
+            const titles = new Map();
+            if (agent === 'codex' && fs.existsSync(path.join(root, 'session_index.jsonl'))) {
+                for (const line of this.read(path.join(root, 'session_index.jsonl')).split('\n')) {
+                    try {
+                        const entry = JSON.parse(line);
+                        if (entry.id && entry.thread_name)
+                            titles.set(entry.id, entry.thread_name);
+                    }
+                    catch { }
+                }
+            }
             const dirs = agent === 'codex' ? ['sessions', 'archived_sessions'] : ['projects'];
             for (const dir of dirs)
                 for (const file of walk(path.join(root, dir))) {
@@ -44,7 +55,8 @@ export class Native {
                         const raw = this.read(file), p = parse(raw, agent);
                         if (!p.nativeId)
                             continue;
-                        const item = { key: hash(file), agent, nativeId: p.nativeId, cwd: p.cwd || '', title: p.messages.find(m => m.role === 'user')?.text.slice(0, 100) || 'Untitled session', messages: p.messages.length, updatedAt: fs.statSync(file).mtime.toISOString(), managed: instances.some(i => i.file === file), warnings: p.warnings, archived: dir === 'archived_sessions' };
+                        const nativeTitle = titles.get(p.nativeId) || p.records.filter(r => r.value?.type === 'custom-title').at(-1)?.value?.customTitle;
+                        const item = { key: hash(file), agent, nativeId: p.nativeId, cwd: p.cwd || '', title: nativeTitle || p.messages.find(m => m.role === 'user')?.text.slice(0, 100) || 'Untitled session', messages: p.messages.length, updatedAt: fs.statSync(file).mtime.toISOString(), managed: instances.some(i => i.file === file), warnings: p.warnings, archived: dir === 'archived_sessions' };
                         this.catalog.set(item.key, { ...item, file });
                         found.push(item);
                     }
@@ -55,7 +67,7 @@ export class Native {
         }
         return { sessions: found.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)), errors };
     }
-    import(key, projectId, name) {
+    import(key, projectId, name, { observe = false } = {}) {
         const item = this.catalog.get(key);
         assert(item, '请先重新扫描，再选择记录');
         const duplicate = this.store.instances().find(i => i.file === item.file);
@@ -67,10 +79,27 @@ export class Native {
             const requiresAuxiliary = !!(sidecarDir && fs.existsSync(sidecarDir) && fs.readdirSync(sidecarDir).length);
             const b = this.store.branch(projectId, name || item.title, item.agent, raw, { cwd: item.cwd, agent: item.agent, nativeId: item.nativeId, client: 'unknown', operation: 'import', requiresAuxiliary });
             const instances = this.store.instances();
-            instances.push({ id: id(), branchId: b.id, agent: b.agent, root: this.roots[b.agent], nativeId: item.nativeId, file: item.file, cwd: item.cwd, desired: false, applied: !item.archived, baseRevision: b.head, baseline: raw, observedHash: hash(raw), adopted: true, title: item.title, requiresAuxiliary });
+            instances.push({ id: id(), branchId: b.id, agent: b.agent, root: this.roots[b.agent], nativeId: item.nativeId, file: item.file, cwd: item.cwd, desired: observe && !item.archived, applied: !item.archived, baseRevision: b.head, baseline: raw, observedHash: hash(raw), adopted: true, title: item.title, requiresAuxiliary });
             this.store.local('instances', instances);
             return b;
         });
+    }
+    refreshLocal() {
+        const collected = this.collect(), found = this.discover();
+        let discovered = 0;
+        for (const candidate of found.sessions) {
+            if (candidate.managed || candidate.archived)
+                continue;
+            try {
+                this.import(candidate.key, null, candidate.title, { observe: true });
+                discovered++;
+            }
+            catch (e) {
+                collected.errors.push({ message: e.message });
+            }
+        }
+        const families = this.store.detectFamilies();
+        return { ...collected, discovered, grouped: families.grouped, errors: [...collected.errors, ...found.errors] };
     }
     setActive(branchId, cwd, desired) {
         const b = this.store.get('branch', branchId);
@@ -246,13 +275,15 @@ export class Native {
                 const root = this.roots[agent], file = safePath(root, path.join(root, agent === 'codex' ? 'session_index.jsonl' : 'history.jsonl'));
                 const managed = new Set(after.filter(i => i.agent === agent).map(i => i.nativeId));
                 const existing = fs.existsSync(file) ? this.read(file).split('\n').filter(Boolean) : [];
-                const kept = existing.filter(line => { try {
-                    const v = JSON.parse(line);
-                    return !managed.has(agent === 'codex' ? v.id : v.sessionId);
-                }
-                catch {
-                    return true;
-                } });
+                const kept = existing.filter(line => {
+                    try {
+                        const v = JSON.parse(line);
+                        return !managed.has(agent === 'codex' ? v.id : v.sessionId);
+                    }
+                    catch {
+                        return true;
+                    }
+                });
                 for (const i of after.filter(i => i.agent === agent && i.applied)) {
                     const b = this.store.get('branch', i.branchId);
                     kept.push(JSON.stringify(agent === 'codex' ? { id: i.nativeId, thread_name: b.name, updated_at: now() } : { display: b.name, pastedContents: {}, timestamp: Date.now(), project: i.cwd, sessionId: i.nativeId }));

@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { id, now } from './util.js';
+import { parse } from './transcript.js';
 export function codexSample(cwd, pairs) {
     const nativeId = id(), rows = [{ timestamp: now(), type: 'session_meta', payload: { id: nativeId, timestamp: now(), cwd, originator: 'codex_cli_rs', cli_version: '0.155.0', source: 'cli', model_provider: 'openai', history_mode: 'legacy' } }];
     for (const [user, assistant] of pairs)
@@ -53,4 +54,25 @@ export function seedDemo(store, roots) {
     store.edit(related.id, { group: 'Literature' });
     store.project('Session Grove', '项目会话管理控制端');
     store.local('demoCwd', cwd);
+    // Named work nodes are deliberately independent of native messages and threads.
+    for (const b of store.all('branch')) {
+        const d = store.detail(b.id);
+        if (d.pending.checkpoints.length)
+            store.commitPending(b.id, { name: b.name, end: d.pending.checkpoints.at(-1).end, revisionId: d.head, expectedStart: d.pending.start });
+    }
+    const sessionsDir = path.join(roots.codex, 'sessions');
+    fs.mkdirSync(sessionsDir, { recursive: true });
+    const common = [['Establish the Chrono research context.', 'We are studying temporal information in long-running reasoning.'], ['Keep the evaluation budget fixed.', 'Agreed. All experiments should use the same context and data budget.']];
+    const titles = [];
+    for (const [index, name] of ['Introduction experiments', 'Method alternatives'].entries()) {
+        const raw = codexSample(cwd, [...common, ...Array.from({ length: 10 }, (_, i) => [`${index ? 'Method' : 'Intro'} question ${i + 1}`, `Research note ${i + 1}: a complete step in this direction.`])]);
+        const nativeId = parse(raw, 'codex').nativeId;
+        fs.writeFileSync(path.join(sessionsDir, `demo-${nativeId}.jsonl`), raw);
+        titles.push({ id: nativeId, thread_name: name, updated_at: now() });
+    }
+    fs.writeFileSync(path.join(roots.codex, 'session_index.jsonl'), titles.map(v => JSON.stringify(v) + '\n').join(''));
+    const raw = claudeSample(cwd, [['A few unrelated notes for later.', 'I will keep these notes separate until you file them.']]);
+    const nativeId = parse(raw, 'claude').nativeId, dir = path.join(roots.claude, 'projects', cwd.replace(/[^a-zA-Z0-9]/g, '-'));
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, `${nativeId}.jsonl`), raw);
 }

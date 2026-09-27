@@ -97,7 +97,7 @@ export async function sync(store, config, passphrase, direction = 'both') {
             const bytes = await dav.get('commits/' + name);
             assert(bytes, '远端版本在读取中消失');
             const commit = unseal(bytes, key);
-            assert(commit.graph?.schema === 1 && Array.isArray(commit.graph.revisions), '无效版本清单');
+            assert([1, 2].includes(commit.graph?.schema) && Array.isArray(commit.graph.revisions), '无效版本清单');
             const objects = {};
             for (const h of new Set(commit.graph.revisions.flatMap(r => r.refs))) {
                 assert(typeof h === 'string' && /^[a-f0-9]{64}$/.test(h), '无效对象引用');
