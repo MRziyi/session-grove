@@ -5,7 +5,13 @@
   "description": "A project-centered workspace for branching and managing agent sessions.",
   "type": "module",
   "engines": { "node": ">=24.0.0" },
-  "scripts": { "start": "node bin/session-grove.js", "demo": "node bin/session-grove.js --demo", "test": "node --test test/*.test.js" },
+  "scripts": {
+    "start": "node bin/session-grove.js",
+    "demo": "node bin/session-grove.js --demo",
+    "test": "node --test test/*.test.js",
+    "test:codex": "node scripts/codex-smoke.js",
+    "test:browser": "node scripts/browser-smoke.js"
+  },
   "bin": { "session-grove": "bin/session-grove.js" },
   "license": "MIT"
 }

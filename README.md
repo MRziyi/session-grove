@@ -1,133 +1,192 @@
 # Session Grove
 
-**以项目组织、分叉和管理 Agent 会话。**
+**English** | [简体中文](README.zh-CN.md)
 
-Session Grove 是 Codex 与 Claude Code 的本机会话管理控制端。在网页中管理项目、检查点、分支、归档和显式 Active 清单；在原生 CLI / IDE 中继续对话；新增记录回到原项目。WebDAV 是可选的跨设备传输层。
+**A project-centered workspace for branching and managing agent sessions.**
 
-当前版本：**0.2.0，实验性本机版本**。核心与适配器已有自动测试；Codex 的原生读取 / 恢复已在下表版本验证，Claude Code 尚未进行真实客户端往返验证。
+Organize Codex and Claude Code sessions into projects, name meaningful pieces of work, manage branches and archives, and choose an explicit Active set. Continue the actual conversation in your agent's CLI or IDE, then bring its updates back into Grove. WebDAV adds optional cross-device storage.
 
-## 启动
+**Version 0.2.0 — experimental.** Core and adapter tests pass. Codex native read/resume has been verified against the version listed below; real Claude Code client verification is still outstanding.
 
-只需要 **Node.js 24 或更高版本**。无 npm 依赖、无需构建，默认监听 `127.0.0.1:7421`。
+## Quick start
+
+Requires **Node.js 24+**. Use **pnpm or npm** to run the same `package.json` scripts. Node is the runtime; the package manager is your command entry point. There are no third-party runtime or development dependencies and no build step, so you do not need to run `install` first.
 
 ```sh
-# 隔离演示：内置 Chrono 项目，不读取个人会话目录
-node bin/session-grove.js --demo
+git clone https://github.com/MRziyi/session-grove.git
+cd session-grove
+```
 
-# 管理本机会话：默认资料库 ~/.session-grove
-node bin/session-grove.js
+### With pnpm
 
-# 自定义数据位置
-node bin/session-grove.js --data-dir /path/to/grove \
+```sh
+# Isolated sample workspace; does not read your personal sessions
+pnpm run demo
+
+# Manage your local sessions
+pnpm start
+
+# Run the automated tests
+pnpm test
+```
+
+### With npm
+
+```sh
+npm run demo
+npm start
+npm test
+```
+
+These commands run from the cloned repository. The project is not currently published to the npm registry.
+
+Open the URL printed in the terminal, normally **http://127.0.0.1:7421**. Demo and personal libraries are separate. Only one server may open a given library at a time.
+
+<details>
+<summary>简体中文快速开始</summary>
+
+需要 Node.js 24 或更高版本。在仓库目录执行：
+
+```sh
+pnpm run demo  # 隔离演示
+pnpm start    # 管理本机会话
+pnpm test     # 自动测试
+```
+
+npm 用户可对应使用 `npm run demo`、`npm start`、`npm test`。当前无第三方依赖，无需先安装依赖。界面默认英文，可在左下角切换中文。
+
+[阅读完整中文文档 →](README.zh-CN.md)
+
+</details>
+
+### Custom data locations
+
+```sh
+# pnpm forwards arguments after the script name
+pnpm start --data-dir /path/to/grove \
+  --codex-home /path/to/.codex --claude-home /path/to/.claude
+
+# npm uses -- to forward arguments to the script
+npm start -- --data-dir /path/to/grove \
   --codex-home /path/to/.codex --claude-home /path/to/.claude
 ```
 
-打开终端中显示的地址。演示和真实模式使用独立资料库；同一资料库只允许一个服务进程。
+The personal library defaults to `~/.session-grove`. If you only have Node installed, `node bin/session-grove.js --demo` remains a supported entry point.
 
-若有 npm，也可使用 `npm start`、`npm run demo`、`npm test`。直接运行 Node 的命令与之等价。
+The repository uses `pnpm-lock.yaml` as its primary dependency lockfile. It currently contains no external packages. npm users can run the scripts unchanged; there is no need to generate a second lockfile just to start or test the app.
 
-## 使用流程
+## How it works
 
-界面默认 **English**，左下角可以切换 **中文**，并记住选择。
+The interface defaults to **English**. Switch to **中文** in the lower-left corner; the choice is remembered.
 
-1. **Local Active 在上**：自动发现本机原生会话，保留它们当前的 Active 状态。未归类记录只留在本机。
-2. **自动识别分叉**：同一 Agent、同一工程目录下，存在完整且完全相同的历史前缀时，将散落会话整理成树；单条记录独立展示。默认至少需要两个完整轮次，只有相同标题或一句问候不会合并。已经有人工命名节点的内容不自动重组。
-3. **Cloud projects 在下**：把单条记录或整棵树移入项目，并指定分组。项目先展示分组列表；单条进入逻辑节点时间线，实际分叉过的条目进入分支图。
-4. **Pending 是待整理的工作**：原生 Agent 中新增的对话持续被收纳，也可以点 Refresh 立即更新。新增内容累积在当前分支同一个 Pending 尾部，不把每句话画成节点。
-5. **归类成逻辑节点**：例如 Pending 中有 20 条新消息，选择前 10 条，命名为“完成 Intro”并 Commit；剩余 10 条继续保留在 Pending，再命名提交为另一个节点。切分只允许完整轮次边界，工具调用和结果一起保留。
-6. **显式 Activate**：选择工程目录，然后在 Active set 中查看并应用变更。关闭运行中的 Agent 及 IDE 扩展后应用，再重新打开客户端。Activate 使用该会话的最新上下文（包括 Pending）；若要从较早节点继续，先从该节点检查点 Fork。
-7. **归档与恢复**：所有管理操作在 Grove 完成。归档保留历史，取消 Active 的动作进入待应用清单；恢复不会自动激活。
+1. **Local Active comes first.** Grove discovers native sessions while preserving their current Active state. Unfiled work stays on this device.
+2. **Related native forks become a tree.** Unfiled sessions from the same agent and working directory can be grouped by an exact, completed history prefix. Normally at least two complete turns are required; matching titles or a short greeting are insufficient. Existing user-named logical nodes are not automatically reorganized.
+3. **Projects open as grouped collections.** Move a single session or an entire tree into a project and choose a group. Standalone sessions open a logical-node timeline; items that have actually forked open a branch graph.
+4. **New conversation accumulates in Pending.** Background collection or Refresh extends one Pending tail. It does not turn each message into a graph node.
+5. **Commit meaningful ranges.** For example, commit the first 10 of 20 new messages as “Finished the introduction.” The remaining 10 stay in Pending and can become another named node. Ranges end at complete turns, keeping tool calls and results together.
+6. **Activate explicitly.** Choose an existing working directory, then review and apply the Active set. Close running agents and their IDE extensions before applying; reopen the client afterwards. Activate uses the session's latest context, including Pending. To continue from an earlier node, fork from that checkpoint first.
+7. **Archive and restore in Grove.** History is retained. Archiving queues removal from this device's Active set; restoring does not automatically activate the session.
 
-CLI 与 IDE 若使用相同的 Agent 数据目录，共享一个激活实例。设备和交互入口只作为来源信息。自动观察已有本机会话不会隐藏原生记录，只有显式取消 Active 并应用清单才会收起。
+CLI and IDE interfaces that use the same native data directory share one activation instance. Device and interface information is provenance, not the project hierarchy. Observing a native session does not hide it; only an explicit Active-set change does.
 
-后台每 10 秒检查本机更新，网页轮询显示状态。图中节点代表命名的连续工作段；一个未分叉的 thread 即使有多个逻辑节点，也仍是项目列表里的单条会话。项目标题可双击编辑，条目的 Move / group 操作可整树归类。
+Local changes are checked every 10 seconds, and the browser polls for updates. A single thread can contain multiple named work nodes without becoming a branch-tree item. Double-click a project title to edit it, or use an item's **Move / group** action to file its entire tree.
 
-## WebDAV 同步
+## Encrypted WebDAV sync
 
-在“Sync & settings / 同步与设置”中填写 WebDAV 根地址、用户名和密码，并解锁自动同步。加密口令至少 12 字符，每台设备使用同一口令。
+In **Sync & settings**, enter your WebDAV root URL, username and password, then unlock automatic sync. Use a separate encryption passphrase of at least 12 characters, shared across your devices.
 
-- AES-256-GCM 认证加密，使用 scrypt 从口令和资料库盐派生密钥；先压缩再加密。
-- 加密口令不落盘。WebDAV 登录配置以用户专属权限保存在本机 `webdav.json`。
-- 不可变内容片段按哈希去重；先上传依赖，再发布加密版本清单。
-- 拉取不会同步认证配置、原生数据库、Active 清单或自动写回原生目录。
-- 同一分支在两台设备独立继续时，保留两个发展方向；名称 / 归档等元数据冲突在设置中显式选择。
-- 本次服务解锁后，归入项目、整理节点、命名和新增记录会自动排队同步；每 15 秒检查远端更新。
-- 未配置、未解锁或断网时继续本地保存，显示待上传或重试；不能把仅本地保存标记成已上云。
-- 未归类记录和本机 Active 选择不上传。不同设备解锁同一资料库后看到相同项目结构。
-- 口令只保留在本次进程内存中，服务重启后需要重新解锁。远端历史对象不自动删除。
+- AES-256-GCM authenticated encryption, with scrypt key derivation and compression before encryption.
+- The encryption passphrase stays in process memory only. WebDAV connection credentials are stored locally in `webdav.json` with user-only permissions.
+- Content-addressed immutable fragments deduplicate shared history. Dependencies upload before an encrypted revision manifest is published.
+- Filing, organizing and updating project work queues automatic synchronization while unlocked. Remote updates are checked every 15 seconds.
+- Without configuration, while locked, or offline, changes remain local and are shown as queued or retrying. Local storage is not reported as a successful upload.
+- Unfiled sessions, native authentication, native databases and device-specific Active selections do not upload. Pulling never automatically activates a session.
+- Divergent conversations are retained as separate branches. Concurrent metadata edits or alternative logical-node organizations remain explicit choices.
+- Restarting the service requires unlocking sync again. Remote history objects are not automatically deleted.
 
-使用 HTTPS；HTTP 仅允许本机测试。远端在所填路径下创建 `session-grove-v1/`，不修改其他目录。首次使用可从少量会话开始。
+Use HTTPS; HTTP is permitted only for local testing. Grove creates `session-grove-v1/` below the configured WebDAV URL and leaves other directories alone.
 
-## 兼容性与当前边界
+## Compatibility and current limits
 
-| 能力 | 当前状态 |
+| Capability | Status |
 | --- | --- |
-| 项目、分支、检查点、共享片段、归档、来源记录 | 已实现并测试 |
-| Codex legacy JSONL 与 `state_5.sqlite` | 已实现；未知必填字段拒绝写回 |
-| Codex 0.155.0-alpha.16.3 | 用真实 App Server 验证 list / read / resume / deactivate / reactivate；没有提交模型 turn |
-| Codex VS Code 面板刷新 | 通过底层存储适配；未做扩展面板的自动化验收，需要重新打开 / 重载 |
-| Claude 项目 JSONL、路径编码、history 索引 | 文件适配与往返测试通过；本机未安装 Claude，真实客户端验证尚未完成 |
-| 本机原生写入 | 冷写入；检测到任何 Codex / Claude 进程时拒绝应用 |
-| WebDAV | 本地协议服务测试通过；尚未逐项验证 Nextcloud、Synology 等供应商 |
+| Projects, logical nodes, Pending, branching, deduplication, archives and provenance | Implemented and tested |
+| Codex legacy JSONL and `state_5.sqlite` | Implemented; unknown required fields block write-back |
+| Codex 0.155.0-alpha.16.3 | Real App Server list/read/resume/deactivate/reactivate verified; no model turn submitted |
+| Codex VS Code panel refresh | Uses native storage; panel-level automation is not verified; reopen/reload may be required |
+| Claude project JSONL, path encoding and history indexes | File-level round-trip tests pass; real client verification is outstanding |
+| Native writes | Cold writes; applying is blocked while a Codex or Claude process is running |
+| WebDAV providers | Local protocol-server tests pass; Nextcloud, Synology and other providers are not individually verified |
 
-当前不会迁移工程代码、账号认证、插件和后台进程。外部附件引用、非 legacy Codex 历史格式和超长 Claude 项目路径会阻止激活，不以不完整恢复冒充成功。嵌入在原始记录中的内容保留；subagent 伴随目录和其他外部资源尚不支持打包。
+Project files, authentication, installed plugins and background processes are not migrated. Recognized external attachment references, non-legacy Codex history and long Claude project paths block activation. Embedded transcript content is preserved; subagent companion directories and other external resources are not yet packaged.
 
-路径映射只处理已知结构化字段。历史消息和工具输出保留原样。旧路径仍可能出现在历史正文中，目标工程应已有对应文件，必要时在原生对话中说明新目录。
+Path mapping changes known structured fields. Historical message text and tool output remain unchanged, so old paths may still appear in the conversation. The target project files must already exist; explain a changed working directory in the native conversation when needed.
 
-跨 Agent 上下文转换、Remote SSH / 容器、打开指定 IDE 标签页不在此版本中。新建空会话可物化，但不同原生客户端可能只在第一条消息后显示它。
+Cross-agent context conversion, Remote SSH/containers and opening a specific IDE tab are not implemented. Empty sessions can be materialized, but some native clients may list them only after the first message.
 
-## 数据与恢复
+## Data and recovery
 
 ```text
 ~/.session-grove/
-  device.json            本机身份
-  grove.sqlite           项目 / 分支 / 不可变版本 / 去重原始片段
-  webdav.json            本机同步连接配置
-  operations/            原生写入操作日志与修改前备份
-  parked/                已取消激活的原生记录
-  recovery-snapshots/    手动故障恢复前额外保留的当前数据
+  device.json            Local device identity
+  grove.sqlite           Projects, branches, logical nodes and deduplicated history
+  webdav.json            Local connection credentials
+  operations/            Native-operation journals and pre-write backups
+  parked/                Deactivated native transcripts
+  recovery-snapshots/    Current files preserved before manual crash recovery
 ```
 
-资料库保留原始 JSONL 行，包括未知字段。搜索展示模型并非唯一恢复来源。更新回收比较精确物化基线，避免将自身导出再次作为新增历史。
+The library retains raw JSONL lines, including unknown fields. Display models are not the only recovery source. Update collection compares against the exact materialized baseline so Grove does not import its own exports as new work.
 
-原生写入失败时尝试回滚。若进程中途退出，Active 清单会显示未完成操作，并提供“恢复操作备份”。恢复前会再次保存当前文件，避免丢弃崩溃后产生的内容。操作备份目前没有自动清理机制。
+Native-write failures attempt rollback. After an interrupted operation, the Active-set dialog offers recovery from its operation backup. Recovery first saves current files separately to preserve work written after the interruption. Backups are not automatically pruned yet.
 
-服务只监听 loopback，校验 Host、Origin、Fetch Metadata 与写入访问凭证。网页不加载第三方脚本，不发送遥测。原始记录按个人资料处理；开源仓库不应包含 `.grove/`、导出的资料库或实际会话样本。
+The server binds to loopback and checks Host, Origin, Fetch Metadata and a local API token. The UI loads no third-party scripts and sends no telemetry. Keep `.grove/`, personal libraries and real transcript samples out of the source repository.
 
-## 验证
+## Technology
 
-```sh
-node --test test/*.test.js
+The current implementation uses **Node.js 24, JavaScript ES Modules, built-in SQLite, and browser DOM/SVG**. It has not been migrated to TypeScript.
 
-# 可选：真实 Codex，只操作临时目录，不带入个人认证，不提交模型请求
-node scripts/codex-smoke.js
-```
+The current recommendation is to retain Node for product and adapter iteration, then measure and optimize full-history scans, repeated parsing and blocking work. Go is worth considering for standalone executable distribution; Rust or native modules become more attractive if measured CPU or memory limits justify them. No project-specific comparison establishes one language as the fastest.
 
-测试覆盖分支检查点冻结、历史去重、路径迁移、更新回收、并发分歧、归档恢复、未知 schema 拒绝写入、故障恢复、API 访问限制及加密 WebDAV 往返。
+See [Technology choices](docs/technology.md) for the comparison, current implementation hotspots and proposed evaluation order.
 
-浏览器验证使用独立 Chrome profile 和一份新的演示资料库：先用 `--demo --data-dir .grove/browser-test` 启动服务，再启动带 `--remote-debugging-port=9228` 的 Chrome，然后运行 `node scripts/browser-smoke.js`（可追加服务 URL）。它会验证语言切换、20→10+10 的 Pending 整理和整树移入项目；截图和兼容性报告写到忽略的 `test-results/`。每次完整验收使用新的演示资料库。
+## Verification
 
-## 项目结构
+| Task | pnpm | npm |
+| --- | --- | --- |
+| Automated tests | `pnpm test` | `npm test` |
+| Optional real Codex check | `pnpm run test:codex` | `npm run test:codex` |
+| Browser acceptance | `pnpm run test:browser` | `npm run test:browser` |
+
+The Codex check uses an isolated temporary home, copies no personal authentication and submits no model turn. It requires an installed Codex executable.
+
+Browser acceptance requires a separate Chrome profile with `--remote-debugging-port=9228` and a **fresh demo library**, for example `pnpm run demo --data-dir .grove/browser-test`. The default URL is port 7421. Override it with `pnpm run test:browser http://127.0.0.1:7422` or `npm run test:browser -- http://127.0.0.1:7422`.
+
+The browser check covers language persistence, Active-first navigation, 20→10+10 Pending commits and moving a tree into a project group. Screenshots and compatibility reports go into the ignored `test-results/` directory. Use a new demo-library directory for each complete acceptance run.
+
+CI runs `npm test` on macOS and Linux with Node 24. No dependency installation is needed for the current codebase.
+
+## Project structure
 
 ```text
-bin/                    本地服务 CLI
-src/store.js            项目、版本、去重片段与合并
-src/organization.js     逻辑节点、Pending、项目列表与前缀归树
-src/auto-sync.js        自动同步队列、解锁、重试与状态
-src/transcript.js       原生事件读取、检查点、物化
-src/native.js           原生发现、收纳、Active 应用与恢复
-src/sync.js             加密 WebDAV 对象与版本传输
-src/server.js           同源本地 HTTP API
-web/                    项目图与会话管理界面
-test/                   独立临时目录测试
-scripts/                浏览器与原生 Codex 兼容性验证
-docs/                   实现说明与待完善项
+bin/                    Local server CLI
+src/store.js            Projects, revisions, raw fragments and merge
+src/organization.js     Logical nodes, Pending, collections and prefix inference
+src/auto-sync.js        Automatic sync, unlock, retry and status
+src/transcript.js       Native event parsing, checkpoints and materialization
+src/native.js           Discovery, collection, Active changes and recovery
+src/sync.js             Encrypted WebDAV object and revision transfer
+src/server.js           Same-origin local HTTP API
+web/                    Project collections and session management UI
+test/                   Isolated tests
+scripts/                Browser and native Codex compatibility checks
+docs/                   Design, implementation and technology decisions
 ```
 
-## 参考与许可
+## References and license
 
-设计参考 [codex-session-sync](https://github.com/shonngithub/codex-session-sync)、[claude-sync](https://github.com/tawanorg/claude-sync) 和 [Chronicle](https://github.com/geekmuse/chronicle)。借鉴了原生多存储协调、路径映射和按需物化的思路；项目图、显式 Active 集合和控制端由 Session Grove 独立维护。
+Design references: [codex-session-sync](https://github.com/shonngithub/codex-session-sync), [claude-sync](https://github.com/tawanorg/claude-sync) and [Chronicle](https://github.com/geekmuse/chronicle). Their native-store coordination, path mapping and partial-materialization approaches informed this project. Session Grove maintains its own project graph, logical nodes and explicit Active set.
 
-原生格式参考 [Codex App Server](https://learn.chatgpt.com/docs/app-server) 与 [Claude Code 会话文档](https://code.claude.com/docs/en/sessions)。
+Native behavior references: [Codex App Server](https://learn.chatgpt.com/docs/app-server) and [Claude Code sessions](https://code.claude.com/docs/en/sessions).
 
 [MIT License](LICENSE)
