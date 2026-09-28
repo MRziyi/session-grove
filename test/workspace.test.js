@@ -157,3 +157,39 @@ test('node token estimates include recorded tool text without turning compaction
     assert.ok(g.nodes[1].tokens.recordedEstimate > 1000); assert.ok(g.nodes[1].tokens.estimate < 20);
     assert.equal(g.paths[0].context.compactions[0].summary, 'Retain task goals.');
 });
+test('in-use and archive projections keep complete prefixes but never expose the other paths', t => {
+    const { store, cwd } = fixture(t), p = store.project('Paper');
+    const root = store.branch(p.id, 'Main', 'codex', codexSample(cwd, pairs(3)));
+    const child = store.fork(root.id, { name: 'Alternative', end: store.detail(root.id).checkpoints[0].end });
+    store.ingest(child.id, store.raw(child.head) + codexTurn('Archived-only idea', 'Archived-only answer').map(v => JSON.stringify(v) + '\n').join(''), child.head, {});
+    store.edit(child.id, { archived: true });
+    const active = store.treeGraph(root.id, 'in-use'), archived = store.treeGraph(root.id, 'archived');
+    assert.deepEqual(active.paths.map(p => p.branchId), [root.id]); assert.equal(active.chatCount, 6);
+    assert.deepEqual(archived.paths.map(p => p.branchId), [child.id]); assert.equal(archived.chatCount, 4);
+    assert.ok(!active.paths[0].messages.some(m => m.text.includes('Archived-only')));
+    assert.ok(!archived.paths[0].messages.some(m => m.text.includes('Question 2')));
+    assert.equal(active.nodes[0].id, archived.nodes[0].id);
+    assert.equal(store.listing('archived').items[0].name, 'Alternative');
+    assert.equal(store.listing(p.id).items[0].sessions.length, 1);
+});
+test('renaming Pending creates a real node, no-op rename stays clean, and archived editing is rejected', t => {
+    const { store, cwd } = fixture(t), b = store.branch(null, 'Notes', 'codex', codexSample(cwd, pairs(2)));
+    let g = store.treeGraph(b.id), options = { version: g.version, pathId: b.id, nodeId: g.nodes[0].id, action: 'rename', name: 'Set up context' };
+    store.organize(b.id, options); g = store.treeGraph(b.id);
+    assert.equal(g.pendingCount, 0); assert.equal(g.nodes[0].name, 'Set up context');
+    const version = g.layoutHead; store.organize(b.id, { ...options, version: g.version }); assert.equal(store.treeGraph(b.id).layoutHead, version);
+    assert.throws(() => edit(store, b, [0, 2], 'dissolve'), /consecutive/);
+    store.edit(b.id, { archived: true }); g = store.treeGraph(b.id);
+    assert.throws(() => store.organize(b.id, { ...options, version: g.version }), /Restore/);
+});
+test('immutable parsing and state caches invalidate on append and rollback; public state excludes native baselines', t => {
+    const { store, native, cwd } = fixture(t), b = store.branch(null, 'Live', 'codex', codexSample(cwd, pairs(1)));
+    native.setActive(b.id, cwd, true); native.apply();
+    const before = store.snapshot(); assert.equal(before.instances[0].baseline, undefined);
+    assert.equal(store.snapshot(), before);
+    const raw = store.raw(b.head) + codexTurn('Next question', 'Next answer').map(v => JSON.stringify(v) + '\n').join('');
+    store.ingest(b.id, raw, b.head, {}); assert.equal(store.treeGraph(b.id).chatCount, 4);
+    const head = store.get('branch', b.id).head;
+    assert.throws(() => store.transaction(() => { store.edit(b.id, { archived: true }); store.snapshot(); throw new Error('rollback'); }));
+    assert.equal(store.get('branch', b.id).archived, false); assert.equal(store.get('branch', b.id).head, head);
+});

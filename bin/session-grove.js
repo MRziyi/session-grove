@@ -6,7 +6,7 @@ import { createApp } from '../src/server.js';
 import { seedDemo } from '../src/demo.js';
 const args = process.argv.slice(2);
 if (args.includes('--help')) {
-    console.log(`Session Grove\n\nnode bin/session-grove.js [--demo] [--port 7421] [--data-dir PATH]\n  --codex-home PATH   Codex native store (default CODEX_HOME or ~/.codex)\n  --claude-home PATH  Claude native store (default CLAUDE_CONFIG_DIR or ~/.claude)\n\n--demo uses isolated sample sessions and never reads personal session directories.`);
+    console.log(`Session Grove\n\nnode bin/session-grove.js [--demo] [--port 7421] [--data-dir PATH]\n  --codex-home PATH   Codex native store (default CODEX_HOME or ~/.codex)\n  --claude-home PATH  Claude native store (default CLAUDE_CONFIG_DIR or ~/.claude)\n  --sync-key-file PATH  Optional private file for unattended sync unlock\n\n--demo uses isolated sample sessions and never reads personal session directories.`);
     process.exit(0);
 }
 const value = (key, fallback) => {
@@ -44,10 +44,19 @@ if (demo) {
     seedDemo(app.store, roots);
     app.native.refreshLocal();
 }
+const keyFile = value('--sync-key-file', null);
+if (keyFile) {
+    const file = path.resolve(keyFile);
+    if (fs.statSync(file).mode & 0o077) throw new Error('Sync key file must have owner-only permissions.');
+    app.autoSync.unlock(fs.readFileSync(file, 'utf8').trim());
+}
 const port = Number(value('--port', '7421'));
 if (!Number.isInteger(port) || port < 0 || port > 65535)
     throw new Error('Invalid port');
-app.server.listen(port, '127.0.0.1', () => console.log(`Session Grove${demo ? ' · isolated demo' : ''}\nhttp://127.0.0.1:${app.server.address().port}\nLibrary: ${root}`));
+app.server.listen(port, '127.0.0.1', () => {
+    console.log(`Session Grove${demo ? ' · isolated demo' : ''}\nhttp://127.0.0.1:${app.server.address().port}\nLibrary: ${root}`);
+    if (keyFile) app.autoSync.flush('pull').catch(() => {});
+});
 app.server.on('error', e => { console.error(e.message); process.exitCode = 1; app.server.close(); });
 process.on('exit', () => {
     try {

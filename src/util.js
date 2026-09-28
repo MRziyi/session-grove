@@ -69,3 +69,15 @@ export function walk(root, limit = 20000) {
     visit(root);
     return out;
 }
+
+// Bound provider concurrency and drain in-flight requests before reporting errors.
+export async function mapConcurrent(values, operation, limit = 4) {
+    let cursor = 0, failure;
+    await Promise.all(Array.from({ length: Math.min(limit, values.length) }, async () => {
+        while (!failure) {
+            const index = cursor++; if (index >= values.length) return;
+            try { await operation(values[index], index); } catch (e) { failure ||= e; }
+        }
+    }));
+    if (failure) throw failure;
+}

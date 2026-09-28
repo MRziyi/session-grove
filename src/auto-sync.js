@@ -30,10 +30,10 @@ export class AutoSync {
         if (this.pending) await this.pending.catch(() => {});
         // Multiple GETs may wait together; recheck after yielding.
         if (this.pending) return this.exclusive(fn);
-        this.running = true;
+        this.running = true; const started = Date.now(); this.diagnostics?.record('cloud-operation', { phase: 'started' });
         this.pending = Promise.resolve().then(fn);
-        try { const result = await this.pending; this.error = null; return result; }
-        catch (e) { this.error = e.message; throw e; }
+        try { const result = await this.pending; this.error = null; this.diagnostics?.record('cloud-operation', { phase: 'complete', durationMs: Date.now() - started }); return result; }
+        catch (e) { this.error = e.message; this.diagnostics?.record('cloud-operation', { phase: 'failed', code: 'cloud_failed', durationMs: Date.now() - started }); throw e; }
         finally { this.pending = null; this.running = false; }
     }
     async flush(direction = 'queued', explicit = false) {

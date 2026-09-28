@@ -1,6 +1,6 @@
 # Context visibility and incremental cloud sync
 
-Implemented in 0.4.0. This document complements the [interaction model](interaction-model.md).
+Updated for 0.5.0. This document complements the [interaction model](interaction-model.md).
 
 ## Three different token quantities
 
@@ -8,7 +8,7 @@ The graph displays **approximate recorded text tokens** per Node, including Pend
 
 This is a local heuristic, not an official tokenizer: ASCII characters / 4 + non-ASCII characters × 1.5, rounded for each text fragment. It is useful for comparing the relative size of work segments. Code, language, model vocabulary, framing and modalities can produce substantial error. Hidden instructions, encrypted content and images are excluded. Tool estimates must not be mistaken for measured model usage.
 
-The **Context** panel separately reports the latest recorded native input-token count, timestamp and context limit where available:
+Activation preflight uses the latest recorded native input-token count and available local limits. The title area shows compact path metrics; there is no separate Context button. Recognized native fields include:
 
 - Codex: `event_msg/token_count.info.last_token_usage.input_tokens` and `model_context_window`.
 - Claude: input tokens plus cache-read and cache-creation input tokens from the recorded assistant usage object. A context limit is not guessed when absent.
@@ -21,7 +21,7 @@ An estimate of all historical Nodes is **not** the effective context after compa
 
 Grove retains the full raw history and logical organization. It recognizes Codex `compacted` records and Claude `compact_boundary` / explicitly saved `isCompactSummary` records. The graph/Transcript mark the next segment after a compaction boundary. A logical assignment spanning the boundary is displayed in separate segments with its title retained.
 
-The Context panel displays:
+The parser retains the following information for context checks and future inspection (the normal UI only marks the boundary):
 
 - the event time;
 - input-token observations before and after, when recorded (the later observation can also include new messages);
@@ -50,16 +50,16 @@ References checked for this change:
 | Archive / Restore | Save membership/archive state after applicable native actions | Queue affected filed trees |
 | Activate / Deactivate alone | Change device-local native availability | None |
 | Resolve an organization conflict | Save the chosen version with merge ancestry | Queue the changed tree |
-| Manual Upload | Preserve all current history | Publish dirty filed trees, including remaining Pending |
-| Sync button / background interval | Refresh cloud directory | Read indexes; no automatic Pending publication |
+| Manual Sync | Preserve all current history | Publish dirty filed trees, including remaining Pending |
+| Background interval | Refresh cloud directory | Read indexes; no automatic Pending publication |
 
-Management changes debounce for two seconds. Only affected trees are queued, so organizing one project does not automatically publish unrelated Pending in another. An uploaded tree is a coherent snapshot including any remaining Pending; the trigger policy controls **when**, not whether the transcript is complete. New native changes arriving later remain local until another organization action or manual Upload.
+Management changes debounce for two seconds. Only affected trees are queued, so organizing one project does not automatically publish unrelated Pending in another. An uploaded tree is a coherent snapshot including any remaining Pending; the trigger policy controls **when**, not whether the transcript is complete. New native changes arriving later remain local until another organization action or manual Sync.
 
 The queue survives a service restart, retries after failures and remains pending while locked. Background checks run every 15 seconds while configured and unlocked, avoiding overlapping periodic requests. Opening a browser also requests a directory check when the service is unlocked.
 
-Upload is gray/disabled with no substantive unsent tree snapshot. Hovering it shows the last successful publication time; refreshing a directory never changes that time. An enabled manual upload includes Pending. A cloud glyph distinguishes cloud-only content, an available remote update, a cached copy, and local unsent changes. These states do not change native Active selections.
+Sync has a single explicit role: publish unsent filed changes (including Pending) and refresh the cloud directory. Its tooltip shows last publication/check times. It remains useful without local changes because the directory may have changed remotely. Cloud glyphs show cached, cloud-only, updated and local-unsent states. Language and connection settings are in Settings.
 
-The encryption passphrase remains in memory under the existing policy: service restart still requires unlocking. Automatic synchronization is available after configuration/unlock; this release does not store the passphrase in macOS Keychain.
+The encryption passphrase remains in memory under the existing policy: service restart still requires unlocking. Automatic synchronization is available after configuration/unlock; an optional explicit `--sync-key-file` supports operator-managed unattended startup; it is not macOS Keychain integration.
 
 ## Three levels of cloud loading
 
@@ -96,4 +96,7 @@ Old schema 1–3 commits can be indexed without downloading all transcript objec
 
 Tests cover catalog-only reads, project-index-only reads, selected-tree hydration, no-op uploads, Pending-only local changes, organization triggers, failures before publication, concurrent writers, project moves, cloud-only references during publication, old-vault migration, tool-text estimates and compaction visibility. Browser checks cover action visibility, panel layout, graph reading, token hints, language switching and archive/activation workflows.
 
-WebDAV interoperability is tested against an isolated protocol server; individual third-party providers are not yet certified. Recorded context estimates are intentionally approximate. Encrypted native compaction contents remain opaque. No real personal transcript was used as a committed fixture.
+WebDAV interoperability is tested against an isolated protocol server and a live Teracloud account using a disposable dedicated test directory. This does not certify every provider or deployment. Recorded context estimates are intentionally approximate. Encrypted native compaction contents remain opaque. No real personal transcript was used as a committed fixture.
+
+
+For local context configuration, warning acknowledgement and diagnostic logging, see [Operations](operations.md).

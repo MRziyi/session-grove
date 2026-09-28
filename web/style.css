@@ -1171,3 +1171,38 @@ dialog::backdrop {
 @media (max-width:1150px) { .editor { padding: 10px; grid-template-columns: minmax(220px,1fr) 28px minmax(205px,1fr); } }
 @media (max-width:760px) { .editor { display: flex; padding: 8px; gap: 14px; } .transcript-panel,.graph-panel { border-radius: 9px; } .detail-heading #context-info { padding: 4px; font-size: 10px; } .context-metrics { grid-template-columns: 1fr; } }
 .graph-node.dimmed { opacity: .78; }
+
+/* Compact working layout, aligned panel gutters and restrained surfaces. */
+.banner { height: 54px; padding-inline: 18px; }
+.brand { font-size: 20px; }
+.layout,.layout.detail { height: calc(100dvh - 54px); }
+#list-title { font-size: 21px; padding: 18px 24px; }
+.detail-heading { min-height: 60px; padding: 14px 18px; gap: 9px; }
+.detail-heading h1 { font-size: 19px; flex: 1; }
+#session-meta { color: #7a8994; font-size: 11px; white-space: nowrap; }
+.toolbar,#detail-page .toolbar { min-height: 43px; padding: 7px 20px; background: #f6f8fa; gap: 10px; }
+#session-list { padding: 5px 24px 24px; }
+.list-group { margin: 15px 0 20px; }
+.session-row { min-height: 68px; }
+.row-open { padding: 13px 15px; }
+#detail-page { background: #f7f9fb; }
+.editor { padding: 10px; grid-template-columns: minmax(300px,1.15fr) 14px minmax(270px,1fr); }
+.panel-heading { height: 41px; min-height: 41px; padding: 7px 12px; background: #fafbfd; }
+.graph-panel .panel-heading { background: #f4f7fa; padding-left: 12px; }
+.panel-heading select { flex: 1; max-width: 78%; width: 260px; margin-left: 12px; font-size: 12px; padding: 5px 8px; }
+.transcript-panel,.graph-panel { border-radius: 8px; border-color: #dde5ec; box-shadow: 0 1px 4px #26465f04; }
+#graph-scroll { background-color: #fdfefe; background-image: radial-gradient(#d9e3eb66 .7px,transparent .7px); }
+#range-hint { padding: 6px 12px; min-height: 28px; font-size: 11px; color: #87939e; border-bottom: 1px solid #edf1f4; background: #fdfefe; }
+#transcripts { padding-top: 7px; }
+.transcript-segment { padding: 8px 12px 11px; margin-bottom: 8px; }
+.graph-node.pending { background: var(--tint); border-width: 1.5px; border-style: dashed; color: #293d52; backdrop-filter: blur(2px); }
+.graph-node { min-height: 96px; padding: 10px 12px; }
+.help { margin: 18px 0; }
+.help ul { padding-left: 18px; font-size: 12px; line-height: 1.8; }
+.help p { font-size: 11px; line-height: 1.7; color: #758493; }
+#dialog-content h3 { font-size: 13px; margin-top: 22px; }
+@media(min-width:1650px) { .editor { grid-template-columns: minmax(440px,1.2fr) 14px minmax(350px,1fr); } }
+@media(max-width:1150px) { .editor { grid-template-columns: minmax(230px,1fr) 12px minmax(200px,1fr); padding: 9px; } #session-meta { font-size: 10px; } }
+@media(max-width:760px) { .editor { display: flex; gap: 10px; padding: 8px; } .detail-heading { flex-wrap: wrap; padding: 10px; min-height: 52px; } #session-meta { width: 100%; padding-left: 28px; } .panel-heading select { width: 130px; margin-left: 6px; max-width: 70%; } }
+.graph-node { height: 108px; min-height: 108px; }
+.detail-heading #source { font-size: 11px; }

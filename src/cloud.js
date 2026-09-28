@@ -1,11 +1,12 @@
 import { randomBytes, scryptSync } from 'node:crypto';
 import { WebDAV, seal, unseal } from './sync.js';
-import { assert, hash, now } from './util.js';
+import { assert, hash, now, mapConcurrent } from './util.js';
 import { parse } from './transcript.js';
 import { rootOf } from './organization.js';
 const digest = value => hash(JSON.stringify(value));
 const sorted = rows => [...rows].sort((a, b) => a.id.localeCompare(b.id));
-export function treeSnapshot(store, treeId) {
+export function treeSnapshot(store, treeId) { return store.memo('cloud-tree:' + treeId, () => buildSnapshot(store, treeId)); }
+function buildSnapshot(store, treeId) {
     const graph = store.exportGraph(), branches = graph.branches.filter(b => rootOf(store, b.id).id === treeId);
     if (!branches.length) return null;
     return sliceGraph(graph, branches.map(b => b.id));
@@ -148,12 +149,12 @@ export class Cloud {
             const graph = c.legacyGraphs[version.ref] || (bytes && unseal(bytes, key));
             assert(graph && digest(graph) === version.ref && graph.branches.some(b => b.id === treeId), 'Invalid cloud tree manifest.');
             const objects = {};
-            for (const h of new Set(graph.revisions.flatMap(r => r.refs))) {
+            await mapConcurrent([...new Set(graph.revisions.flatMap(r => r.refs))], async h => {
                 assert(/^[a-f0-9]{64}$/.test(h), 'Invalid transcript reference.');
-                if (this.store.db.prepare('SELECT 1 FROM objects WHERE hash=?').get(h)) continue;
+                if (this.store.db.prepare('SELECT 1 FROM objects WHERE hash=?').get(h)) return;
                 const blob = await dav.get('objects/' + h + '.bin'); assert(blob, 'Cloud transcript is incomplete.');
                 objects[h] = unseal(blob, key); assert(typeof objects[h] === 'string' && hash(objects[h]) === h, 'Transcript integrity check failed.');
-            }
+            });
             this.store.merge(graph, objects); loaded.push(version.ref);
             c.loaded[treeId] = loaded; this.save(c);
         }
@@ -177,12 +178,12 @@ export class Cloud {
             const ref = digest(graph), previous = this.items().find(i => i.id === id);
             if (c.ack[id] === ref && previous?.versions.length === 1) continue;
             const sent = new Set(c.uploadedObjects || []);
-            for (const h of new Set(graph.revisions.flatMap(r => r.refs))) {
-                if (sent.has(h)) continue;
+            await mapConcurrent([...new Set(graph.revisions.flatMap(r => r.refs))], async h => {
+                if (sent.has(h)) return;
                 const body = this.store.db.prepare('SELECT body FROM objects WHERE hash=?').get(h)?.body; assert(typeof body === 'string', 'Missing local transcript.');
                 if (await dav.put('objects/' + h + '.bin', seal(body, key), true)) uploaded++;
                 sent.add(h);
-            }
+            });
             c.uploadedObjects = [...sent];
             await dav.put('trees/' + ref + '.bin', seal(graph, key), true);
             const ancestors = [...new Set((previous?.versions || []).flatMap(v => [v.ref, ...(v.ancestors || [])]))].filter(h => h !== ref);
@@ -242,7 +243,7 @@ export class Cloud {
             if (!sessions.length) return [];
             const matching = sessions.filter(s => !q || s.name.toLocaleLowerCase().includes(q) || branches.has(s.id) && parse(this.store.raw(branches.get(s.id).head), s.agent).messages.some(m => m.text.toLocaleLowerCase().includes(q)));
             if (!matching.length && !i.name.toLocaleLowerCase().includes(q)) return [];
-            return [{ ...i, visibleSessionIds: sessions.map(s => s.id), matchedSessionIds: matching.map(s => s.id), visibleCount: sessions.length, groupId: i.projectId, groupName: project?.name }];
+            return [{ ...i, sessions, sessionIds: sessions.map(s => s.id), name: sessions.find(s => s.id === i.id)?.name || sessions[0].name, kind: sessions.length > 1 ? 'tree' : 'session', visibleSessionIds: sessions.map(s => s.id), matchedSessionIds: matching.map(s => s.id), visibleCount: sessions.length, groupId: i.projectId, groupName: project?.name }];
         });
         const latest = new Map(); for (const i of items) latest.set(i.groupId, [latest.get(i.groupId) || '', i.updatedAt].sort().at(-1));
         items.sort((a, b) => latest.get(b.groupId).localeCompare(latest.get(a.groupId)) || String(a.groupId).localeCompare(String(b.groupId)) || b.updatedAt.localeCompare(a.updatedAt));

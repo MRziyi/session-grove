@@ -1,5 +1,21 @@
 let language = localStorage.getItem('grove-language') === 'zh' ? 'zh' : 'en';
 const dictionary = {
+    'The compacted context size is not recorded. The native agent will manage its context window.': '记录中没有压缩后的可靠容量；原生 Agent 会继续管理上下文。',
+    'Rename': '重命名', 'Rename node': '命名节点', 'Save node': '保存节点', 'Cloud sync': '云端同步', 'Connect': '连接', 'Check & activate': '检查并激活', 'Activate anyway': '仍然激活',
+    '{count} compactions': '{count} 次压缩', 'Select a start, then an end.': '点击起点，再点击终点；中间对话自动选中。', 'Start: {number} · select the end': '起点：第 {number} 条 · 请选择终点', 'Selected chats {start}–{end}': '已选择第 {start}–{end} 条对话',
+    'Archive this complete path, including its shared prefix. Other in-use paths stay visible.': '归档这条完整路径及其共享前缀。其他在用路径继续显示。',
+    'Context may be near its limit: about {used} tokens, planning limit {limit}.': '上下文可能接近容量：约 {used} tokens，参考上限 {limit}。', 'No reliable context limit was found in the local configuration.': '本机配置中没有找到可靠的上下文容量。',
+    'When can I use each action?': '什么时候可以使用这些操作？', 'Update reads local agent sessions. Sync publishes local changes, including Pending, and checks the cloud directory.': 'Update 读取本机会话；Sync 上传本地变更（包括 Pending）并检查云端目录。',
+    'Move belongs to the session list. Select items before choosing a project.': 'Move 在列表里使用：先勾选条目，再选择项目。',
+    'In a transcript, select a start and end to Combine or Dissolve a continuous range.': '在对话中选择起点和终点，然后合并或解散这段连续内容。',
+    'Select a graph node to Rename it. Naming Pending makes it a saved node.': '选中图节点可以重命名；给 Pending 命名就会保存为正式节点。',
+    'Fork appears only at a completed turn. Activate, Deactivate and Archive belong to a complete session endpoint.': '完整轮次的节点才出现 Fork。选中 session 末端才出现激活、停用或归档。',
+    'Archived shows only archived paths with their prefixes. Restore returns a path to its project without activating it.': '归档区只显示归档路径及其前缀。恢复会把路径放回项目，不自动激活。',
+    'Token counts are estimates. Local configuration and recorded usage inform activation warnings; unknown limits are not guessed.': 'Token 数为估算。激活提示参考本机配置与原生统计，不猜测未知上限。',
+    'Close running agents before changing native activation. Browsing and organization remain available.': '修改原生激活状态前需关闭运行中的 Agent。浏览和整理不受影响。',
+    'Diagnostics': '诊断记录', 'Download diagnostics': '下载诊断记录', 'Logs contain timings, operation types and error references; no conversation text, passwords, URLs or working paths.': '日志只记录耗时、操作类型和错误编号，不包含对话正文、密码、URL 或工程路径。',
+    'Restore this session before organizing.': '请先恢复会话再整理。', 'Select a node to rename.': '请选择要命名的节点。', 'Select a consecutive range.': '请选择连续范围。', 'Select the current session endpoint to archive.': '请选择这条会话的当前末端再归档。', 'Review the context-length warning before activating.': '请检查上下文容量提示后再激活。',
+
     'Loading project index…': '正在加载项目目录…', 'Loading context…': '正在加载上下文…', 'Unlock sync to download this project.': '请解锁同步以下载项目目录。',
     'Project sync': '项目同步',
     'Context': '上下文', 'Inspect': '查看', 'Local changes': '有本地更新', '≈ {count} tokens': '约 {count} tokens',

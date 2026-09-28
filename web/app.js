@@ -17,10 +17,10 @@ const icon = name => `<svg class="icon" viewBox="0 0 24 24" aria-hidden="true">$
 const palette = {
     'color-0': ['#4d86bb', '#e7f1fa'], 'color-1': ['#4c987a', '#e6f3ed'], 'color-2': ['#7288c5', '#edf0fc'],
     'color-3': ['#529a9e', '#e6f3f3'], 'color-4': ['#678c65', '#edf4e7'], 'color-5': ['#637eab', '#eaf0f9'], 'color-6': ['#578c8b', '#e5f1ee'],
-    'pending-0': ['#cf9955', '#fff2dc'], 'pending-1': ['#c78575', '#fcebe4'], 'pending-2': ['#b587ab', '#f7eaf4'], 'pending-3': ['#b59a50', '#faf2d6']
+    'pending-0': ['#576b85', '#566b852b'], 'pending-1': ['#726486', '#7161842b'], 'pending-2': ['#526f73', '#536f732b'], 'pending-3': ['#7c6979', '#7c69792b']
 };
 const style = n => { const [tone, tint] = palette[n.color]; return `--tone:${tone};--tint:${tint}`; };
-const state = { data: null, token: '', roots: {}, scope: 'active:codex', list: { items: [] }, query: '', selected: new Set(), tree: null, branchId: null, nodeId: null, chats: new Set(), expanded: new Set() };
+const state = { data: null, token: '', roots: {}, scope: 'active:codex', list: { items: [] }, query: '', selected: new Set(), tree: null, branchId: null, nodeId: null, chats: new Set(), rangeStart: null, rangeEnd: null, expanded: new Set() };
 let submitAction, toastTimer, searchTimer, requestId = 0, working = false;
 const compactNumber = n => new Intl.NumberFormat(locale() === 'zh' ? 'zh-CN' : 'en-US', { notation: 'compact', maximumFractionDigits: 1 }).format(n);
 const tokenLabel = n => t('≈ {count} tokens', { count: compactNumber(n.tokens?.recordedEstimate ?? n.tokens?.estimate ?? 0) });
@@ -35,7 +35,7 @@ function toast(message) { $('#toast').textContent = message; $('#toast').classLi
 async function api(path, method = 'GET', body) {
     const r = await fetch('/api' + path, { method, headers: { 'Content-Type': 'application/json', 'X-Grove-Token': state.token }, ...(body ? { body: JSON.stringify(body) } : {}) });
     const data = await r.json();
-    if (!r.ok) throw new Error(errorText(data.error));
+    if (!r.ok) throw new Error(errorText(data.error) + (data.requestId ? ` [${data.requestId}]` : ''));
     return data;
 }
 function modal(title, html, action, label = 'Save') {
@@ -49,7 +49,7 @@ $('#dialog-close').onclick = $('#dialog-cancel').onclick = () => $('#dialog').cl
 $('#dialog-form').onsubmit = async e => {
     e.preventDefault(); if (!submitAction || working) return;
     working = true; $('#dialog-submit').disabled = true;
-    try { await submitAction(new FormData(e.target)); $('#dialog').close(); await refresh(); }
+    try { const complete = await submitAction(new FormData(e.target)); if (complete === false) return; $('#dialog').close(); await refresh(); }
     catch (e) { $('#dialog-error').textContent = e.message; }
     finally { working = false; $('#dialog-submit').disabled = false; }
 };
@@ -59,14 +59,12 @@ async function run(fn) {
 }
 function button(id, label, fn) { const el = $(id); if (el) { el.textContent = t(label); el.onclick = fn; } }
 function translateBanner() {
-    for (const [id, glyph, label] of [['upload', 'upload', 'Upload'], ['sync', 'sync', 'Sync'], ['collect', 'refresh', 'Update'], ['settings', 'settings', 'Settings']]) {
+    for (const [id, glyph, label] of [['sync', 'sync', 'Sync'], ['collect', 'refresh', 'Update'], ['settings', 'settings', 'Settings']]) {
         const el = $('#' + id); el.innerHTML = `${icon(glyph)}<span class="button-label">${t(label)}</span>`; el.title = t(label); el.setAttribute('aria-label', t(label));
     }
-    $('#language').textContent = locale() === 'en' ? '中文' : 'EN';
     $('#search-icon').innerHTML = icon('search'); $('#search').placeholder = t('Search title or content…'); $('#search').setAttribute('aria-label', t('Search title or content…'));
     $('#back').innerHTML = icon('back'); $('#back').title = t('Back to list'); $('#back').setAttribute('aria-label', t('Back to list'));
-    $('#source').innerHTML = icon('source'); $('#source').title = t('Source & revisions'); $('#source').setAttribute('aria-label', t('Source & revisions'));
-    $('#context-info').textContent = t('Context');
+    $('#source').textContent = t('Source'); $('#source').title = t('Source & revisions'); $('#source').setAttribute('aria-label', t('Source & revisions'));
     $('#transcripts-title').textContent = t('Transcripts'); $('#graph-title').textContent = t('Graph'); $('#graph-hint').textContent = '';
 }
 function renderNavigation() {
@@ -79,13 +77,12 @@ function renderNavigation() {
     $$('[data-scope]').forEach(el => el.onclick = () => navigate(el.dataset.scope));
     const phase = d.cloud.phase, labels = { unconfigured: '', locked: 'Sync locked', queued: 'Upload queued', syncing: 'Syncing…', synced: 'Synced', retrying: 'Retrying', local: 'Local changes' };
     $('#cloud-status').textContent = t(labels[phase] || ''); $('#cloud-status').title = d.cloud.error ? errorText(d.cloud.error) : '';
-    $('#upload').disabled = !d.cloud.dirty || d.cloud.phase === 'syncing';
-    $('#upload').title = t('Last upload: {time}', { time: date(d.cloud.lastUpload) }) + (d.cloud.dirty ? '\n' + t('Upload includes unorganized Pending.') : '\n' + t('No local changes to upload.'));
-    $('#upload').classList.toggle('has-changes', !!d.cloud.dirty);
-    $('#sync').title = t('Last cloud check: {time}', { time: date(d.cloud.lastCheck) });
+    $('#sync').disabled = d.cloud.phase === 'syncing';
+    $('#sync').title = t('Last upload: {time}', { time: date(d.cloud.lastUpload) }) + '\n' + t('Last cloud check: {time}', { time: date(d.cloud.lastCheck) });
+
 }
 async function navigate(scope) {
-    state.scope = scope; state.tree = null; state.query = ''; state.selected.clear(); state.chats.clear(); $('#search').value = '';
+    state.scope = scope; state.tree = null; state.query = ''; state.selected.clear(); clearRange(); $('#search').value = '';
     renderNavigation(); $('#list-title').textContent = title(); $('#session-list').innerHTML = `<p class="empty">${t('Loading project index…')}</p>`;
     try { await refresh(); } catch (e) { toast(e.message); state.list = { items: [] }; render(); }
 }
@@ -109,15 +106,11 @@ function renderList() {
     const selected = state.list.items.filter(i => state.selected.has(i.id)), ungrouped = selected.length && selected.every(i => !i.projectId);
     const mode = selected.length ? !!selected[0].projectId : null;
     $('#list-actions').innerHTML = selected.length
-        ? `<span class="selection-count">${t('{count} selected', { count: selected.length })}</span>${state.scope === 'archived' ? '<button id="restore-items"></button>' : ungrouped ? '<button id="move-items"></button><button id="archive-items"></button>' : state.scope.startsWith('active:') ? '<button id="deactivate-items"></button>' : '<button id="archive-items"></button>'}`
+        ? `<span class="selection-count">${t('{count} selected', { count: selected.length })}</span>${state.scope === 'archived' ? '' : ungrouped || currentProject() ? '<button id="move-items"></button>' : '<button id="deactivate-items"></button>'}`
         : '';
-    if (currentProject() && selected.length === state.list.items.length && selected.length && !state.query) $('#list-actions').innerHTML += '<button id="archive-project"></button>';
     button('#move-items', 'Move to project', () => moveDialog([...state.selected]));
-    button('#archive-items', 'Archive', () => archiveDialog({ itemIds: [...state.selected] }));
-    button('#restore-items', 'Restore', () => restore({ itemIds: [...state.selected] }));
     button('#deactivate-items', 'Deactivate', () => run(() => api('/manage', 'POST', { action: 'deactivate', itemIds: [...state.selected], agent: state.scope.slice(7) })));
-    button('#archive-project', 'Archive project', () => archiveDialog({ projectId: currentProject().id }));
-    $('#session-list').innerHTML = groups().map(g => `<section class="list-group">${!currentProject() ? `<h2>${esc(g.name)}${state.scope === 'archived' && state.data.projects.find(p => p.id === g.id)?.archived ? `<button class="restore-project" data-project="${esc(g.id)}">${t('Restore project')}</button>` : ''}</h2>` : ''}${g.items.map(i => `<article class="session-row ${state.selected.has(i.id) ? 'checked' : ''}" data-item="${esc(i.id)}"><button class="row-open" data-open="${esc(i.id)}">${icon(i.kind)}<span class="row-text"><span class="row-title">${esc(i.name)} ${cloudMark(i)}</span><span class="row-meta">${itemMeta(i)}</span></span><time class="row-date" datetime="${esc(i.updatedAt)}">${date(i.updatedAt)}</time></button><input type="checkbox" data-select="${esc(i.id)}" aria-label="${esc(t('Select {name}', { name: i.name }))}" ${state.selected.has(i.id) ? 'checked' : ''} ${mode !== null && mode !== !!i.projectId && state.scope !== 'archived' ? 'disabled' : ''}></article>`).join('')}</section>`).join('') || `<p class="empty">${t(state.query ? 'No matching sessions' : state.scope.startsWith('active:') ? 'Start a conversation in your agent, then click Update.' : 'No sessions here.')}</p>`;
+    $('#session-list').innerHTML = groups().map(g => `<section class="list-group">${!currentProject() ? `<h2>${esc(g.name)}${state.scope === 'archived' && state.data.projects.find(p => p.id === g.id)?.archived ? `<button class="restore-project" data-project="${esc(g.id)}">${t('Restore project')}</button>` : ''}</h2>` : ''}${g.items.map(i => `<article class="session-row ${state.selected.has(i.id) ? 'checked' : ''}" data-item="${esc(i.id)}"><button class="row-open" data-open="${esc(i.id)}">${icon(i.kind)}<span class="row-text"><span class="row-title">${esc(i.name)} ${cloudMark(i)}</span><span class="row-meta">${itemMeta(i)}</span></span><time class="row-date" datetime="${esc(i.updatedAt)}">${date(i.updatedAt)}</time></button>${state.scope === 'archived' ? '' : `<input type="checkbox" data-select="${esc(i.id)}" aria-label="${esc(t('Select {name}', { name: i.name }))}" ${state.selected.has(i.id) ? 'checked' : ''} ${mode !== null && mode !== !!i.projectId && state.scope !== 'archived' ? 'disabled' : ''}>`}</article>`).join('')}</section>`).join('') || `<p class="empty">${t(state.query ? 'No matching sessions' : state.scope.startsWith('active:') ? 'Start a conversation in your agent, then click Update.' : 'No sessions here.')}</p>`;
     $$('[data-open]').forEach(el => el.onclick = () => openTree(el.dataset.open));
     $$('[data-select]').forEach(el => el.onchange = () => { el.checked ? state.selected.add(el.dataset.select) : state.selected.delete(el.dataset.select); renderList(); });
     $$('.restore-project').forEach(el => el.onclick = () => run(() => api('/manage', 'POST', { action: 'restore', projectId: el.dataset.project })));
@@ -130,11 +123,11 @@ async function openTree(id) {
     $('#main').setAttribute('aria-busy', 'true');
     const label = $(`[data-item="${id}"] .row-meta`); if (label) label.textContent = t('Loading context…');
     try {
-        const tree = await api('/trees/' + encodeURIComponent(id)), item = state.list.items.find(i => i.id === id);
+        const tree = await api('/trees/' + encodeURIComponent(id) + '?view=' + (state.scope === 'archived' ? 'archived' : 'in-use')), item = state.list.items.find(i => i.id === id);
         state.tree = tree;
         state.branchId = item?.matchedSessionIds?.find(id => tree.paths.some(p => p.branchId === id)) || item?.visibleSessionIds?.[0] || tree.paths.find(p => !p.archived)?.branchId || tree.paths[0]?.branchId;
         state.nodeId = null;
-        state.chats.clear(); state.expanded.clear(); render();
+        clearRange(); state.expanded.clear(); render();
     } catch (e) { toast(e.message); renderList(); }
     finally { $('#main').removeAttribute('aria-busy'); }
 }
@@ -147,8 +140,10 @@ function render() {
 function renderDetail() {
     const tree = state.tree, p = route(); if (!p) return;
     $('#session-title').textContent = tree.name;
+    const tokens = p.nodeIds.reduce((sum, id) => sum + (tree.nodes.find(n => n.id === id)?.tokens?.recordedEstimate || 0), 0);
+    $('#session-meta').textContent = `${p.agent === 'codex' ? 'Codex' : 'Claude Code'} · ≈ ${compactNumber(tokens)} tokens${p.context?.compactions.length ? ' · ' + t('{count} compactions', { count: p.context.compactions.length }) : ''}`;
     $('#detail-count').textContent = `${t('{count} branches', { count: tree.paths.length })} · ${t('{count} chats', { count: tree.chatCount })} · ${t('{count} pending', { count: tree.pendingCount })}`;
-    $('#branch-picker').innerHTML = tree.paths.map(v => `<option value="${esc(v.branchId)}" ${v.branchId === p.branchId ? 'selected' : ''}>${esc(v.name)}${v.archived ? ' · ' + t('Archived') : ''}</option>`).join('');
+    $('#branch-picker').innerHTML = tree.paths.map(v => `<option value="${esc(v.branchId)}" ${v.branchId === p.branchId ? 'selected' : ''}>${esc(v.name)}</option>`).join('');
     renderDetailActions(); renderTranscript(); renderGraph(); requestAnimationFrame(drawRibbons);
 }
 function forkCheckpoint() {
@@ -162,20 +157,23 @@ function canCombine() {
     if (!positions.length || positions.at(-1) - positions[0] + 1 !== positions.length) return false;
     return !state.tree.nodes.some(n => {
         const end = p.messages.findIndex(m => m.id === n.chatIds.at(-1));
-        return end >= positions[0] && end < positions.at(-1) && (n.childIds.length > 1 || n.endBranchIds.length);
+        return end >= positions[0] && end < positions.at(-1) && (n.splitBoundary ?? (n.childIds.length > 1 || n.endBranchIds.length));
     });
 }
 function renderDetailActions() {
     const p = route(), node = selectedNode(), terminal = node?.endBranchIds.includes(p.branchId);
     const archived = p.archived || state.data.projects.find(v => v.id === state.tree.projectId)?.archived;
+    const editable = !archived && state.scope !== 'archived';
     const dissolve = state.tree.nodes.some(n => !n.pending && n.chatIds.some(id => state.chats.has(id)));
-    $('#detail-actions').innerHTML = state.chats.size ? `<span>${t('{count} selected', { count: state.chats.size })}</span>${canCombine() ? '<button id="combine"></button>' : ''}${dissolve ? '<button id="dissolve"></button>' : ''}<button id="clear-selection"></button>` : node ? `${terminal ? p.active ? '<button id="toggle-active"></button>' : archived ? '<button id="restore-session"></button>' : '<button id="toggle-active"></button>' : ''}${!archived && forkCheckpoint() ? '<button id="fork"></button>' : ''}` : '';
+    $('#detail-actions').innerHTML = state.chats.size ? `<span>${t('{count} selected', { count: state.chats.size })}</span>${editable && state.rangeEnd !== null && canCombine() ? '<button id="combine"></button>' : ''}${editable && state.rangeEnd !== null && dissolve ? '<button id="dissolve"></button>' : ''}<button id="clear-selection"></button>` : node ? `${editable ? '<button id="rename-node"></button>' : ''}${terminal ? archived ? '<button id="restore-session"></button>' : `${!p.active || state.tree.projectId ? '<button id="toggle-active"></button>' : ''}<button id="archive-path"></button>` : ''}${editable && forkCheckpoint() ? '<button id="fork"></button>' : ''}` : '';
     button('#combine', 'Combine', combineDialog);
-    button('#dissolve', 'Dissolve', () => run(async () => { await saveOrganization('dissolve'); state.chats.clear(); }));
-    button('#clear-selection', 'Clear', () => { state.chats.clear(); renderDetail(); });
+    button('#dissolve', 'Dissolve', () => run(async () => { await saveOrganization('dissolve'); clearRange(); }));
+    button('#clear-selection', 'Clear', () => { clearRange(); renderDetail(); });
     button('#toggle-active', p.active ? 'Deactivate' : 'Activate', () => p.active ? run(() => api('/manage', 'POST', { action: 'deactivate', branchIds: [p.branchId] })) : activateDialog(p));
     button('#restore-session', 'Restore', () => restore({ branchIds: [p.branchId] }));
     button('#fork', 'Fork', forkDialog);
+    button('#rename-node', 'Rename', renameNode);
+    button('#archive-path', 'Archive', archivePath);
 }
 function excerpt(text, expanded) {
     if (expanded || text.length < 380) return esc(text);
@@ -187,15 +185,20 @@ function renderTranscript() {
     const p = route();
     $('#transcripts').innerHTML = p.nodeIds.map(id => {
         const n = state.tree.nodes.find(n => n.id === id), messages = p.messages.filter(m => n.chatIds.includes(m.id));
-        return `${n.afterCompaction ? `<div class="compaction-marker">${t('Context compacted here')} <button data-context>${t('Inspect')}</button></div>` : ''}<section class="transcript-segment ${n.pending ? 'pending' : ''}" data-segment="${esc(n.id)}" style="${style(n)}"><div class="segment-caption"><input type="checkbox" data-select-node="${esc(n.id)}" aria-label="${esc(t('Select {name}', { name: nodeName(n) }))}" ${messages.every(m => state.chats.has(m.id)) ? 'checked' : ''}><button data-focus-node="${esc(n.id)}">${esc(nodeName(n))} · ${t('{count} chats', { count: messages.length })}</button><span class="token-estimate" title="${esc(tokenHint())}">${tokenLabel(n)}</span></div>${messages.map(m => `<article class="chat ${m.role} ${state.chats.has(m.id) ? 'checked' : ''}"><input type="checkbox" data-chat="${esc(m.id)}" aria-label="${esc(t('Select chat {number}', { number: p.messages.findIndex(x => x.id === m.id) + 1 }))}" ${state.chats.has(m.id) ? 'checked' : ''}><div class="bubble"><span class="speaker">${m.role === 'user' ? t('You') : p.agent === 'codex' ? 'Codex' : 'Claude Code'}</span>${excerpt(m.text, state.expanded.has(m.id))}${m.text.length >= 380 ? `<button class="expand-chat" data-expand="${esc(m.id)}">${t(state.expanded.has(m.id) ? 'Collapse' : 'Expand')}</button>` : ''}</div></article>`).join('')}</section>`;
+        return `${n.afterCompaction ? `<div class="compaction-marker">${t('Context compacted here')}</div>` : ''}<section class="transcript-segment ${n.pending ? 'pending' : ''}" data-segment="${esc(n.id)}" style="${style(n)}"><div class="segment-caption"><button data-focus-node="${esc(n.id)}">${esc(nodeName(n))} · ${t('{count} chats', { count: messages.length })}</button><span class="token-estimate" title="${esc(tokenHint())}">${tokenLabel(n)}</span></div>${messages.map(m => `<article class="chat ${m.role} ${state.chats.has(m.id) ? 'checked' : ''}">${state.scope === 'archived' ? '' : `<input type="checkbox" data-chat="${esc(m.id)}" aria-label="${esc(t('Select chat {number}', { number: p.messages.findIndex(x => x.id === m.id) + 1 }))}" ${state.chats.has(m.id) ? 'checked' : ''}>`}<div class="bubble"><span class="speaker">${m.role === 'user' ? t('You') : p.agent === 'codex' ? 'Codex' : 'Claude Code'}</span>${excerpt(m.text, state.expanded.has(m.id))}${m.text.length >= 380 ? `<button class="expand-chat" data-expand="${esc(m.id)}">${t(state.expanded.has(m.id) ? 'Collapse' : 'Expand')}</button>` : ''}</div></article>`).join('')}</section>`;
     }).join('') || `<p class="empty">${t('No chats yet.')}</p>`;
-    $$('[data-context]').forEach(el => el.onclick = showContext);
-    $$('[data-chat]').forEach(el => el.onchange = () => {
-        el.checked ? state.chats.add(el.dataset.chat) : state.chats.delete(el.dataset.chat);
-        el.closest('.chat').classList.toggle('checked', el.checked); renderDetailActions();
-        $$('[data-select-node]').forEach(check => { const n = state.tree.nodes.find(n => n.id === check.dataset.selectNode); const count = n.chatIds.filter(id => state.chats.has(id)).length; check.checked = count === n.count; check.indeterminate = count > 0 && count < n.count; });
+    $('#range-hint').hidden = state.scope === 'archived';
+    $('#range-hint').textContent = state.rangeStart === null ? t('Select a start, then an end.') : state.rangeEnd === null ? t('Start: {number} · select the end', { number: state.rangeStart + 1 }) : t('Selected chats {start}–{end}', { start: Math.min(state.rangeStart, state.rangeEnd) + 1, end: Math.max(state.rangeStart, state.rangeEnd) + 1 });
+    $$('[data-chat]').forEach(el => el.onclick = e => {
+        e.preventDefault();
+        const index = p.messages.findIndex(m => m.id === el.dataset.chat);
+        if (state.rangeStart === null || state.rangeEnd !== null && !e.shiftKey) { state.rangeStart = index; state.rangeEnd = null; }
+        else state.rangeEnd = index;
+        const end = state.rangeEnd ?? state.rangeStart;
+        state.chats = new Set(p.messages.slice(Math.min(state.rangeStart, end), Math.max(state.rangeStart, end) + 1).map(m => m.id));
+        state.nodeId = null;
+        const top = $('#transcripts').scrollTop; renderTranscript(); $('#transcripts').scrollTop = top; renderDetailActions(); renderGraph();
     });
-    $$('[data-select-node]').forEach(el => el.onchange = () => { const top = $('#transcripts').scrollTop; const n = state.tree.nodes.find(n => n.id === el.dataset.selectNode); n.chatIds.forEach(id => el.checked ? state.chats.add(id) : state.chats.delete(id)); renderTranscript(); $('#transcripts').scrollTop = top; renderDetailActions(); });
     $$('[data-expand]').forEach(el => el.onclick = () => { const top = $('#transcripts').scrollTop; state.expanded.has(el.dataset.expand) ? state.expanded.delete(el.dataset.expand) : state.expanded.add(el.dataset.expand); renderTranscript(); $('#transcripts').scrollTop = top; requestAnimationFrame(drawRibbons); });
     $$('[data-focus-node]').forEach(el => el.onclick = () => selectNode(el.dataset.focusNode, false));
 }
@@ -211,13 +214,13 @@ function renderGraph() {
     nodes.filter(n => !n.parentIds.length).forEach(place);
     const width = Math.max(180, lane * 200), height = Math.max(160, ...nodes.map(n => n.depth * 150 + 145));
     $('#graph').style.width = `${width}px`; $('#graph').style.height = `${height}px`;
-    $('#graph').innerHTML = `<svg class="graph-edges" width="${width}" height="${height}" aria-hidden="true">${state.tree.edges.map(e => { const a = positions.get(e.from), b = positions.get(e.to), n = nodes.find(n => n.id === e.to), color = palette[n.color][0]; return `<path d="M${a.x + 86},${a.y + 112} C${a.x + 86},${a.y + 132} ${b.x + 86},${b.y - 25} ${b.x + 86},${b.y}" fill="none" stroke="${color}" stroke-width="2" ${n.pending ? 'stroke-dasharray="4 4"' : ''}/>`; }).join('')}</svg>${nodes.map(n => { const pos = positions.get(n.id); return `<button class="graph-node ${n.pending ? 'pending' : ''} ${n.id === state.nodeId ? 'selected' : ''} ${p.nodeIds.includes(n.id) ? '' : 'dimmed'}" data-node="${esc(n.id)}" style="${style(n)};left:${pos.x}px;top:${pos.y}px" aria-pressed="${n.id === state.nodeId}"><span class="node-title">${esc(nodeName(n))}</span><span class="node-meta">${t('{count} chats', { count: n.count })} · <span title="${esc(tokenHint())}">${tokenLabel(n)}</span></span>${n.afterCompaction ? `<span class="compaction-label">${t('After compaction')}</span>` : ''}${n.endBranchIds.some(id => state.tree.paths.find(p => p.branchId === id)?.active) ? `<span class="end-label">${t('Active')}</span>` : ''}</button>`; }).join('')}`;
+    $('#graph').innerHTML = `<svg class="graph-edges" width="${width}" height="${height}" aria-hidden="true">${state.tree.edges.map(e => { const a = positions.get(e.from), b = positions.get(e.to), n = nodes.find(n => n.id === e.to), color = palette[n.color][0]; return `<path d="M${a.x + 86},${a.y + 108} C${a.x + 86},${a.y + 132} ${b.x + 86},${b.y - 25} ${b.x + 86},${b.y}" fill="none" stroke="${color}" stroke-width="2" ${n.pending ? 'stroke-dasharray="4 4"' : ''}/>`; }).join('')}</svg>${nodes.map(n => { const pos = positions.get(n.id); return `<button class="graph-node ${n.pending ? 'pending' : ''} ${n.id === state.nodeId ? 'selected' : ''} ${p.nodeIds.includes(n.id) ? '' : 'dimmed'}" data-node="${esc(n.id)}" style="${style(n)};left:${pos.x}px;top:${pos.y}px" aria-pressed="${n.id === state.nodeId}"><span class="node-title">${esc(nodeName(n))}</span><span class="node-meta">${t('{count} chats', { count: n.count })} · <span title="${esc(tokenHint())}">${tokenLabel(n)}</span></span>${n.afterCompaction ? `<span class="compaction-label">${t('After compaction')}</span>` : ''}${n.endBranchIds.some(id => state.tree.paths.find(p => p.branchId === id)?.active) ? `<span class="end-label">${t('Active')}</span>` : ''}</button>`; }).join('')}`;
     $$('[data-node]').forEach(el => el.onclick = () => selectNode(el.dataset.node));
 }
 function selectNode(id, scrollTranscript = true) {
     const n = state.tree.nodes.find(n => n.id === id);
     if (!n.branchIds.includes(state.branchId)) { state.branchId = n.branchIds.find(id => !state.tree.paths.find(p => p.branchId === id).archived) || n.branchIds[0]; state.chats.clear(); }
-    state.nodeId = id;
+    clearRange(); state.nodeId = id;
     const top = $('#transcripts').scrollTop; renderDetail();
     if (scrollTranscript) $(`[data-segment="${id}"]`)?.scrollIntoView({ block: 'start', behavior: 'smooth' });
     else { $('#transcripts').scrollTop = top; $(`[data-node="${id}"]`)?.scrollIntoView({ block: 'nearest', inline: 'nearest', behavior: 'smooth' }); }
@@ -240,12 +243,13 @@ function drawRibbons() {
 }
 async function refresh() {
     const id = ++requestId;
-    const [data, list, tree] = await Promise.all([api('/state'), api('/list?scope=' + encodeURIComponent(state.scope) + '&q=' + encodeURIComponent(state.query)), state.tree ? api('/trees/' + encodeURIComponent(state.tree.id)) : null]);
+    const [data, list, tree] = await Promise.all([api('/state'), api('/list?scope=' + encodeURIComponent(state.scope) + '&q=' + encodeURIComponent(state.query)), state.tree ? api('/trees/' + encodeURIComponent(state.tree.id) + '?view=' + (state.scope === 'archived' ? 'archived' : 'in-use')) : null]);
     if (id !== requestId) return;
     state.data = data; state.list = list;
     state.selected = new Set([...state.selected].filter(id => list.items.some(i => i.id === id)));
     if (tree) {
-        state.tree = tree; if (!route()) state.branchId = tree.paths[0]?.branchId;
+        state.tree = tree.paths.length ? tree : null;
+        if (!state.tree) { clearRange(); render(); return; } if (!route()) state.branchId = tree.paths[0]?.branchId;
         if (!tree.nodes.some(n => n.id === state.nodeId)) state.nodeId = null;
         state.chats = new Set([...state.chats].filter(id => route()?.messages.some(m => m.id === id)));
     }
@@ -267,33 +271,50 @@ function restore(target) {
     if (ungrouped) return moveDialog([], target);
     return run(() => api('/manage', 'POST', { ...target, action: 'restore' }));
 }
-function archiveDialog(target) {
-    const items = state.data.items.filter(i => target.projectId ? i.projectId === target.projectId : target.itemIds?.includes(i.id));
-    modal(target.projectId ? 'Archive project' : 'Archive', `<p>${t('{count} sessions', { count: items.reduce((n, i) => n + i.sessionIds.length, 0) })}</p><p class="dialog-copy">${items.map(i => esc(i.name)).join('<br>')}</p><p class="dialog-copy">${t('Keep the history in Archived and deactivate these sessions on this device. Restore does not automatically activate them.')}</p>`, async () => { await api('/manage', 'POST', { ...target, action: 'archive' }); state.selected.clear(); }, 'Archive');
+function clearRange() { state.chats.clear(); state.rangeStart = null; state.rangeEnd = null; }
+function renameNode() {
+    const n = selectedNode(); if (!n) return;
+    modal('Rename node', field('Node title', 'name', n.name || ''), async form => {
+        await api('/trees/' + state.tree.id, 'POST', { action: 'rename', nodeId: n.id, pathId: state.branchId, version: state.tree.version, name: form.get('name') });
+    }, n.pending ? 'Save node' : 'Rename');
+}
+function archivePath() {
+    const p = route(), node = selectedNode();
+    if (!node?.endBranchIds.includes(p.branchId)) return;
+    modal('Archive session', `<p>${esc(p.name)}</p><p class="dialog-copy">${t('Archive this complete path, including its shared prefix. Other in-use paths stay visible.')}</p>`, async () => {
+        await api('/manage', 'POST', { action: 'archive', branchIds: [p.branchId], nodeId: node.id, version: state.tree.version }); state.nodeId = null;
+    }, 'Archive');
 }
 async function activateDialog(p) {
     try {
         const d = await api('/branches/' + p.branchId), local = state.data.instances.find(i => i.branchId === p.branchId);
-        modal('Activate', `${field('Working directory', 'cwd', local?.cwd || d.cwd)}<p class="dialog-copy">${t('Source')}: ${esc(d.lineage[0]?.source.deviceName || '')}<br>${esc(d.cwd)}</p>`, async form => { await api('/manage', 'POST', { action: 'activate', branchIds: [p.branchId], cwd: form.get('cwd') }); }, 'Activate');
+        let checkedPath = null, checked = null;
+        modal('Activate', `${field('Working directory', 'cwd', local?.cwd || d.cwd)}<p class="dialog-copy">${t('Source')}: ${esc(d.lineage[0]?.source.deviceName || '')}<br>${esc(d.cwd)}</p><div id="activation-budget" role="status"></div>`, async form => {
+            const cwd = form.get('cwd');
+            if (!checked || checkedPath !== cwd) { checked = await api('/activation-check', 'POST', { branchId: p.branchId, cwd }); checkedPath = cwd; showBudget(checked); if (checked.risk) return false; }
+            await api('/manage', 'POST', { action: 'activate', branchIds: [p.branchId], cwd, contextAcknowledgement: checked.fingerprint });
+        }, 'Activate');
+        function showBudget(c) {
+            $('#activation-budget').innerHTML = c.risk ? `<p class="warning">${t('Context may be near its limit: about {used} tokens, planning limit {limit}.', { used: compactNumber(c.estimated), limit: compactNumber(c.window || c.compactAt) })}<br>${esc(c.source || '')}</p>` : c.basis === 'incomplete-after-compaction' ? `<p class="dialog-copy">${t('The compacted context size is not recorded. The native agent will manage its context window.')}</p>` : c.unknown ? `<p class="dialog-copy">${t('No reliable context limit was found in the local configuration.')}</p>` : `<p class="dialog-copy">≈ ${compactNumber(c.estimated)} / ${compactNumber(c.window || c.compactAt)} tokens · ${esc(c.source || '')}</p>`;
+            $('#dialog-submit').textContent = t(c.risk ? 'Activate anyway' : 'Activate');
+        }
+        checkedPath = local?.cwd || d.cwd; checked = await api('/activation-check', 'POST', { branchId: p.branchId, cwd: checkedPath }); showBudget(checked);
+        $('[name=cwd]').oninput = () => { checked = null; $('#activation-budget').textContent = ''; $('#dialog-submit').textContent = t('Check & activate'); };
     } catch (e) { toast(e.message); }
 }
 function saveOrganization(action, name) { return api('/trees/' + state.tree.id, 'POST', { version: state.tree.version, pathId: state.branchId, chatIds: [...state.chats], action, name }); }
 function combineDialog() {
     const p = route(), positions = p.messages.map((m, i) => state.chats.has(m.id) ? i : -1).filter(i => i >= 0);
     if (positions.at(-1) - positions[0] + 1 !== positions.length) return toast(t('Combine requires consecutive chats.'));
-    modal('Combine', field('Node title', 'name'), async form => { await saveOrganization('combine', form.get('name')); state.chats.clear(); }, 'Combine');
+    modal('Combine', field('Node title', 'name'), async form => { await saveOrganization('combine', form.get('name')); clearRange(); }, 'Combine');
 }
 function forkDialog() {
     const p = route(), checkpoint = forkCheckpoint();
     if (!checkpoint) return toast(t('Fork at a node ending with a completed turn.'));
     modal('Create a branch', field('Branch name', 'name'), async form => {
         const b = await api('/branches/' + p.branchId + '/fork', 'POST', { name: form.get('name'), end: checkpoint.end, revisionId: p.head });
-        state.branchId = b.id; state.chats.clear(); toast(t('Branch created'));
+        state.branchId = b.id; clearRange(); toast(t('Branch created'));
     }, 'Create branch');
-}
-function showContext() {
-    const p = route(), c = p.context, usage = c?.lastUsage, events = c?.compactions || [];
-    modal('Context', `<p class="dialog-copy">${t('Full history is preserved. After compaction, earlier chats are history, not necessarily the model’s current context.')}</p><div class="context-metrics"><div>${t('Recorded path text')}<strong>≈ ${compactNumber(p.messages.reduce((n, m) => n + Math.ceil([...m.text].reduce((sum, ch) => sum + (ch.charCodeAt(0) < 128 ? .25 : 1.5), 0)) + (m.toolTokens || 0), 0))}</strong></div><div>${t('Latest reported input')}<strong>${usage && c.usageAfterCompaction ? compactNumber(usage.input) : t('Unknown')}</strong></div><div>${t('Reported context limit')}<strong>${usage?.window ? compactNumber(usage.window) : t('Unknown')}</strong></div></div><p class="dialog-copy">${tokenHint()}<br>${t('Reported input is the last recorded request, not a live meter or cumulative billing total.')} ${usage?.at ? date(usage.at) : ''}</p>${events.length ? events.map((e, i) => `<section class="compaction-card"><h3>${t('Compaction')} ${i + 1} <small>${date(e.at)}</small></h3><p>${e.before != null ? compactNumber(e.before) : '—'} → ${e.after != null ? compactNumber(e.after) : '—'} ${t('reported input tokens')}</p>${e.summary ? `<details open><summary>${t('Readable summary')}</summary><pre>${esc(e.summary)}</pre></details>` : `<p class="dialog-copy">${t(e.opaque ? 'The native record contains an encrypted compaction payload. Its summary cannot be read or quality-scored here.' : 'No readable summary was saved in this record.')}</p>`}${e.retained?.length ? `<details><summary>${t('Retained readable messages')} (${e.retained.length})</summary>${e.retained.map(m => `<pre>${esc(m.text)}</pre>`).join('')}</details>` : ''}</section>`).join('') : `<p class="dialog-copy">${t('No compaction event recorded.')}</p>`}`, null);
 }
 async function showSource() {
     try {
@@ -301,33 +322,39 @@ async function showSource() {
         modal('Source & revisions', `${d.warnings.map(w => `<p class="warning">${esc(errorText(w))}</p>`).join('')}${d.lineage.map(r => `<div class="source-entry">${esc(r.source.deviceName || t('Unknown device'))} · ${date(r.createdAt)}<br>${esc(r.source.cwd || d.cwd)}<br>${esc(r.source.client || '')}</div>`).join('')}`, null);
     } catch (e) { toast(e.message); }
 }
-async function settings(direction = null) {
+async function settings(draft = null) {
     try {
-        const c = await api('/webdav');
-        modal('Sync & settings', `${field('WebDAV URL', 'url', c.url, 'url')}${field('Username', 'username', c.username)}${field(c.hasPassword ? 'Password (blank keeps existing)' : 'Password', 'password', '', 'password')}${field('Encryption passphrase', 'passphrase', '', 'password')}<p class="dialog-copy">${t('Organization changes upload automatically while unlocked. New Pending stays local until you organize it or click Upload. The passphrase stays in memory only.')}</p><div class="sync-buttons"><button type="button" id="unlock-sync">${t(state.data.cloud.unlocked ? 'Sync now' : 'Unlock sync')}</button>${state.data.cloud.unlocked ? `<button type="button" id="lock-sync">${t('Lock sync')}</button>` : ''}</div><details><summary>${t('Native data locations')}</summary><p class="dialog-copy">Codex: ${esc(state.roots.codex)}<br>Claude Code: ${esc(state.roots.claude)}</p></details>${(state.data.plan?.pendingRecovery || []).map(id => `<p class="warning">${t('Recover interrupted operation')}<button type="button" data-recover="${esc(id)}">${t('Restore')}</button></p>`).join('')}${state.data.conflicts.map((c, i) => `<div class="conflict">${t('Conflict')}: ${esc(c.local.name)}<br><button type="button" data-conflict="${i}" data-choice="local">${t('Keep local')}</button><button type="button" data-conflict="${i}" data-choice="remote">${t('Use remote')}</button></div>`).join('')}`, async form => { await api('/webdav', 'POST', Object.fromEntries([...form].filter(([k]) => k !== 'passphrase'))); }, 'Save connection');
-        $('#unlock-sync').onclick = async () => {
-            $('#unlock-sync').disabled = true;
-            try {
-                const values = Object.fromEntries(new FormData($('#dialog-form'))); await api('/webdav', 'POST', { url: values.url, username: values.username, password: values.password });
-                $('#dialog-error').textContent = t('Syncing…'); await api('/sync', 'POST', { passphrase: values.passphrase, direction: direction || 'both' }); $('#dialog').close(); await refresh(); toast(t('Sync complete'));
-            } catch (e) { $('#dialog-error').textContent = e.message; } finally { if ($('#unlock-sync')) $('#unlock-sync').disabled = false; }
+        const saved = await api('/webdav'), c = { ...saved, ...draft }, unlocked = state.data.cloud.unlocked;
+        modal('Settings', `<label class="field">${t('Language')}<select id="language"><option value="en" ${locale() === 'en' ? 'selected' : ''}>English</option><option value="zh" ${locale() === 'zh' ? 'selected' : ''}>中文</option></select></label><h3>${t('Cloud sync')}</h3>${field('WebDAV URL', 'url', c.url, 'url')}${field('Username', 'username', c.username)}${field(c.hasPassword ? 'Password (blank keeps existing)' : 'Password', 'password', c.password || '', 'password')}${!unlocked ? field('Encryption passphrase', 'passphrase', c.passphrase || '', 'password') : `<button type="button" id="lock-sync">${t('Lock sync')}</button>`}<details class="help"><summary>${t('When can I use each action?')}</summary><ul><li>${t('Update reads local agent sessions. Sync publishes local changes, including Pending, and checks the cloud directory.')}</li><li>${t('Move belongs to the session list. Select items before choosing a project.')}</li><li>${t('In a transcript, select a start and end to Combine or Dissolve a continuous range.')}</li><li>${t('Select a graph node to Rename it. Naming Pending makes it a saved node.')}</li><li>${t('Fork appears only at a completed turn. Activate, Deactivate and Archive belong to a complete session endpoint.')}</li><li>${t('Archived shows only archived paths with their prefixes. Restore returns a path to its project without activating it.')}</li></ul><p>${t('Token counts are estimates. Local configuration and recorded usage inform activation warnings; unknown limits are not guessed.')}</p><p>${t('Close running agents before changing native activation. Browsing and organization remain available.')}</p></details><details><summary>${t('Diagnostics')}</summary><p class="dialog-copy">${t('Logs contain timings, operation types and error references; no conversation text, passwords, URLs or working paths.')}</p><button type="button" id="download-diagnostics">${t('Download diagnostics')}</button></details>${(state.data.plan?.pendingRecovery || []).map(id => `<p class="warning">${t('Recover interrupted operation')}<button type="button" data-recover="${esc(id)}">${t('Restore')}</button></p>`).join('')}${state.data.conflicts.map((c, i) => `<div class="conflict">${t('Conflict')}: ${esc(c.local.name)}<br><button type="button" data-conflict="${i}" data-choice="local">${t('Keep local')}</button><button type="button" data-conflict="${i}" data-choice="remote">${t('Use remote')}</button></div>`).join('')}`, async form => {
+            const values = Object.fromEntries(form);
+            await api('/webdav', 'POST', { url: values.url, username: values.username, password: values.password });
+            if (!unlocked) await api('/sync', 'POST', { passphrase: values.passphrase, direction: 'both' });
+        }, unlocked ? 'Save connection' : 'Connect');
+        $('#dialog-cancel').textContent = t('Close');
+        const validate = () => {
+            const form = Object.fromEntries(new FormData($('#dialog-form')));
+            const valid = /^https?:\/\//.test(form.url || '') && (unlocked || (form.passphrase || '').length >= 12);
+            const changed = form.url !== saved.url || form.username !== saved.username || !!form.password || !unlocked;
+            $('#dialog-submit').hidden = !valid || !changed;
         };
+        $$('[name]').forEach(el => el.addEventListener('input', validate)); validate();
+        $('#language').onchange = async e => { const draft = Object.fromEntries(new FormData($('#dialog-form'))); setLocale(e.target.value); render(); await settings(draft); };
         if ($('#lock-sync')) $('#lock-sync').onclick = () => run(async () => { await api('/sync/lock', 'POST', {}); $('#dialog').close(); });
+        $('#download-diagnostics').onclick = async () => { try { const report = await api('/diagnostics'); const url = URL.createObjectURL(new Blob([JSON.stringify(report, null, 2)], { type: 'application/json' })); const link = document.createElement('a'); link.href = url; link.download = 'session-grove-diagnostics.json'; link.click(); setTimeout(() => URL.revokeObjectURL(url), 1000); } catch (e) { $('#dialog-error').textContent = e.message; } };
         $$('[data-conflict]').forEach(el => el.onclick = () => run(async () => { await api('/conflicts/resolve', 'POST', { index: Number(el.dataset.conflict), choice: el.dataset.choice }); $('#dialog').close(); }));
         $$('[data-recover]').forEach(el => el.onclick = () => run(async () => { await api('/recover', 'POST', { id: el.dataset.recover }); $('#dialog').close(); }));
     } catch (e) { toast(e.message); }
 }
 async function sync(direction) {
-    if (!state.data.cloud.configured || !state.data.cloud.unlocked) return settings(direction);
+    if (!state.data.cloud.configured || !state.data.cloud.unlocked) return settings();
     return run(async () => { await api('/sync', 'POST', { direction }); toast(t('Sync complete')); });
 }
-$('#upload').onclick = () => sync('push'); $('#sync').onclick = () => sync('pull'); $('#settings').onclick = () => settings();
+$('#sync').onclick = () => sync('both'); $('#settings').onclick = () => settings();
 $('#collect').onclick = () => run(async () => { const r = await api('/collect', 'POST', {}); if (r.errors?.length) toast(r.errors.map(e => errorText(e.message)).join('\n')); else toast(t('Refresh complete · {updates} updated · {discovered} discovered', { updates: r.updates.length, discovered: r.discovered })); });
-$('#language').onclick = () => { setLocale(locale() === 'en' ? 'zh' : 'en'); render(); };
 $('#search').oninput = e => { state.query = e.target.value; state.selected.clear(); clearTimeout(searchTimer); searchTimer = setTimeout(() => refresh().catch(e => toast(e.message)), 180); };
-$('#back').onclick = () => { state.tree = null; state.chats.clear(); render(); };
-$('#source').onclick = showSource; $('#context-info').onclick = showContext;
-$('#branch-picker').onchange = e => { state.branchId = e.target.value; state.chats.clear(); state.nodeId = null; renderDetail(); };
+$('#back').onclick = () => { state.tree = null; clearRange(); render(); };
+$('#source').onclick = showSource;
+$('#branch-picker').onchange = e => { state.branchId = e.target.value; clearRange(); state.nodeId = null; renderDetail(); };
 $('#transcripts').onscroll = $('#graph-scroll').onscroll = () => requestAnimationFrame(drawRibbons);
 window.addEventListener('resize', () => requestAnimationFrame(drawRibbons));
 try {

@@ -20,7 +20,25 @@ export class Store {
       CREATE TABLE IF NOT EXISTS objects (hash TEXT PRIMARY KEY, body TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS local (key TEXT PRIMARY KEY, body TEXT NOT NULL);`);
         fs.chmodSync(path.join(root, 'grove.sqlite'), 0o600);
+        this.version = 0; this.memoCache = new Map(); this.parseCache = new Map(); this.parseBytes = 0;
+        this.getStatement = this.db.prepare('SELECT body FROM entities WHERE kind=? AND id=?');
+        this.objectStatement = this.db.prepare('SELECT body FROM objects WHERE hash=?');
+        this.insertObject = this.db.prepare('INSERT OR IGNORE INTO objects VALUES (?,?)');
+        this.allStatement = this.db.prepare('SELECT body FROM entities WHERE kind=?');
+        this.entityWrite = this.db.prepare('INSERT INTO entities VALUES (?,?,?) ON CONFLICT(id) DO UPDATE SET body=excluded.body WHERE entities.kind=excluded.kind');
+        this.localRead = this.db.prepare('SELECT body FROM local WHERE key=?');
+        this.localWrite = this.db.prepare('INSERT OR REPLACE INTO local VALUES (?,?)');
         initializeOrganization(this);
+    }
+    invalidate() { this.version++; this.memoCache.clear(); }
+    memo(key, fn) { if (!this.memoCache.has(key)) this.memoCache.set(key, fn()); return this.memoCache.get(key); }
+    parsed(revisionId, agent) {
+        const key = agent + ':' + revisionId;
+        if (this.parseCache.has(key)) { const entry = this.parseCache.get(key); this.parseCache.delete(key); this.parseCache.set(key, entry); return entry.value; }
+        const raw = this.raw(revisionId), value = parse(raw, agent), size = Buffer.byteLength(raw);
+        while (this.parseCache.size && (this.parseBytes + size > 24 * 1024 * 1024 || this.parseCache.size >= 24)) { const key = this.parseCache.keys().next().value; this.parseBytes -= this.parseCache.get(key).size; this.parseCache.delete(key); }
+        if (size < 24 * 1024 * 1024) { this.parseCache.set(key, { value, size }); this.parseBytes += size; }
+        return value;
     }
     close() { this.db.close(); }
     transaction(fn) {
@@ -31,19 +49,32 @@ export class Store {
             return result;
         }
         catch (e) {
-            this.db.exec('ROLLBACK');
+            this.db.exec('ROLLBACK'); this.invalidate(); this.parseCache.clear(); this.parseBytes = 0; this.instanceCache = undefined;
             throw e;
         }
     }
-    all(kind) { return this.db.prepare('SELECT body FROM entities WHERE kind=?').all(kind).map(x => JSON.parse(x.body)); }
-    get(kind, key) { const row = this.db.prepare('SELECT body FROM entities WHERE kind=? AND id=?').get(kind, key); assert(row, `${kind} 不存在`, 404); return JSON.parse(row.body); }
-    put(kind, value) { this.db.prepare('INSERT INTO entities VALUES (?,?,?) ON CONFLICT(id) DO UPDATE SET body=excluded.body WHERE entities.kind=excluded.kind').run(kind, value.id, JSON.stringify(value)); return value; }
+    all(kind) { return this.allStatement.all(kind).map(x => JSON.parse(x.body)); }
+    get(kind, key) { const row = this.getStatement.get(kind, key); assert(row, `${kind} 不存在`, 404); return JSON.parse(row.body); }
+    put(kind, value) { this.invalidate(); this.entityWrite.run(kind, value.id, JSON.stringify(value)); return value; }
     local(key, value) {
+        if (key === 'instances') {
+            if (this.instanceCache === undefined) { const row = this.localRead.get(key); this.instanceCache = row ? JSON.parse(row.body) : []; }
+            if (arguments.length === 2) {
+                const same = this.instanceCache.length === value.length && value.every((v, i) => Object.keys(v).length === Object.keys(this.instanceCache[i]).length && Object.keys(v).every(k => v[k] === this.instanceCache[i][k]));
+                if (!same) { this.invalidate(); this.localWrite.run(key, JSON.stringify(value)); this.instanceCache = value.map(i => ({ ...i })); }
+                return value;
+            }
+            // Instance fields are scalar. Reuse immutable baseline strings rather than
+            // parsing/copying the complete native library on every state or plan read.
+            return this.instanceCache.map(i => ({ ...i }));
+        }
         if (arguments.length === 2) {
-            this.db.prepare('INSERT OR REPLACE INTO local VALUES (?,?)').run(key, JSON.stringify(value));
+            if (JSON.stringify(this.local(key)) === JSON.stringify(value)) return value;
+            if (key === 'instances' || key === 'conflicts') this.invalidate();
+            this.localWrite.run(key, JSON.stringify(value));
             return value;
         }
-        const r = this.db.prepare('SELECT body FROM local WHERE key=?').get(key);
+        const r = this.localRead.get(key);
         return r ? JSON.parse(r.body) : null;
     }
     instances() { return this.local('instances') || []; }
@@ -51,19 +82,20 @@ export class Store {
     revision(raw, parent = null, source = {}) {
         const refs = recordRefs(raw);
         for (const r of refs)
-            this.db.prepare('INSERT OR IGNORE INTO objects VALUES (?,?)').run(r.hash, r.body);
+            this.insertObject.run(r.hash, r.body);
         return this.put('revision', { id: id(), parent, refs: refs.map(r => r.hash), createdAt: now(), source: { deviceId: this.device.id, deviceName: this.device.name, ...source } });
     }
     raw(revisionId, end) {
         const rev = this.get('revision', revisionId);
-        return rev.refs.slice(0, end ?? rev.refs.length).map(h => { const row = this.db.prepare('SELECT body FROM objects WHERE hash=?').get(h); assert(row, `缺少历史对象 ${h}`, 409); return row.body; }).join('');
+        return rev.refs.slice(0, end ?? rev.refs.length).map(h => { const row = this.objectStatement.get(h); assert(row, `缺少历史对象 ${h}`, 409); return row.body; }).join('');
     }
     branch(projectId, name, agent, raw = null, source = {}) {
         if (projectId)
             this.get('project', projectId);
         assert(['codex', 'claude'].includes(agent), '未知 Agent');
+        const branchName = text(name);
         const rev = this.revision(raw ?? blank(agent, source.cwd || ''), null, { agent, ...source });
-        return this.put('branch', { id: id(), projectId: projectId || null, name: text(name), agent, head: rev.id, nodeHead: null, parentId: null, forkRevision: null, forkEnd: 0, archived: false, group: '', createdAt: now(), updatedAt: now(), logicalVersion: 1, metaVersion: id(), metaAncestors: [] });
+        return this.put('branch', { id: id(), projectId: projectId || null, name: branchName, agent, head: rev.id, nodeHead: null, parentId: null, forkRevision: null, forkEnd: 0, archived: false, group: '', createdAt: now(), updatedAt: now(), contentUpdatedAt: now(), logicalVersion: 1, metaVersion: id(), metaAncestors: [] });
     }
     fork(branchId, { name, end, revisionId }) {
         const parent = this.get('branch', branchId), rev = this.get('revision', revisionId || parent.head);
@@ -116,7 +148,7 @@ export class Store {
         return this.put('branch', b);
     }
     detail(branchId) {
-        const b = this.get('branch', branchId), raw = this.raw(b.head), p = parse(raw, b.agent);
+        const b = this.get('branch', branchId), cached = this.parsed(b.head, b.agent), p = { ...cached, warnings: [...cached.warnings] };
         const lineage = [];
         let r = this.get('revision', b.head);
         const seen = new Set();
@@ -127,25 +159,27 @@ export class Store {
         }
         if (lineage.some(r => r.source.requiresAuxiliary))
             p.warnings.push('来源含尚未收纳的伴随目录；当前版本禁止激活或移除原生实例');
-        return { ...b, ...pendingDetail(this, b, p), messages: p.messages, checkpoints: p.checkpoints, warnings: p.warnings, cwd: p.cwd, records: p.records.length, lineage, instances: this.instances().filter(i => i.branchId === b.id) };
+        return { ...b, ...pendingDetail(this, b, p), messages: p.messages, checkpoints: p.checkpoints, warnings: p.warnings, cwd: p.cwd, records: p.records.length, lineage, instances: this.instances().filter(i => i.branchId === b.id).map(({ baseline, observedHash, ...i }) => i) };
     }
     commitPending(branchId, options) { return commitPending(this, branchId, options); }
     moveTree(branchId, projectId, group) { return moveTree(this, branchId, projectId, group); }
     forest(scope) { return forest(this, scope); }
     detectFamilies() { return detectFamilies(this); }
-    collections() { return collections(this); }
+    collections() { return this.memo('collections', () => collections(this)); }
     listing(scope, query) { return listing(this, scope, query); }
-    treeGraph(id) { return treeGraph(this, id); }
+    treeGraph(id, view = 'all') { return treeGraph(this, id, view); }
     organize(id, options) { return organize(this, id, options); }
     moveItems(options) { return moveItems(this, options); }
-    snapshot() {
+    snapshot() { return this.memo('snapshot', () => this.buildSnapshot()); }
+    buildSnapshot() {
         const summaries = Object.fromEntries(this.all('branch').map(b => {
-            const { pending, nodes } = pendingDetail(this, b, parse(this.raw(b.head), b.agent));
+            const { pending, nodes } = pendingDetail(this, b, this.parsed(b.head, b.agent));
             return [b.id, { pendingCount: pending.count, pendingStart: pending.start, pendingEnd: pending.end, nodeIds: nodes.map(n => n.id) }];
         }));
-        return { ...this.collections(), device: this.device, projects: this.all('project'), branches: this.all('branch'), nodes: this.all('node'), summaries, localItems: this.forest('local'), projectItems: Object.fromEntries(this.all('project').map(p => [p.id, this.forest(p.id)])), instances: this.instances(), stats: this.db.prepare('SELECT COUNT(*) AS objects, COALESCE(SUM(length(body)),0) AS bytes FROM objects').get(), conflicts: this.local('conflicts') || [] };
+        return { ...this.collections(), device: this.device, projects: this.all('project'), branches: this.all('branch'), nodes: this.all('node'), summaries, localItems: this.forest('local'), projectItems: Object.fromEntries(this.all('project').map(p => [p.id, this.forest(p.id)])), instances: this.instances().map(({ baseline, observedHash, ...i }) => i), stats: this.db.prepare('SELECT COUNT(*) AS objects, COALESCE(SUM(length(body)),0) AS bytes FROM objects').get(), conflicts: this.local('conflicts') || [] };
     }
-    exportGraph() {
+    exportGraph() { return this.memo('exportGraph', () => this.buildExportGraph()); }
+    buildExportGraph() {
         const branches = this.all('branch').filter(b => b.projectId), branchIds = new Set(branches.map(b => b.id));
         const nodes = this.all('node').filter(n => branchIds.has(n.branchId)), revisions = new Map();
         const visit = revisionId => { if (!revisionId || revisions.has(revisionId))

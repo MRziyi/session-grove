@@ -111,7 +111,17 @@ test('workspace HTTP actions archive atomically, restore without activation, rej
     const child = app.store.fork(a.id, { name: 'Child', end: app.store.detail(a.id).checkpoints[0].end });
     const moved = await request('/move', { itemIds: [child.id], projectName: 'Chrono' }); assert.equal(moved.status, 200);
     const projectId = moved.data.projectId;
-    assert.equal((await request('/manage', { action: 'activate', branchIds: [a.id], cwd })).status, 200);
+    fs.mkdirSync(app.native.roots.codex, { recursive: true });
+    const configFile = path.join(app.native.roots.codex, 'config.toml');
+    fs.writeFileSync(configFile, 'model_context_window = 1\n');
+    assert.equal((await request('/manage', { action: 'activate', branchIds: [a.id], cwd })).status, 409);
+    const budget = (await request('/activation-check', { branchId: a.id, cwd })).data;
+    assert.equal(budget.risk, true);
+    assert.equal((await request('/manage', { action: 'activate', branchIds: [a.id], cwd, contextAcknowledgement: budget.fingerprint })).status, 200);
+    fs.rmSync(configFile);
+    const archiveGraph = app.store.treeGraph(a.id);
+    assert.equal((await request('/manage', { action: 'archive', branchIds: [a.id], version: archiveGraph.version, nodeId: archiveGraph.nodes[0].id })).status, 409);
+    assert.equal(app.store.get('branch', a.id).archived, false);
     app.autoSync.queue.clear(); app.store.local('uploadQueue', []);
     fs.appendFileSync(app.store.instances()[0].file, codexTurn('Still chatting', 'New pending work').map(v => JSON.stringify(v) + '\n').join(''));
     assert.equal((await request('/collect', {})).status, 200);

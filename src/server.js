@@ -1,4 +1,7 @@
 import http from 'node:http';
+import { performance } from 'node:perf_hooks';
+import { Diagnostics } from './diagnostics.js';
+import { activationInfo } from './activation.js';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -13,11 +16,15 @@ const webRoot = fileURLToPath(new URL('../web/', import.meta.url));
 export function createApp({ root, roots, guard, demo = false }) {
     const store = new Store(root), native = new Native(store, { roots, guard }), token = randomBytes(32).toString('hex');
     const configFile = path.join(root, 'webdav.json');
+    const diagnostics = new Diagnostics(root);
     const autoSync = new AutoSync(store, () => json(configFile, {}));
+    autoSync.diagnostics = diagnostics;
     try {
-        native.refreshLocal();
+        const started = performance.now(), captured = native.refreshLocal();
+        diagnostics.record('capture', { mode: demo ? 'demo' : 'personal', discovered: captured.discovered, updated: captured.updates.length, count: captured.errors.length, durationMs: Math.round(performance.now() - started) });
     }
     catch (e) {
+        diagnostics.record('capture-error', { code: 'INITIAL_CAPTURE_FAILED' });
         store.local('discoveryError', e.message);
     }
     const management = () => new Map(store.collections().items.filter(i => i.projectId).map(i => [i.id, hash(JSON.stringify([
@@ -26,8 +33,9 @@ export function createApp({ root, roots, guard, demo = false }) {
     ]))]));
     const snapshot = () => autoSync.decorate(store.snapshot());
     const server = http.createServer(async (req, res) => {
+        const started = performance.now(), requestId = id().slice(0, 8);
         const beforeManagement = req.method !== 'GET' ? management() : null;
-        const send = (status, value, type = 'application/json') => { res.writeHead(status, { 'Content-Type': type, 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff', 'Referrer-Policy': 'no-referrer', 'Content-Security-Policy': "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'" }); res.end(type === 'application/json' ? JSON.stringify(value) : value); if (beforeManagement && status < 400 && !req.url.startsWith('/api/sync') && !['/api/collect', '/api/webdav'].includes(req.url)) {
+        const send = (status, value, type = 'application/json') => { diagnostics.request(req.method, req.url.split('?')[0], status, performance.now() - started, requestId); res.writeHead(status, { 'Content-Type': type, 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff', 'Referrer-Policy': 'no-referrer', 'Content-Security-Policy': "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'" }); res.end(type === 'application/json' ? JSON.stringify(value) : value); if (beforeManagement && status < 400 && !req.url.startsWith('/api/sync') && !['/api/collect', '/api/webdav'].includes(req.url)) {
             const changed = [...management()].filter(([id, value]) => beforeManagement.get(id) !== value).map(([id]) => id);
             if (changed.length) autoSync.schedule(changed);
         } };
@@ -67,6 +75,7 @@ export function createApp({ root, roots, guard, demo = false }) {
             }
             if (req.method === 'GET' && route === '/api/state')
                 return send(200, { ...snapshot(), cloud: autoSync.status(), discoveryError: store.local('discoveryError'), lastSync: store.local('lastSync'), plan: native.plan() });
+            if (req.method === 'GET' && route === '/api/diagnostics') return send(200, diagnostics.report());
             if (req.method === 'GET' && route === '/api/discover')
                 return send(200, native.discover());
             if (req.method === 'GET' && route === '/api/webdav') {
@@ -80,15 +89,17 @@ export function createApp({ root, roots, guard, demo = false }) {
                 return send(200, autoSync.listing(scope, query));
             }
             const tree = route.match(/^\/api\/trees\/([^/]+)$/);
-            if (req.method === 'GET' && tree) { await autoSync.openTree(tree[1]); return send(200, store.treeGraph(tree[1])); }
+            if (req.method === 'GET' && tree) { await autoSync.openTree(tree[1]); return send(200, store.treeGraph(tree[1], url.searchParams.get('view') || 'in-use')); }
             if (req.method === 'POST' && tree) return send(200, store.organize(tree[1], body));
             if (req.method === 'POST' && route === '/api/move') {
+                for (const id of body.itemIds || []) await autoSync.openTree(id);
                 if (body.projectId && !store.all('project').some(p => p.id === body.projectId)) {
                     const p = autoSync.cloud.summaries().find(p => p.id === body.projectId); assert(p, 'Project not found.');
                     const { index, treeIds, indexAncestors, count, ...project } = p; store.put('project', project);
                 }
                 return send(200, store.moveItems(body));
             }
+            if (req.method === 'POST' && route === '/api/activation-check') return send(200, activationInfo(store, native, body.branchId, body.cwd));
             if (req.method === 'POST' && route === '/api/manage') {
                 assert(['activate', 'deactivate', 'archive', 'restore'].includes(body.action), 'Unknown session action.');
                 if (body.projectId && autoSync.passphrase) {
@@ -109,6 +120,15 @@ export function createApp({ root, roots, guard, demo = false }) {
                 if (body.action === 'activate') {
                     assert(members.length === 1 && !members[0].synthetic, 'Select one native session to activate.');
                     assert(!members[0].projectId || !store.get('project', members[0].projectId).archived, 'Restore the project first.');
+                }
+                if (body.action === 'archive' && !body.projectId && !body.itemIds) {
+                    assert(members.length === 1 && !members[0].synthetic && !members[0].archived, 'Select one in-use session endpoint to archive.');
+                    const graph = store.treeGraph(members[0].id), node = graph.nodes.find(n => n.id === body.nodeId);
+                    assert(body.version === graph.version && node?.endBranchIds.includes(members[0].id), 'Select the current session endpoint to archive.', 409);
+                }
+                if (body.action === 'activate') {
+                    const check = activationInfo(store, native, members[0].id, body.cwd);
+                    assert(!check.risk || body.contextAcknowledgement === check.fingerprint, 'Review the context-length warning before activating.', 409);
                 }
                 // Metadata changes follow successful native changes. A busy client leaves
                 // both membership and Archive state untouched; the user can retry safely.
@@ -179,8 +199,7 @@ export function createApp({ root, roots, guard, demo = false }) {
             }
             if (req.method === 'POST' && route === '/api/import')
                 return send(201, native.import(body.key, body.projectId, body.name));
-            if (req.method === 'POST' && route === '/api/collect')
-                return send(200, native.refreshLocal());
+            if (req.method === 'POST' && route === '/api/collect') { const r = native.refreshLocal(); diagnostics.record('capture', { updated: r.updates.length, discovered: r.discovered, count: r.errors.length }); return send(200, r); }
             if (req.method === 'POST' && route === '/api/apply')
                 return send(200, native.apply());
             if (req.method === 'POST' && route === '/api/recover')
@@ -236,19 +255,21 @@ export function createApp({ root, roots, guard, demo = false }) {
             return send(404, { error: '接口不存在' });
         }
         catch (e) {
-            send(e.status || 400, { error: e.message });
+            diagnostics.record('request-error', { id: requestId, code: typeof e.code === 'string' && /^[A-Z0-9_]{1,60}$/.test(e.code) ? e.code : e instanceof TypeError ? 'TYPE_ERROR' : 'REQUEST_FAILED' });
+            send(e.status || 400, { error: e.message, requestId });
         }
     });
     const interval = setInterval(() => {
         if (!autoSync.running) {
             try {
-                const r = native.refreshLocal();
+                const start = performance.now(), r = native.refreshLocal();
+                if (r.updates.length || r.discovered || r.errors.length) diagnostics.record('capture', { updated: r.updates.length, discovered: r.discovered, count: r.errors.length, durationMs: Math.round(performance.now() - start) });
                 // Native chat growth updates local Pending only; organization queues upload.
             }
-            catch { /* Next manual capture surfaces errors. */ }
+            catch { diagnostics.record('capture-error', { code: 'capture_failed' }); }
         }
     }, 10000);
     interval.unref();
     server.on('close', () => { clearInterval(interval); autoSync.close(); store.close(); });
-    return { server, store, native, autoSync };
+    return { server, store, native, autoSync, diagnostics };
 }

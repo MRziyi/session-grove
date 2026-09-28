@@ -17,7 +17,7 @@ export function collections(store) {
         const sessions = members.filter(b => !b.synthetic);
         if (!sessions.length) return [];
         const representative = root.synthetic ? [...sessions].sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id))[0] : root;
-        const count = b => parse(store.raw(b.head), b.agent).messages.filter(m => m.role !== 'tool').length;
+        const count = b => store.parsed(b.head, b.agent).messages.filter(m => m.role !== 'tool').length;
         return [{ id: root.id, name: representative.name, projectId: root.projectId, agent: root.agent,
             kind: sessions.length > 1 ? 'tree' : 'session', sessionIds: sessions.map(b => b.id),
             sessions: sessions.map(b => ({ id: b.id, name: b.name, agent: b.agent, archived: !!b.archived,
@@ -27,19 +27,19 @@ export function collections(store) {
     return { items, activeCounts: Object.fromEntries(['codex', 'claude'].map(agent => [agent, branches.filter(b => !b.synthetic && b.agent === agent && instances.some(i => i.branchId === b.id && isActive(i))).length])) };
 }
 export function listing(store, scope = 'active:codex', query = '') {
-    const { items } = collections(store), projects = store.all('project');
+    const { items } = store.collections(), projects = store.all('project');
     const activeAgent = scope.startsWith('active:') ? scope.slice(7) : null;
     const q = String(query).trim().toLocaleLowerCase();
     const result = items.flatMap(item => {
         const project = projects.find(p => p.id === item.projectId);
         let sessions = item.sessions;
-        if (activeAgent) sessions = sessions.filter(s => s.agent === activeAgent && s.active);
+        if (activeAgent) sessions = sessions.filter(s => s.agent === activeAgent && s.active && !s.archived && !project?.archived);
         else if (scope === 'archived') sessions = sessions.filter(s => s.archived || project?.archived);
         else sessions = sessions.filter(s => item.projectId === scope && !s.archived && !project?.archived);
         if (!sessions.length) return [];
         const matching = q ? sessions.filter(s => s.name.toLocaleLowerCase().includes(q) || parse(store.raw(store.get('branch', s.id).head), s.agent).messages.some(m => m.text.toLocaleLowerCase().includes(q))) : sessions;
         if (!matching.length && !item.name.toLocaleLowerCase().includes(q)) return [];
-        return [{ ...item, visibleSessionIds: sessions.map(s => s.id), matchedSessionIds: matching.map(s => s.id),
+        return [{ ...item, sessions, sessionIds: sessions.map(s => s.id), name: sessions.find(s => s.id === item.id)?.name || sessions[0].name, kind: sessions.length > 1 ? 'tree' : 'session', visibleSessionIds: sessions.map(s => s.id), matchedSessionIds: matching.map(s => s.id),
             visibleCount: sessions.length, updatedAt: sessions.map(s => s.updatedAt).sort().at(-1),
             chats: sessions.length === 1 ? sessions[0].chats : null,
             groupName: project?.name || null, groupId: project?.id || null }];
@@ -52,12 +52,12 @@ export function listing(store, scope = 'active:codex', query = '') {
 
 // IDs are derived from the owning native thread and the semantic prefix. Metadata
 // and materialized path changes never invalidate a user's organization.
-export function treeGraph(store, branchId) {
+export function buildGraph(store, branchId) {
     const root = rootOf(store, branchId), members = treeMembers(store, root.id), cache = new Map(), messages = new Map();
     function pathFor(b, revisionId = b.head) {
         const key = `${b.id}:${revisionId}`;
         if (cache.has(key)) return cache.get(key);
-        const p = parse(store.raw(revisionId), b.agent), visible = p.messages.filter(m => m.role !== 'tool');
+        const p = store.parsed(revisionId, b.agent), visible = p.messages.filter(m => m.role !== 'tool');
         const toolCosts = new Map(), visibleByLine = new Map(visible.map(m => [m.line, m])), toolsByLine = new Map(p.messages.filter(m => m.role === 'tool').map(m => [m.line, m.text])); let previousLine = null;
         for (const [index, record] of p.records.entries()) {
             const shown = visibleByLine.get(index + 1);
@@ -88,7 +88,7 @@ export function treeGraph(store, branchId) {
     }
     const paths = members.filter(b => !b.synthetic).map(b => ({ branchId: b.id, name: b.name, agent: b.agent, archived: !!b.archived,
         head: b.head, active: store.instances().some(i => i.branchId === b.id && isActive(i)),
-        context: parse(store.raw(b.head), b.agent).context, messages: pathFor(b), checkpoints: parse(store.raw(b.head), b.agent).checkpoints }));
+        context: store.parsed(b.head, b.agent).context, messages: pathFor(b), checkpoints: store.parsed(b.head, b.agent).checkpoints }));
     const assignments = {};
     // Read legacy append-only nodes as initial annotations without changing history.
     for (const b of members) {
@@ -159,6 +159,7 @@ export function treeGraph(store, branchId) {
             let color = parseInt(hash(n.annotationId || n.id).slice(0, 4), 16) % (n.pending ? 4 : 7);
             while (used.has(`${n.pending ? 'pending' : 'color'}-${color}`)) color = (color + 1) % (n.pending ? 4 : 7);
             n.color = `${n.pending ? 'pending' : 'color'}-${color}`;
+            n.splitBoundary = n.childIds.length > 1 || n.endBranchIds.length > 0;
             n.count = n.chatIds.length;
             n.tokens = { estimate: n.chatIds.reduce((sum, id) => sum + estimateTokens(messages.get(id)?.text), 0), recordedEstimate: n.chatIds.reduce((sum, id) => sum + estimateTokens(messages.get(id)?.text) + (messages.get(id)?.toolTokens || 0), 0), kind: 'recorded-text-estimate' };
             n.afterCompaction = compactStarts.has(n.chatIds[0]);
@@ -166,26 +167,40 @@ export function treeGraph(store, branchId) {
         }
     }
     return { id: root.id, projectId: root.projectId, layoutHead: root.layoutHead || null,
-        version: hash(JSON.stringify([members.map(b => [b.id, b.head, b.nodeHead, b.parentId]), root.layoutHead || null])),
-        name: collections(store).items.find(i => i.id === root.id)?.name || root.name,
+        version: hash(JSON.stringify([members.map(b => [b.id, b.head, b.nodeHead, b.parentId, b.archived]), root.layoutHead || null])),
+        name: store.collections().items.find(i => i.id === root.id)?.name || root.name,
         nodes: ordered, edges: [...edges.values()], paths, assignments,
         chatCount: new Set(paths.flatMap(p => p.messages.map(m => m.id))).size,
         pendingCount: ordered.filter(n => n.pending).reduce((n, s) => n + s.count, 0) };
 }
 
-export function organize(store, branchId, { version, pathId, chatIds, action, name }) {
+export function treeGraph(store, branchId, view = 'all') {
+    assert(['all', 'in-use', 'archived'].includes(view), 'Unknown tree view.');
+    const root = rootOf(store, branchId), graph = store.memo('graph:' + root.id, () => buildGraph(store, root.id));
+    if (view === 'all') return graph;
+    const projectArchived = root.projectId && store.get('project', root.projectId).archived;
+    const paths = graph.paths.filter(p => view === 'archived' ? p.archived || projectArchived : !p.archived && !projectArchived);
+    const pathIds = new Set(paths.map(p => p.branchId)), nodeIds = new Set(paths.flatMap(p => p.nodeIds)), chats = new Set(paths.flatMap(p => p.messages.map(m => m.id)));
+    const nodes = graph.nodes.filter(n => nodeIds.has(n.id)).map(n => ({ ...n, branchIds: n.branchIds.filter(id => pathIds.has(id)), endBranchIds: n.endBranchIds.filter(id => pathIds.has(id)), parentIds: n.parentIds.filter(id => nodeIds.has(id)), childIds: n.childIds.filter(id => nodeIds.has(id)) }));
+    return { ...graph, view, paths, nodes, edges: graph.edges.filter(e => nodeIds.has(e.from) && nodeIds.has(e.to)), assignments: Object.fromEntries(Object.entries(graph.assignments).filter(([id]) => chats.has(id))), name: paths.find(p => p.branchId === root.id)?.name || paths[0]?.name || graph.name, chatCount: chats.size, pendingCount: nodes.filter(n => n.pending).reduce((sum, n) => sum + n.count, 0) };
+}
+
+export function organize(store, branchId, { version, pathId, chatIds, action, name, nodeId }) {
     return store.transaction(() => {
         const graph = treeGraph(store, branchId);
         assert(version === graph.version, 'Conversation changed. Refresh before organizing.', 409);
+        const path = graph.paths.find(p => p.branchId === pathId);
+        assert(path && !path.archived && !(graph.projectId && store.get('project', graph.projectId).archived), 'Restore this session before organizing.');
+        if (action === 'rename') { const node = graph.nodes.find(n => n.id === nodeId && n.branchIds.includes(pathId)); assert(node, 'Select a node to rename.'); if (node.name && node.name === String(name || '').trim()) return { layoutHead: graph.layoutHead }; chatIds = node.chatIds; }
         const selected = new Set(chatIds);
         assert(Array.isArray(chatIds) && selected.size && selected.size === chatIds.length, 'Select chats to organize.');
         const route = graph.paths.find(p => p.branchId === pathId);
         assert(route, 'Select a session path.');
         const positions = route.messages.map((m, i) => selected.has(m.id) ? i : -1).filter(i => i >= 0);
         assert(positions.length === selected.size, 'All selected chats must belong to one path.');
-        assert(['combine', 'dissolve'].includes(action), 'Unknown organization action.');
+        assert(['combine', 'dissolve', 'rename'].includes(action), 'Unknown organization action.');
+        assert(positions.at(-1) - positions[0] + 1 === positions.length, 'Select a consecutive range.');
         if (action === 'combine') {
-            assert(positions.at(-1) - positions[0] + 1 === positions.length, 'Combine requires consecutive chats.');
             // A segment cannot straddle an actual split or another session endpoint.
             const selectedNodes = graph.nodes.filter(n => n.chatIds.some(id => selected.has(id)));
             for (const n of selectedNodes) {
@@ -195,7 +210,7 @@ export function organize(store, branchId, { version, pathId, chatIds, action, na
             }
         }
         const root = store.get('branch', graph.id), assignments = { ...graph.assignments };
-        const annotation = action === 'combine' ? { id: newId(), name: String(name || '').trim() } : null;
+        const annotation = action !== 'dissolve' ? { id: newId(), name: String(name || '').trim() } : null;
         if (annotation) assert(annotation.name.length > 0 && annotation.name.length <= 200, 'Enter a node title (1–200 characters).');
         for (const id of selected) assignments[id] = annotation;
         const layout = { id: newId(), rootId: root.id, parent: root.layoutHead || null, assignments, createdAt: now() };

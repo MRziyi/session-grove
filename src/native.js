@@ -21,9 +21,14 @@ export class Native {
         this.store = store;
         this.roots = options.roots || { codex: process.env.CODEX_HOME || path.join(os.homedir(), '.codex'), claude: process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude') };
         this.guard = options.guard || coldGuard;
-        this.catalog = new Map();
+        this.catalog = new Map(); this.scanCache = new Map(); this.observedStats = new Map();
         this.jobs = path.join(store.root, 'operations');
         fs.mkdirSync(this.jobs, { recursive: true, mode: 0o700 });
+        // Adopted logs are already stored as immutable revisions. A null baseline
+        // references that revision instead of duplicating the whole log in local state.
+        const instances = store.instances(); let compacted = false;
+        for (const i of instances) if (i.baseline && i.baseRevision && i.baseline === store.raw(i.baseRevision)) { i.baseline = null; compacted = true; }
+        if (compacted) store.local('instances', instances);
     }
     read(file) {
         assert(fs.statSync(file).size <= 100 * 1024 * 1024, '单条会话超过 100MB，暂不能收纳');
@@ -35,12 +40,23 @@ export class Native {
         this.catalog.clear();
         for (const agent of ['codex', 'claude']) {
             const root = this.roots[agent];
-            const titles = new Map();
+            const titles = new Map(), archivedIds = new Set(), canonicalPaths = new Map();
+            if (agent === 'codex' && fs.existsSync(path.join(root, 'state_5.sqlite'))) {
+                let db;
+                try {
+                    db = new DatabaseSync(path.join(root, 'state_5.sqlite'), { readOnly: true });
+                    const columns = db.prepare('PRAGMA table_info(threads)').all().map(c => c.name);
+                    if (columns.includes('id') && columns.includes('title') && columns.includes('archived')) {
+                        for (const row of db.prepare('SELECT id,title,archived' + (columns.includes('rollout_path') ? ',rollout_path' : '') + ' FROM threads').all()) { if (row.title) titles.set(row.id, row.title); if (row.archived) archivedIds.add(row.id); if (row.rollout_path && path.isAbsolute(row.rollout_path)) canonicalPaths.set(row.id, path.resolve(row.rollout_path)); }
+                    }
+                } catch { errors.push({ message: 'Could not read the native Codex index.' }); }
+                finally { db?.close(); }
+            }
             if (agent === 'codex' && fs.existsSync(path.join(root, 'session_index.jsonl'))) {
                 for (const line of this.read(path.join(root, 'session_index.jsonl')).split('\n')) {
                     try {
                         const entry = JSON.parse(line);
-                        if (entry.id && entry.thread_name)
+                        if (entry.id && entry.thread_name && !titles.has(entry.id))
                             titles.set(entry.id, entry.thread_name);
                     }
                     catch { }
@@ -52,11 +68,14 @@ export class Native {
                     if (agent === 'claude' && (file.includes('/subagents/') || path.basename(file).startsWith('agent-')))
                         continue;
                     try {
-                        const raw = this.read(file), p = parse(raw, agent);
+                        const stat = fs.statSync(file), stamp = `${stat.ino}:${stat.size}:${stat.mtimeMs}:${stat.ctimeMs}`;
+                        let p = this.scanCache.get(file)?.stamp === stamp ? this.scanCache.get(file).summary : null;
+                        if (!p) { const full = parse(this.read(file), agent); p = { nativeId: full.nativeId, cwd: full.cwd, title: full.records.filter(r => r.value?.type === 'custom-title').at(-1)?.value?.customTitle, firstUser: full.messages.find(m => m.role === 'user')?.text.slice(0, 100), count: full.messages.length, warnings: full.warnings }; this.scanCache.set(file, { stamp, summary: p }); }
                         if (!p.nativeId)
                             continue;
-                        const nativeTitle = titles.get(p.nativeId) || p.records.filter(r => r.value?.type === 'custom-title').at(-1)?.value?.customTitle;
-                        const item = { key: hash(file), agent, nativeId: p.nativeId, cwd: p.cwd || '', title: nativeTitle || p.messages.find(m => m.role === 'user')?.text.slice(0, 100) || 'Untitled session', messages: p.messages.length, updatedAt: fs.statSync(file).mtime.toISOString(), managed: instances.some(i => i.file === file), warnings: p.warnings, archived: dir === 'archived_sessions' };
+                        if (canonicalPaths.has(p.nativeId) && canonicalPaths.get(p.nativeId) !== path.resolve(file)) continue;
+                        const nativeTitle = titles.get(p.nativeId) || p.title;
+                        const item = { key: hash(file), agent, nativeId: p.nativeId, cwd: p.cwd || '', title: nativeTitle || p.firstUser || 'Untitled session', messages: p.count, updatedAt: stat.mtime.toISOString(), managed: instances.some(i => i.file === file), warnings: p.warnings, archived: dir === 'archived_sessions' || archivedIds.has(p.nativeId) };
                         this.catalog.set(item.key, { ...item, file });
                         found.push(item);
                     }
@@ -77,11 +96,13 @@ export class Native {
         return this.store.transaction(() => {
             const sidecarDir = item.agent === 'claude' ? path.join(path.dirname(item.file), item.nativeId) : null;
             const requiresAuxiliary = !!(sidecarDir && fs.existsSync(sidecarDir) && fs.readdirSync(sidecarDir).length);
-            const b = this.store.branch(projectId, name || item.title, item.agent, raw, { cwd: item.cwd, agent: item.agent, nativeId: item.nativeId, client: 'unknown', operation: 'import', requiresAuxiliary });
+            const displayTitle = String(name || item.title).trim().slice(0, 200) || 'Untitled session';
+            const b = this.store.branch(projectId, displayTitle, item.agent, raw, { cwd: item.cwd, agent: item.agent, nativeId: item.nativeId, client: 'unknown', operation: 'import', requiresAuxiliary });
             b.contentUpdatedAt = item.updatedAt;
+            b.archived = !!item.archived;
             this.store.put('branch', b);
             const instances = this.store.instances();
-            instances.push({ id: id(), branchId: b.id, agent: b.agent, root: this.roots[b.agent], nativeId: item.nativeId, file: item.file, cwd: item.cwd, desired: observe && !item.archived, applied: !item.archived, baseRevision: b.head, baseline: raw, observedHash: hash(raw), adopted: true, title: item.title, requiresAuxiliary });
+            instances.push({ id: id(), branchId: b.id, agent: b.agent, root: this.roots[b.agent], nativeId: item.nativeId, file: item.file, cwd: item.cwd, desired: observe && !item.archived, applied: !item.archived, baseRevision: b.head, baseline: null, observedHash: hash(raw), adopted: true, title: b.name, requiresAuxiliary });
             this.store.local('instances', instances);
             return b;
         });
@@ -90,7 +111,7 @@ export class Native {
         const collected = this.collect(), found = this.discover();
         let discovered = 0;
         for (const candidate of found.sessions) {
-            if (candidate.managed || candidate.archived)
+            if (candidate.managed)
                 continue;
             try {
                 this.import(candidate.key, null, candidate.title, { observe: true });
@@ -100,7 +121,7 @@ export class Native {
                 collected.errors.push({ message: e.message });
             }
         }
-        const families = this.store.detectFamilies();
+        const families = discovered || collected.updates.length ? this.store.detectFamilies() : { grouped: 0 };
         return { ...collected, discovered, grouped: families.grouped, errors: [...collected.errors, ...found.errors] };
     }
     setActive(branchId, cwd, desired) {
@@ -136,24 +157,27 @@ export class Native {
                 continue;
             }
             try {
+                const stat = fs.statSync(i.file), stamp = `${stat.ino}:${stat.size}:${stat.mtimeMs}:${stat.ctimeMs}`;
+                if (!i.missing && this.observedStats.get(i.id) === stamp) continue;
                 const raw = this.read(i.file);
                 i.missing = false;
-                if (hash(raw) === i.observedHash)
-                    continue;
+                if (hash(raw) === i.observedHash) { this.observedStats.set(i.id, stamp); continue; }
                 const p = parse(raw, i.agent);
                 if (p.errors.length || !p.complete) {
                     i.pending = '等待完整轮次';
+                    this.observedStats.set(i.id, stamp);
                     continue;
                 }
                 const base = this.store.raw(i.baseRevision);
                 // Strip the exact materialized prefix, retaining only new native events.
-                const logical = raw.startsWith(i.baseline) ? base + raw.slice(i.baseline.length) : raw;
+                const baseline = i.baseline ?? base;
+                const logical = raw.startsWith(baseline) ? base + raw.slice(baseline.length) : raw;
                 const b = this.store.ingest(i.branchId, logical, i.baseRevision, { agent: i.agent, nativeId: i.nativeId, cwd: i.cwd, client: 'unknown', operation: 'capture' });
                 i.branchId = b.id;
                 i.baseRevision = b.head;
-                i.baseline = raw;
+                i.baseline = raw === logical ? null : raw;
                 i.observedHash = hash(raw);
-                i.pending = null;
+                i.pending = null; this.observedStats.set(i.id, stamp);
                 results.push({ branchId: b.id, conflict: !!b.conflict });
             }
             catch (e) {
