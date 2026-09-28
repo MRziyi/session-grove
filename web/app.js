@@ -1,8 +1,11 @@
+import { markdown } from './markdown.js';
 import { enhanceSelect } from './select.js';
 import { t, locale, setLocale, errorText } from './i18n.js';
 const $ = s => document.querySelector(s), $$ = s => [...document.querySelectorAll(s)];
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const icons = {
+    website: '<circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c-6 5-6 13 0 18 6-5 6-13 0-18Z"/>',
+    github: '<path d="M9 19c-4 1-4-2-5-2m10 5v-3.9a3.4 3.4 0 0 0-1-2.7c3.3-.4 6.7-1.6 6.7-7.3a5.7 5.7 0 0 0-1.5-4c.1-1 .1-2.1-.5-3.1 0 0-1.2-.4-4 1.5a13.4 13.4 0 0 0-7 0C4.9.6 3.7 1 3.7 1c-.6 1-.6 2.1-.5 3.1a5.7 5.7 0 0 0-1.5 4c0 5.7 3.4 6.9 6.7 7.3a3.4 3.4 0 0 0-1 2.7V22"/>',
     upload: '<path d="M12 16V3m-4 4 4-4 4 4M4 14v6h16v-6"/>',
     sync: '<path d="M20 8a8 8 0 0 0-14-3L3 8m0-5v5h5M4 16a8 8 0 0 0 14 3l3-3m0 5v-5h-5"/>',
     refresh: '<path d="M20 9a8 8 0 1 0 0 6M20 3v6h-6"/>',
@@ -64,6 +67,7 @@ function translateBanner() {
     for (const [id, glyph, label] of [['sync', 'sync', 'Sync'], ['collect', 'refresh', 'Update'], ['settings', 'settings', 'Settings']]) {
         const el = $('#' + id); el.innerHTML = `${icon(glyph)}<span class="button-label">${t(label)}</span>`; el.title = t(label); el.setAttribute('aria-label', t(label));
     }
+    $('#about').textContent = t('About'); $('#information').title = t('Information'); $('#information').setAttribute('aria-label', t('Information'));
     $('#search-icon').innerHTML = icon('search'); $('#search').placeholder = t('Search title or content…'); $('#search').setAttribute('aria-label', t('Search title or content…'));
     $('#back').innerHTML = icon('back'); $('#back').title = t('Back to list'); $('#back').setAttribute('aria-label', t('Back to list'));
     $('#source').textContent = t('Source'); $('#source').title = t('Source & revisions'); $('#source').setAttribute('aria-label', t('Source & revisions'));
@@ -75,14 +79,14 @@ function renderNavigation() {
     const projects = d.projects.filter(p => !p.archived && (d.items.some(i => i.projectId === p.id && !i.archived) || p.count > 0));
     const archivedProjects = d.projects.filter(p => p.archived && (d.items.some(i => i.projectId === p.id) || p.index));
     const archivedSessions = d.items.filter(i => !archivedProjects.some(p => p.id === i.projectId)).reduce((n, i) => n + i.sessions.filter(s => s.archived).length, 0);
-    $('#navigation').innerHTML = `<section class="nav-group"><h2 class="nav-label">${t('Current Active')}</h2>${entry('active:codex', 'Codex', d.activeCounts.codex, 'codex')}${entry('active:claude', 'Claude Code', d.activeCounts.claude, 'claude')}</section><section class="nav-group"><h2 class="nav-label">${t('Projects')}</h2>${projects.map(p => entry(p.id, p.name, Math.max(p.count || 0, d.items.filter(i => i.projectId === p.id && !i.archived).length))).join('') || `<p class="nav-empty">${t('No projects yet')}</p>`}</section><section class="nav-group"><h2 class="nav-label">${t('Archived')}</h2>${entry('archived', t('Archived'), archivedProjects.length + archivedSessions)}</section>`;
+    $('#navigation').innerHTML = `<section class="nav-group"><h2 class="nav-label">${t('Current Active')}</h2>${entry('active:codex', 'Codex', d.activeCounts.codex, 'codex')}${entry('active:claude', 'Claude Code', d.activeCounts.claude, 'claude')}</section><section class="nav-group"><h2 class="nav-label">${t('Projects')}</h2>${projects.map(p => entry(p.id, p.name, Math.max(p.count || 0, d.items.filter(i => i.projectId === p.id && !i.archived).length))).join('') || `<p class="nav-empty">${t('No projects yet')}</p>`}</section><section class="nav-group"><h2 class="nav-label">${t('Archived')}</h2>${entry('archived', t('Archived items'), archivedProjects.length + archivedSessions)}</section>`;
     $$('[data-scope]').forEach(el => el.onclick = () => navigate(el.dataset.scope));
-    const phase = d.cloud.phase, labels = { unconfigured: '', locked: 'Sync locked', queued: 'Upload queued', syncing: 'Syncing…', synced: '', retrying: 'Retrying', local: 'Local changes' };
+    const phase = d.cloud.phase, labels = { unconfigured: '', migrating: 'Updating settings…', locked: 'Sync locked', queued: 'Upload queued', syncing: 'Syncing…', synced: 'Synced', retrying: 'Retrying', local: 'Local changes' };
     $('#cloud-status').textContent = t(labels[phase] || ''); $('#cloud-status').title = d.cloud.error ? errorText(d.cloud.error) : '';
     const cloudTime = [d.cloud.lastUpload, d.cloud.lastCheck].filter(Boolean).sort().at(-1);
     $('#sync').querySelector('.sync-time')?.remove();
     if (cloudTime) { const time = document.createElement('time'); time.className = 'sync-time'; time.dateTime = cloudTime; time.textContent = new Date(cloudTime).toLocaleTimeString(locale() === 'zh' ? 'zh-CN' : 'en-US', { hour: '2-digit', minute: '2-digit', hour12: false }); $('#sync').append(time); }
-    $('#sync').disabled = d.cloud.phase === 'syncing';
+    $('#sync').disabled = ['syncing','migrating'].includes(d.cloud.phase);
     $('#sync').title = t('Last upload: {time}', { time: date(d.cloud.lastUpload) }) + '\n' + t('Last cloud check: {time}', { time: date(d.cloud.lastCheck) });
 
 }
@@ -177,8 +181,8 @@ function renderDetailActions() {
     const archived = p.archived || state.data.projects.find(v => v.id === state.tree.projectId)?.archived;
     const editable = !archived && state.scope !== 'archived';
     const dissolve = state.tree.nodes.some(n => !n.pending && n.chatIds.some(id => state.chats.has(id)));
-    $('#detail-actions').innerHTML = state.chats.size ? `<span>${t('{count} selected', { count: state.chats.size })}</span>${editable && state.rangeEnd !== null && canCombine() ? '<button id="combine"></button>' : ''}${editable && state.rangeEnd !== null && dissolve ? '<button id="dissolve"></button>' : ''}<button id="clear-selection"></button>` : node ? `${editable ? '<button id="rename-node"></button>' : ''}${terminal ? archived ? '<button id="restore-session"></button>' : `${!p.active || state.tree.projectId ? '<button id="toggle-active"></button>' : ''}<button id="archive-path"></button>` : ''}${editable && forkCheckpoint() ? '<button id="fork"></button>' : ''}` : '';
-    if (!state.chats.size && editable && p.active && p.contextPending) $('#detail-actions').innerHTML = '<button id="apply-context"></button>' + $('#detail-actions').innerHTML;
+    $('#detail-actions').innerHTML = state.chats.size ? `<span>${t('{count} selected', { count: state.chats.size })}</span>${editable && state.rangeEnd !== null && canCombine() ? '<button id="combine"></button>' : ''}${editable && state.rangeEnd !== null && dissolve ? '<button id="dissolve"></button>' : ''}<button id="clear-selection"></button>` : node ? `${editable ? '<button id="rename-node"></button>' : ''}${terminal ? archived ? '<button id="restore-session"></button>' : `${(p.active && state.tree.projectId) || (!p.active && p.canActivate) ? '<button id="toggle-active"></button>' : ''}<button id="archive-path"></button>` : ''}${editable && forkCheckpoint() ? '<button id="fork"></button>' : ''}` : '';
+    if (!state.chats.size && editable && p.active && p.contextPending && p.canRewriteContext) $('#detail-actions').innerHTML = '<button id="apply-context"></button>' + $('#detail-actions').innerHTML;
     button('#apply-context', 'Apply context', () => activateDialog(p, 'Apply context'));
     button('#combine', 'Combine', combineDialog);
     button('#dissolve', 'Dissolve', () => run(async () => { await saveOrganization('dissolve'); clearRange(); }));
@@ -190,10 +194,20 @@ function renderDetailActions() {
     button('#archive-path', 'Archive', archivePath);
 }
 function excerpt(text, expanded) {
-    if (expanded || text.length < 380) return esc(text);
+    if (expanded || text.length < 380) return `<div class="markdown">${markdown(text)}</div>`;
     const paragraphs = text.split(/\n\s*\n/).filter(Boolean);
-    if (paragraphs.length > 2) return esc(paragraphs[0].slice(0, 600)) + '\n\n…\n\n' + esc(paragraphs.at(-1).slice(-500));
-    return esc(text.slice(0, 210)) + '\n…\n' + esc(text.slice(-150));
+    const shortened = paragraphs.length > 2 ? paragraphs[0].slice(0, 600) + '\n\n…\n\n' + paragraphs.at(-1).slice(-500) : text.slice(0, 210) + '\n\n…\n\n' + text.slice(-150);
+    return `<div class="markdown">${markdown(shortened)}</div>`;
+}
+function activityHtml(entries, p) {
+    if(!entries?.length) return '';
+    return `<details class="activity"><summary>${t('Recorded activity')} · ${entries.length} · ≈ ${compactNumber(entries.reduce((n,e)=>n+e.tokens,0))} tokens</summary>${entries.map(e=>`<div class="activity-entry"><button type="button" data-record="${e.line}" data-head="${esc(p.head)}">${esc(e.label)} <span>${t(e.kind)}</span></button>${e.files?.length?`<div class="file-tags">${e.files.map(f=>`<code>${esc(f)}</code>`).join('')}</div>`:''}<span class="activity-cost">${e.opaque?t('Opaque or non-text; token size unknown'):'≈ '+compactNumber(e.tokens)+' tokens'}</span>${e.preview?`<pre>${esc(e.preview)}</pre>`:''}</div>`).join('')}</details>`;
+}
+function contextBreakdown(p) {
+    const ledger=p.context?.ledger;if(!ledger)return '';
+    const fidelity = !p.canRewriteContext ? `<p class="fidelity-note">${t('This native history format can be organized and synced. Only the unchanged original session can be reactivated; context rewriting is not verified.')}</p>` : '';
+    const labels={'tool-call':'Tool inputs','tool-result':'Tool results',reasoning:'Readable reasoning',instructions:'Recorded instructions'};
+    return fidelity + `<details class="context-breakdown"><summary>${t('Recorded context')} · ${t('Tool activity')}: ≈ ${compactNumber((ledger.totals['tool-call']||0)+(ledger.totals['tool-result']||0))} tokens${p.context.lastUsage?` · ${t('Last native input')}: ${compactNumber(p.context.lastUsage.input)}`:''}</summary><div class="token-breakdown">${Object.entries(ledger.totals).filter(([,n])=>n).map(([k,n])=>`<span>${t(labels[k])}<b>≈ ${compactNumber(n)}</b></span>`).join('')}</div><p>${t('Recorded history is not the live model request. Hidden instructions, encrypted reasoning, images and compaction can prevent a complete token breakdown.')}</p>${activityHtml(ledger.entries.filter(e=>e.chatLine===null),p)}</details>`;
 }
 function compactionsAt(n, p) { return (p.context?.compactions || []).filter(e => n.chatIds.includes(p.messages.find(m => m.line > e.line)?.id)); }
 function mutedNode(n, p) {
@@ -203,8 +217,9 @@ function mutedNode(n, p) {
     return chats.length > 0 && chats.every(m => m.line < last.line);
 }
 function compactionButton(e, compact = false) {
-    const locked = state.scope === 'archived' || !e.canDisable && e.enabled;
-    return `<button type="button" class="context-switch ${e.enabled ? 'enabled' : ''}" data-compaction="${esc(e.id)}" aria-pressed="${!!e.enabled}" title="${esc(t(e.canDisable ? 'Choose compacted context or recorded history for this path.' : 'Original pre-compaction history is unavailable.'))}" ${locked ? 'disabled' : ''}>${compact ? t('Compact') : t('Use compaction')}<span>${t(e.enabled ? 'On' : 'Off')}</span></button>`;
+    if(!route()?.canRewriteContext || state.scope === 'archived' || !e.canDisable && e.enabled) return `<span class="context-switch">${t('Compact')} · ${t(e.enabled ? 'On' : 'Off')}</span>`;
+    const locked = !route()?.canRewriteContext || state.scope === 'archived' || !e.canDisable && e.enabled;
+    return `<button type="button" class="context-switch ${e.enabled ? 'enabled' : ''}" data-compaction="${esc(e.id)}" aria-pressed="${!!e.enabled}" title="${esc(t(!route()?.canRewriteContext ? 'This native history format cannot be rewritten with verified fidelity.' : e.canDisable ? 'Choose compacted context or recorded history for this path.' : 'Original pre-compaction history is unavailable.'))}" ${locked ? 'disabled' : ''}>${compact ? t('Compact') : t('Use compaction')}<span>${t(e.enabled ? 'On' : 'Off')}</span></button>`;
 }
 function bindCompactions(root) { root.querySelectorAll('[data-compaction]').forEach(el => el.onclick = () => {
     const p = route(), event = p.context.compactions.find(e => e.id === el.dataset.compaction);
@@ -213,13 +228,15 @@ function bindCompactions(root) { root.querySelectorAll('[data-compaction]').forE
 }); }
 function renderTranscript() {
     const p = route();
-    $('#transcripts').innerHTML = p.nodeIds.map(id => {
+    $('#transcripts').innerHTML = contextBreakdown(p) + p.nodeIds.map(id => {
         const n = state.tree.nodes.find(n => n.id === id), messages = p.messages.filter(m => n.chatIds.includes(m.id));
-        return `${compactionsAt(n, p).map(e => `<div class="compaction-marker">${t('Context compacted here')}${compactionButton(e)}</div>`).join('')}<section class="transcript-segment ${mutedNode(n, p) ? 'context-muted' : ''} ${n.pending ? 'pending' : ''}" data-segment="${esc(n.id)}" style="${style(n)}"><div class="segment-caption"><button data-focus-node="${esc(n.id)}">${esc(nodeName(n))} · ${t('{count} chats', { count: messages.length })}</button><span class="token-estimate" title="${esc(tokenHint())}">${tokenLabel(n)}</span></div>${messages.map(m => `<article class="chat ${m.role} ${state.chats.has(m.id) ? 'checked' : ''}">${state.scope === 'archived' ? '' : `<input type="checkbox" data-chat="${esc(m.id)}" aria-label="${esc(t('Select chat {number}', { number: p.messages.findIndex(x => x.id === m.id) + 1 }))}" ${state.chats.has(m.id) ? 'checked' : ''}>`}<div class="bubble"><span class="speaker">${m.role === 'user' ? t('You') : p.agent === 'codex' ? 'Codex' : 'Claude Code'}</span>${excerpt(m.text, state.expanded.has(m.id))}${m.text.length >= 380 ? `<button class="expand-chat" data-expand="${esc(m.id)}">${t(state.expanded.has(m.id) ? 'Collapse' : 'Expand')}</button>` : ''}</div></article>`).join('')}</section>`;
+        return `${compactionsAt(n, p).map(e => `<div class="compaction-marker">${t('Context compacted here')}${compactionButton(e)}</div>`).join('')}<section class="transcript-segment ${mutedNode(n, p) ? 'context-muted' : ''} ${n.pending ? 'pending' : ''}" data-segment="${esc(n.id)}" style="${style(n)}"><div class="segment-caption"><button data-focus-node="${esc(n.id)}">${esc(nodeName(n))} · ${t('{count} chats', { count: messages.length })}</button><span class="token-estimate" title="${esc(tokenHint())}">${tokenLabel(n)}</span></div>${messages.map(m => `<article class="chat ${m.role} ${state.chats.has(m.id) ? 'checked' : ''}">${state.scope === 'archived' ? '' : `<input type="checkbox" data-chat="${esc(m.id)}" aria-label="${esc(t('Select chat {number}', { number: p.messages.findIndex(x => x.id === m.id) + 1 }))}" ${state.chats.has(m.id) ? 'checked' : ''}>`}<div class="bubble"><span class="speaker">${m.role === 'user' ? t('You') : p.agent === 'codex' ? 'Codex' : 'Claude Code'}</span>${excerpt(m.text, state.expanded.has(m.id))}${activityHtml(m.activity,p)}${m.text.length >= 380 ? `<button class="expand-chat" data-expand="${esc(m.id)}">${t(state.expanded.has(m.id) ? 'Collapse' : 'Expand')}</button>` : ''}</div></article>`).join('')}</section>`;
     }).join('') || `<p class="empty">${t('No chats yet.')}</p>`;
     const trailing = (p.context?.compactions || []).filter(e => !p.messages.some(m => m.line > e.line));
     $('#transcripts').insertAdjacentHTML('beforeend', trailing.map(e => `<div class="compaction-marker">${t('Context compacted here')}${compactionButton(e)}</div>`).join(''));
     bindCompactions($('#transcripts'));
+    $$('[data-record]').forEach(el=>el.onclick=async()=>{try{const r=await api('/branches/'+p.branchId+'/records/'+el.dataset.record+'?head='+encodeURIComponent(el.dataset.head));const payload=r.value?.payload||{}, content=payload.output??payload.arguments??payload.input; modal('Original context record', (content===undefined?'': '<pre class="record-detail">'+esc(typeof content==='string'?content:JSON.stringify(content,null,2))+'</pre>')+'<details '+(content===undefined?'open':'')+'><summary>'+t('Original context record')+'</summary><pre class="record-detail">'+esc(JSON.stringify(r.value,null,2))+'</pre></details>',null);}catch(e){toast(e.message);}});
+    $$('#transcripts details').forEach(el=>el.addEventListener('toggle',scheduleRibbons));
     $('#range-hint').hidden = state.scope === 'archived';
     $('#range-hint').textContent = state.rangeStart === null ? t('Select a start, then an end.') : state.rangeEnd === null ? t('Start: {number} · select the end', { number: state.rangeStart + 1 }) : t('Selected chats {start}–{end}', { start: Math.min(state.rangeStart, state.rangeEnd) + 1, end: Math.max(state.rangeStart, state.rangeEnd) + 1 });
     $$('[data-chat]').forEach(el => el.onclick = e => {
@@ -372,6 +389,8 @@ async function activateDialog(p, actionLabel = 'Activate') {
             toast(t('Open the active continuation from your agent’s session list.'));
         }, actionLabel);
         function showBudget(c) {
+            if(c.fidelity === 'unsupported-history-mode') { $('#activation-budget').innerHTML = `<p class="warning">${t('This native history format cannot be rewritten with verified fidelity.')}</p>`; $('#dialog-submit').hidden = true; return; }
+            $('#dialog-submit').hidden = !c.complete;
             $('#activation-budget').innerHTML = c.risk ? `<p class="warning">${t('Context may be near its limit: about {used} tokens, planning limit {limit}.', { used: compactNumber(c.estimated), limit: compactNumber(c.window || c.compactAt) })}<br>${esc(c.source || '')}</p>` : c.basis === 'incomplete-after-compaction' ? `<p class="dialog-copy">${t('The compacted context size is not recorded. The native agent will manage its context window.')}</p>` : c.unknown ? `<p class="dialog-copy">${t('No reliable context limit was found in the local configuration.')}</p>` : `<p class="dialog-copy">≈ ${compactNumber(c.estimated)} / ${compactNumber(c.window || c.compactAt)} tokens · ${esc(c.source || '')}</p>`;
             $('#dialog-submit').textContent = t(c.risk ? 'Activate anyway' : actionLabel);
         }
@@ -399,34 +418,81 @@ async function showSource() {
         modal('Source & revisions', `${d.warnings.map(w => `<p class="warning">${esc(errorText(w))}</p>`).join('')}${d.lineage.map(r => `<div class="source-entry">${esc(r.source.deviceName || t('Unknown device'))} · ${date(r.createdAt)}<br>${esc(r.source.cwd || d.cwd)}<br>${esc(r.source.client || '')}</div>`).join('')}`, null);
     } catch (e) { toast(e.message); }
 }
-async function settings(draft = null) {
+async function settings(options = {}) {
     try {
-        const saved = await api('/webdav'), c = { ...saved, ...draft }, unlocked = state.data.cloud.unlocked;
-        modal('Settings', `<label class="field">${t('Language')}<select id="language"><option value="en" ${locale() === 'en' ? 'selected' : ''}>English</option><option value="zh" ${locale() === 'zh' ? 'selected' : ''}>中文</option></select></label><h3>${t('Cloud sync')}</h3>${field('WebDAV URL', 'url', c.url, 'url')}${field('Username', 'username', c.username)}${field(c.hasPassword ? 'Password (blank keeps existing)' : 'Password', 'password', c.password || '', 'password')}${!unlocked ? field('Encryption passphrase', 'passphrase', c.passphrase || '', 'password') : `<button type="button" id="lock-sync">${t('Lock sync')}</button>`}<details class="help"><summary>${t('When can I use each action?')}</summary><ul><li>${t('Update reads local agent sessions. Sync publishes local changes, including Pending, and checks the cloud directory.')}</li><li>${t('Move belongs to the session list. Select items before choosing a project.')}</li><li>${t('In a transcript, select a start and end to Combine or Dissolve a continuous range.')}</li><li>${t('Select a graph node to Rename it. Naming Pending makes it a saved node.')}</li><li>${t('Fork appears only at a completed turn. Activate, Deactivate and Archive belong to a complete session endpoint.')}</li><li>${t('Archived shows only archived paths with their prefixes. Restore returns a path to its project without activating it.')}</li></ul><p>${t('Token counts are estimates. Local configuration and recorded usage inform activation warnings; unknown limits are not guessed.')}</p><p>${t('Close running agents before changing native activation. Browsing and organization remain available.')}</p><p>${t('Cloud sync follows organization changes and explicit opens. Idle directory checks run every 30 minutes; Pending alone stays local.')}</p><p>${t('Compaction switches belong to the selected path. Changes apply on Activate or Apply context; original history is kept.')}</p><p>${t('The native agent may compact again during later work.')}</p></details><details><summary>${t('Diagnostics')}</summary><p class="dialog-copy">${t('Logs contain timings, operation types and error references; no conversation text, passwords, URLs or working paths.')}</p><button type="button" id="download-diagnostics">${t('Download diagnostics')}</button></details>${(state.data.plan?.pendingRecovery || []).map(id => `<p class="warning">${t('Recover interrupted operation')}<button type="button" data-recover="${esc(id)}">${t('Restore')}</button></p>`).join('')}${state.data.conflicts.map((c, i) => `<div class="conflict">${t('Conflict')}: ${esc(c.local.name)}<br><button type="button" data-conflict="${i}" data-choice="local">${t('Keep local')}</button><button type="button" data-conflict="${i}" data-choice="remote">${t('Use remote')}</button></div>`).join('')}`, async form => {
-            const values = Object.fromEntries(form);
-            await api('/webdav', 'POST', { url: values.url, username: values.username, password: values.password });
-            if (!unlocked) await api('/sync', 'POST', { passphrase: values.passphrase, direction: 'both' });
-        }, unlocked ? 'Save connection' : 'Connect');
+        const c = await api('/settings'), edit = options.editConnection || !c.verified, editKey = options.editKey || !c.encryptionReady;
+        const mask = '••••••••••••', p = c.preferences;
+        const password = (label, name, stored, disabled = false) => `<label class="field">${t(label)}<input type="password" name="${name}" autocomplete="new-password" value="${stored ? mask : ''}" ${stored ? 'data-stored="true"' : ''} ${disabled ? 'disabled' : ''}></label>`;
+        modal('Settings', `<div class="settings-top"><label class="field">${t('Language')}<select id="language"><option value="en" ${locale() === 'en' ? 'selected' : ''}>English</option><option value="zh" ${locale() === 'zh' ? 'selected' : ''}>中文</option></select></label></div>
+          <section class="settings-card"><div class="settings-section-heading"><h3>WebDAV</h3>${!edit ? `<span class="setting-ok">✓ ${t('Verified')}</span><button type="button" id="modify-connection">${t('Modify')}</button>` : ''}</div>
+          <label class="field">${t('WebDAV URL')}<span class="url-field"><input name="url" type="text" value="${esc(c.url)}" placeholder="https://host/dav" ${!edit ? 'disabled' : ''}><span class="fixed-suffix">${esc(c.suffix)}</span></span></label>
+          <div class="settings-columns"><label class="field">${t('Username')}<input name="username" autocomplete="username" value="${esc(c.username)}" ${!edit ? 'disabled' : ''}></label>${password('Password', 'password', c.hasPassword, !edit)}</div>
+          ${edit ? `<button type="button" id="verify-connection" class="primary" hidden>${t('Verify connection')}</button>` : ''}</section>
+          ${!edit ? `<section class="settings-card"><div class="settings-section-heading"><h3>${t('Encryption')}</h3>${!editKey ? `<span class="${c.encrypted ? 'setting-ok' : 'setting-warning'}">${c.encrypted ? '✓ ' + t('Encrypted') : '⚠ ' + t('Not encrypted')}</span><button type="button" id="modify-encryption">${t('Modify')}</button>` : ''}</div>
+            ${c.needsCurrentPassphrase ? password('Current passphrase', 'currentPassphrase', false) : ''}
+            <div class="secret-row">${password('Passphrase (optional)', 'passphrase', c.hasPassphrase, !editKey)}${editKey ? `<button type="button" id="confirm-encryption" class="primary">${t(c.hasPassphrase ? 'Keep encryption' : 'Continue without encryption')}</button>` : ''}</div>
+            ${editKey ? `<p class="dialog-copy">${c.encryptionReady ? t('Pause sync on other devices while changing the vault. Other devices must reconnect afterward.') + '<br>' : ''}${t('Use at least 12 characters, or leave empty for no content encryption. Other devices need the same passphrase.')}</p>` : ''}
+            <div id="settings-progress" role="status" hidden></div>
+          </section>` : ''}
+          <section class="settings-card"><h3>${t('Automatic updates')}</h3>
+            ${[['localUpdate', 'Read local sessions', p.localUpdateEnabled, p.localUpdateMinutes], ['autoUpload', 'Upload changed projects', p.autoUploadEnabled, p.autoUploadMinutes]].map(([key,label,on,minutes]) => `<div class="timer-row"><label><input type="checkbox" name="${key}Enabled" ${on ? 'checked' : ''}>${t(label)}</label><label class="timer-interval"><input type="number" name="${key}Minutes" value="${minutes}" min="1" max="1440" ${!on ? 'disabled' : ''}><span>${t('minutes')}</span></label></div>`).join('')}
+            <p class="dialog-copy">${t('Every upload reads local sessions first. No changes means no scheduled cloud request.')}</p><button type="button" id="save-timers" hidden>${t('Save intervals')}</button>
+          </section>${c.recoverable && c.job?.state !== 'running' ? `<button type="button" id="recover-settings">${t('Recover settings change')}</button>` : ''}`, null);
         $('#dialog-cancel').textContent = t('Close');
-        const validate = () => {
-            const form = Object.fromEntries(new FormData($('#dialog-form')));
-            const valid = /^https?:\/\//.test(form.url || '') && (unlocked || (form.passphrase || '').length >= 12);
-            const changed = form.url !== saved.url || form.username !== saved.username || !!form.password || !unlocked;
-            $('#dialog-submit').hidden = !valid || !changed;
-        };
-        $$('[name]').forEach(el => el.addEventListener('input', validate)); validate();
-        $('#language').onchange = async e => { const draft = Object.fromEntries(new FormData($('#dialog-form'))); setLocale(e.target.value); render(); await settings(draft); };
         enhanceSelect($('#language'));
-        if ($('#lock-sync')) $('#lock-sync').onclick = () => run(async () => { await api('/sync/lock', 'POST', {}); $('#dialog').close(); });
-        $('#download-diagnostics').onclick = async () => { try { const report = await api('/diagnostics'); const url = URL.createObjectURL(new Blob([JSON.stringify(report, null, 2)], { type: 'application/json' })); const link = document.createElement('a'); link.href = url; link.download = 'session-grove-diagnostics.json'; link.click(); setTimeout(() => URL.revokeObjectURL(url), 1000); } catch (e) { $('#dialog-error').textContent = e.message; } };
-        $$('[data-conflict]').forEach(el => el.onclick = () => run(async () => { await api('/conflicts/resolve', 'POST', { index: Number(el.dataset.conflict), choice: el.dataset.choice }); $('#dialog').close(); }));
-        $$('[data-recover]').forEach(el => el.onclick = () => run(async () => { await api('/recover', 'POST', { id: el.dataset.recover }); $('#dialog').close(); }));
-    } catch (e) { toast(e.message); }
+        $('#language').onchange = async e => { setLocale(e.target.value); render(); await settings(options); };
+        const busy = async (button, fn) => { if (working) return; working = true; button.disabled = true; const original = button.textContent; button.textContent = t('Working…'); $('#dialog-error').textContent = '';
+            try { await fn(); } catch(e) { $('#dialog-error').textContent = e.message; } finally { working = false; if (button.isConnected) { button.disabled = false; button.textContent = original; } } };
+        for(const input of $$('input[data-stored]')) { input.onfocus = () => { if(input.dataset.stored) { input.value = ''; delete input.dataset.stored; } }; input.onblur = () => { if(!input.value && input.name === 'password' && c.hasPassword) { input.value = mask; input.dataset.stored = 'true'; } }; }
+        const values = () => { const result = {}; for(const el of $$('#dialog-content input[name]')) if (!el.disabled && !el.dataset.stored) result[el.name] = el.value; return result; };
+        if ($('#modify-connection')) $('#modify-connection').onclick = () => settings({editConnection:true});
+        if ($('#modify-encryption')) $('#modify-encryption').onclick = () => settings({editKey:true});
+        if ($('#verify-connection')) {
+            const validate = () => { const v = values(); $('#verify-connection').hidden = !v.url?.trim() || !v.username?.trim() || !(v.password || $('[name=password]').dataset.stored); };
+            $$('input[name=url],input[name=username],input[name=password]').forEach(el => el.addEventListener('input',validate)); validate();
+            $('#verify-connection').onclick = e => busy(e.currentTarget, async () => { await api('/settings/verify','POST',values()); await settings(); });
+        }
+        async function trackJob() {
+            const box = $('#settings-progress'); if(!box) return;
+            box.hidden = false; const button = $('#confirm-encryption'); if(button) button.hidden = true;
+            $$('[name=passphrase],[name=currentPassphrase],#modify-connection,#modify-encryption').forEach(el=>el.disabled=true);
+            for (;;) {
+                const current = await api('/settings'), j = current.job;
+                if(!$('#dialog').open || !box.isConnected) return;
+                const phases = {preparing:'Preparing',copying:'Re-encrypting and verifying',verifying:'Checking cloud versions',cleanup:'Removing previous copies',complete:'Complete'};
+                box.innerHTML = `<span>${t(phases[j?.phase] || 'Working…')}${j?.total ? ` · ${j.completed}/${j.total}` : ''}</span><progress ${j?.total ? `max="${j.total}" value="${j.completed}"` : ''}></progress>`;
+                if(j?.state === 'failed') { $('#dialog-error').textContent = errorText(j.error); box.innerHTML += `<button type="button" id="retry-settings">${t('Review settings')}</button>`; $('#retry-settings').onclick=()=>settings({editKey:true}); break; }
+                if(j?.state === 'complete') { await refresh(); await settings(); if(j.cleanupPending) $('#dialog-error').textContent=t('New settings are active; some previous remote copies could not be removed.'); break; }
+                await new Promise(r=>setTimeout(r,500));
+            }
+        }
+        if ($('#confirm-encryption')) {
+            const validate = () => { const el=$('[name=passphrase]'), value=el.value; const button=$('#confirm-encryption'); button.hidden=!!value&&!el.dataset.stored&&value.length<12; button.textContent=t(el.dataset.stored?'Keep encryption':value?'Set encryption':'Continue without encryption'); };
+            $('[name=passphrase]').addEventListener('input',validate); $('[name=passphrase]').addEventListener('focus',validate); validate();
+            $('#confirm-encryption').onclick=e=>busy(e.currentTarget,async()=>{ await api('/settings/confirm','POST',values()); await trackJob(); });
+        }
+        if(c.job?.state==='running') trackJob().catch(e=>$('#dialog-error').textContent=e.message);
+        if($('#recover-settings')) $('#recover-settings').onclick=e=>busy(e.currentTarget,async()=>{await api('/settings/recover','POST',{});await refresh();await settings();});
+        const timers = () => Object.fromEntries(['localUpdate','autoUpload'].flatMap(k=>[[k+'Enabled',$(`[name=${k}Enabled]`).checked],[k+'Minutes',Number($(`[name=${k}Minutes]`).value)]]));
+        const validateTimers=()=>{const v=timers();for(const k of ['localUpdate','autoUpload']) $(`[name=${k}Minutes]`).disabled=!v[k+'Enabled'];$('#save-timers').hidden=JSON.stringify(v)===JSON.stringify(p)||Object.entries(v).some(([k,n])=>k.endsWith('Minutes')&&(!Number.isInteger(n)||n<1||n>1440));};
+        $$('.timer-row input').forEach(el=>el.addEventListener('input',validateTimers));validateTimers();
+        $('#save-timers').onclick=e=>busy(e.currentTarget,async()=>{await api('/settings/timers','POST',timers());await refresh();await settings(options);});
+    } catch(e) { toast(e.message); }
+}
+function information() {
+    modal('Information', `<h3>${t('When can I use each action?')}</h3><ul class="action-guide"><li>${t('Update reads local agent sessions. Sync publishes local changes, including Pending, and checks the cloud directory.')}</li><li>${t('Move belongs to the session list. Select items before choosing a project.')}</li><li>${t('In a transcript, select a start and end to Combine or Dissolve a continuous range.')}</li><li>${t('Select a graph node to Rename it. Naming Pending makes it a saved node.')}</li><li>${t('Fork appears only at a completed turn. Activate, Deactivate and Archive belong to a complete session endpoint.')}</li><li>${t('Archived shows only archived paths with their prefixes. Restore returns a path to its project without activating it.')}</li></ul><p class="dialog-copy">${t('Token counts are estimates. Local configuration and recorded usage inform activation warnings; unknown limits are not guessed.')}</p><p class="dialog-copy">${t('Close running agents before changing native activation. Browsing and organization remain available.')}</p><h3>${t('Diagnostics')}</h3><p class="dialog-copy">${t('Logs contain timings, operation types and error references; no conversation text, passwords, URLs or working paths.')}</p><button type="button" id="download-diagnostics">${t('Download diagnostics')}</button>${(state.data.plan?.pendingRecovery||[]).map(id=>`<button type="button" data-recover="${esc(id)}">${t('Recover interrupted operation')}</button>`).join('')}${state.data.conflicts.map((c,i)=>`<div class="conflict">${t('Conflict')}: ${esc(c.local.name)}<button type="button" data-conflict="${i}" data-choice="local">${t('Keep local')}</button><button type="button" data-conflict="${i}" data-choice="remote">${t('Use remote')}</button></div>`).join('')}`,null);
+    $('#download-diagnostics').onclick=async()=>{try{const report=await api('/diagnostics'),url=URL.createObjectURL(new Blob([JSON.stringify(report,null,2)],{type:'application/json'})),link=document.createElement('a');link.href=url;link.download='session-grove-diagnostics.json';link.click();setTimeout(()=>URL.revokeObjectURL(url),1000);}catch(e){$('#dialog-error').textContent=e.message;}};
+    $$('[data-conflict]').forEach(el=>el.onclick=()=>run(async()=>{await api('/conflicts/resolve','POST',{index:Number(el.dataset.conflict),choice:el.dataset.choice});$('#dialog').close();}));
+    $$('[data-recover]').forEach(el=>el.onclick=()=>run(async()=>{await api('/recover','POST',{id:el.dataset.recover});$('#dialog').close();}));
+}
+function about() {
+    modal('About', `<div class="about"><h3>Session Grove <small>0.7.0</small></h3><p>${t('Organize agent conversations by project. Keep the context, choose the branch, continue your work.')}</p><p>${t('Developed by')} Ziyi Zhang</p><div class="about-links"><a href="https://ziyi-zhang.vercel.app" target="_blank" rel="noopener noreferrer" aria-label="Ziyi Zhang website" title="Ziyi Zhang">${icon('website')}</a><a href="https://github.com/MRziyi/session-grove" target="_blank" rel="noopener noreferrer" aria-label="GitHub repository" title="GitHub">${icon('github')}</a></div></div>`,null);
 }
 async function sync(direction) {
     if (!state.data.cloud.configured || !state.data.cloud.unlocked) return settings();
     return run(async () => { await api('/sync', 'POST', { direction }); toast(t('Sync complete')); });
 }
+$('#about').onclick = about; $('#information').onclick = information;
 $('#sync').onclick = () => sync('both'); $('#settings').onclick = () => settings();
 $('#collect').onclick = () => run(async () => { const r = await api('/collect', 'POST', {}); if (r.errors?.length) toast(r.errors.map(e => errorText(e.message)).join('\n')); else toast(t('Refresh complete · {updates} updated · {discovered} discovered', { updates: r.updates.length, discovered: r.discovered })); });
 $('#search').oninput = e => { state.query = e.target.value; state.selected.clear(); clearTimeout(searchTimer); searchTimer = setTimeout(() => refresh().catch(e => toast(e.message)), 180); };

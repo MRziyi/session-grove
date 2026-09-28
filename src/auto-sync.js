@@ -1,3 +1,4 @@
+import { preferences } from './preferences.js';
 import { Cloud } from './cloud.js';
 import { assert, now } from './util.js';
 export class AutoSync {
@@ -6,17 +7,26 @@ export class AutoSync {
         this.cloud = new Cloud(store, readConfig);
         this.passphrase = null; this.running = false; this.error = null; this.closed = false; this.retryAt = 0; this.failures = 0; this.rateLimitUntil = 0;
         this.queue = new Set(store.local('uploadQueue') || []);
-        this.interval = setInterval(() => { if (!this.running) this.checkCatalog(30 * 60 * 1000).then(() => this.flush('queued')).catch(() => {}); }, 30 * 60 * 1000);
-        this.interval.unref();
+        this.configureTimer();
+    }
+    configureTimer() {
+        clearInterval(this.interval);
+        const p = preferences(this.store);
+        if (p.autoUploadEnabled) { this.interval = setInterval(() => this.fallback().catch(() => {}), p.autoUploadMinutes * 60000); this.interval.unref(); }
+    }
+    async fallback() {
+        if (!preferences(this.store).autoUploadEnabled || this.running || this.closed || !this.readConfig()?.url || this.passphrase === null || this.retryAt > Date.now()) return;
+        await this.beforeUpload?.();
+        if (this.cloud.dirtyIds().length) return this.flush('push');
     }
     status() {
         const configured = !!this.readConfig()?.url, dirty = this.cloud.dirtyIds();
         this.cloud.useSavedCache(); const cache = this.cloud.cache();
-        return { configured, unlocked: !!this.passphrase, queued: this.queue.size > 0, dirty: dirty.length > 0, dirtyCount: dirty.length,
-            phase: this.running ? 'syncing' : !configured ? 'unconfigured' : !this.passphrase ? 'locked' : this.error ? 'retrying' : this.queue.size ? 'queued' : dirty.length ? 'local' : 'synced',
-            error: this.error, retryAt: this.retryAt || null, fallbackMinutes: 30, lastUpload: cache.lastUpload || null, lastCheck: cache.checkedAt || null, lastSuccess: cache.lastUpload || null };
+        return { configured, unlocked: this.passphrase !== null, queued: this.queue.size > 0, dirty: dirty.length > 0, dirtyCount: dirty.length,
+            phase: this.migrating ? 'migrating' : this.running ? 'syncing' : !configured ? 'unconfigured' : this.passphrase === null ? 'locked' : this.error ? 'retrying' : this.queue.size ? 'queued' : dirty.length ? 'local' : 'synced',
+            error: this.error, retryAt: this.retryAt || null, fallbackMinutes: preferences(this.store).autoUploadEnabled ? preferences(this.store).autoUploadMinutes : null, lastUpload: cache.lastUpload || null, lastCheck: cache.checkedAt || null, lastSuccess: cache.lastUpload || null };
     }
-    unlock(passphrase) { assert(typeof passphrase === 'string' && passphrase.length >= 12, 'Encryption passphrase needs at least 12 characters.'); this.passphrase = passphrase; this.error = null; this.retryAt = 0; this.failures = 0; this.rateLimitUntil = 0; }
+    unlock(passphrase) { assert(typeof passphrase === 'string' && (passphrase.length === 0 || passphrase.length >= 12), 'Encryption passphrase needs at least 12 characters.'); this.passphrase = passphrase; this.error = null; this.retryAt = 0; this.failures = 0; this.rateLimitUntil = 0; }
     lock() { this.passphrase = null; this.cloud.lock(); clearTimeout(this.timer); clearTimeout(this.retryTimer); }
     schedule(ids = this.cloud.dirtyIds()) {
         if (this.closed) return;
@@ -40,13 +50,15 @@ export class AutoSync {
     async flush(direction = 'queued', explicit = false) {
         if (explicit && this.rateLimitUntil > Date.now()) throw new Error('Provider requested a pause. Try again after ' + new Date(this.rateLimitUntil).toLocaleTimeString());
         if (this.closed || !explicit && this.retryAt > Date.now()) return null;
-        if (!this.readConfig()?.url || !this.passphrase) {
+        if (!this.readConfig()?.url || this.passphrase === null) {
             if (explicit) throw new Error('Configure WebDAV and unlock project sync first.');
             return null;
         }
         return this.exclusive(async () => {
+            if (direction !== 'pull') await this.beforeUpload?.();
             if (direction === 'pull') return this.run ? this.run(this.store, this.readConfig(), this.passphrase, 'pull') : this.cloud.catalog(this.passphrase);
             assert(['push', 'both', 'queued'].includes(direction), 'Unknown sync direction.');
+            if (direction !== 'both' && !this.cloud.dirtyIds().length) return { published: 0, uploaded: 0 };
             if (!this.run) await this.cloud.connect(this.passphrase);
             if (direction === 'both' && !this.run) await this.cloud.catalog(this.passphrase);
             const dirty = this.cloud.dirtyIds();
@@ -62,7 +74,7 @@ export class AutoSync {
         });
     }
     async checkCatalog(maxAge = 2 * 60 * 1000) {
-        if (!this.passphrase || !this.readConfig()?.url || this.retryAt > Date.now()) return;
+        if (this.passphrase === null || !this.readConfig()?.url || this.retryAt > Date.now()) return;
         const checked = this.cloud.cache().checkedAt;
         if (checked && Date.now() - new Date(checked).getTime() < maxAge) return;
         return this.exclusive(async () => {
@@ -71,7 +83,7 @@ export class AutoSync {
         }).catch(() => {});
     }
     async openProject(projectId, query = '', { check = false } = {}) {
-        if (!this.passphrase || !this.readConfig()?.url) {
+        if (this.passphrase === null || !this.readConfig()?.url) {
             const refs = this.cloud.projectRefs().filter(p => p.id === projectId);
             assert(!refs.length || refs.some(p => this.cloud.cache().indexes[p.index]), 'Unlock sync to download this project.');
             return;
@@ -93,7 +105,7 @@ export class AutoSync {
     async openTree(treeId, { check = false } = {}) {
         const local = this.store.all('branch').find(b => b.id === treeId);
         if (local && !local.projectId) return;
-        if (!this.passphrase || !this.readConfig()?.url) {
+        if (this.passphrase === null || !this.readConfig()?.url) {
             assert(this.store.all('branch').some(b => b.id === treeId), 'Unlock sync to download this session.'); return;
         }
         if (check) await this.checkCatalog();

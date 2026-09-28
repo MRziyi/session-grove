@@ -1,6 +1,6 @@
 # Session Grove interaction model
 
-Implemented in 0.6.0. This document supersedes earlier interface proposals. The product workflow is in the README; runtime and diagnosis details are in [operations.md](operations.md).
+Implemented in 0.7.0. This document supersedes earlier interface proposals. The product workflow is in the README; runtime and diagnosis details are in [operations.md](operations.md).
 
 ## Terms
 
@@ -17,11 +17,11 @@ Ordinary conversations start in the agent. Grove has no blank-session creator, e
 
 ## Navigation and list page
 
-The application bar contains **Update**, **Sync**, and **Settings**.
+The application bar contains **Sync**, **Update**, and **Settings**.
 
 - Update refreshes native session capture without cloud publication.
 - Sync publishes unsent filed changes, including Pending, and checks the cloud directory. Its tooltip shows last upload/check times.
-- Settings contains Language, WebDAV connection/unlock, action help and diagnostic export. There is no separate top-level language or Upload button.
+- Settings contains Language, a staged WebDAV/encryption form and automatic-update intervals. About and Information live at the sidebar bottom; Information contains action help and diagnostics. There is no separate top-level language or Upload button.
 
 Navigation has Current Active (Codex / Claude Code with native-session counts), Projects (one count per tree or standalone session), and Archived. A project is omitted when it has no content. Current Active groups entries only by Project or Ungrouped, ordered by latest conversation activity.
 
@@ -65,7 +65,7 @@ Existing fork boundaries remain meaningful even if a sibling path is currently a
 | Selected in-use Node | Rename |
 | Selected Pending Node | Rename; saving its title creates a named Node |
 | Selected in-use Node ends at a complete native turn | Fork |
-| Selected endpoint of an inactive in-use path | Activate |
+| Selected endpoint of an inactive path with a supported materialization or unchanged native copy | Activate |
 | Selected endpoint of an active filed path | Deactivate |
 | Selected endpoint of an in-use path | Archive that one complete session |
 | Selected endpoint of an archived path | Restore |
@@ -91,7 +91,7 @@ Historical whole-project archives are still readable/restorable. The normal UI d
 
 New completed native work extends Pending locally. Organizing, filing, renaming, Grove forks and archive/restore changes queue the affected filed tree for upload after a short debounce. Manual Sync can publish unfinished Pending. Automatic directory checks and lazy loading remain independent of native Active choices.
 
-All graph edits carry a version to reject stale selections. Native compatibility and cold-write guards remain in force. A failed action keeps its error visible with a reference code; Settings offers diagnostic export without conversation text or credentials.
+All graph edits carry a version to reject stale selections. Native compatibility and cold-write guards remain in force. A failed action keeps its error visible with a reference code; Information offers diagnostic export without conversation text or credentials.
 
 
 ## Compaction choices and graph navigation
@@ -105,3 +105,14 @@ The graph has a dotted canvas. Drag its background to pan, use the controls or C
 Scope changes immediately clear the prior detail view. Request tickets reject late responses from a previously selected view, so an in-use path picker cannot reappear under Archived. Empty projections also clear all stale controls.
 
 Local Active requires an available working directory. A historical session whose directory no longer exists remains in the library; a filed path can still be activated into a different directory. No native file is deleted by discovery filtering.
+
+
+## Staged settings
+
+The URL field combines an editable server base and a fixed `/Session-Grove/` suffix. The Verify action appears only after credentials are present. Successful write/read/delete verification freezes those fields and reveals optional encryption. Confirming encryption freezes its masked field and shows a green encrypted status, or a yellow unencrypted status. Modify reopens the relevant step. Masked saved values are not returned as secrets to the browser.
+
+Migration reports actual copy/verification counts, publishes a conditional vault pointer only after verification, and then cleans the enumerated previous copies. A failed or interrupted settings change exposes a recovery action. Pause other writing devices while migrating; they must reconnect afterward. Connection changes to a different provider retain the old provider as a recovery source.
+
+Local capture defaults to 1 minute; dirty-project fallback defaults to 15 minutes. Each can be disabled. Before every upload the service captures local records, independently of the timer schedule. A no-change fallback sends no cloud requests. Manual Sync checks the directory even without local changes.
+
+Transcript renders safe Markdown, with non-prose activity in collapsible sections. Named file arguments are displayed as paths; shell previews are not misrepresented as a complete list of accessed files. Clicking an activity opens its recorded content. The token breakdown distinguishes estimates from native usage and explicitly identifies opaque/non-text content.

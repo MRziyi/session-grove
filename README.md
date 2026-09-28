@@ -32,9 +32,9 @@ Grove manages the session library. **Codex and Claude Code remain where you actu
 5. Select a session's endpoint to **Activate**, **Deactivate**, or **Archive** that path. Archived paths disappear from the in-use graph and remain complete in Archived. Other branches stay visible.
 6. Continue chatting in the agent. New chats extend Pending automatically. Organizing Nodes triggers cloud publication; **Sync** can also publish the Pending you have not organized yet.
 
-Large graphs support background dragging, zoom and reset; Sankey bands connect only visible content.
+Read conversations as Markdown. Expand recorded activity to inspect tool inputs/results, named files and readable reasoning alongside the conversation. Large graphs support background dragging, zoom and reset; Sankey bands connect only visible content.
 
-Actions appear only when they apply to the current selection. **Settings** contains language selection, WebDAV configuration, a short action guide and downloadable diagnostics.
+Actions appear only when they apply to the current selection. **Settings** contains language, WebDAV and automatic-update intervals. **ⓘ Information**, at the bottom of the sidebar, contains the action guide and diagnostics. **About** links to the author and repository.
 
 ## Try it
 
@@ -51,22 +51,26 @@ Open **http://127.0.0.1:7421**. The demo uses sample sessions and does not read 
 To manage your own sessions, stop the demo and run:
 
 ```sh
-pnpm start
+pnpm dev
 ```
 
-npm works too: `npm run demo`, `npm start`, and `npm test`. The interface defaults to English; switch to Chinese in **Settings**.
+npm works too: `npm run demo`, `npm run dev`, and `npm test`. The interface defaults to English; switch to Chinese in **Settings**.
 
 ## Your context, on your storage
 
-WebDAV is optional. Local organization works without it. After configuring and unlocking sync in Settings, filing work, naming Nodes and other organization changes upload automatically. New native messages are captured locally without uploading after every reply.
+WebDAV is optional. Enter your server address, account and password; Grove adds its own **/Session-Grove/** folder. Verify the connection, then optionally set a content-encryption passphrase. Saved secrets remain visibly masked. Changing the connection or encryption settings runs a verified migration with progress.
 
-**Sync** sends outstanding project changes—including unfinished Pending—and checks the cloud directory. The hover text shows the last upload and directory-check times. Native Active choices stay local to each device. Cloud checks follow your actions with a 30-minute idle fallback; ordinary page refreshes do not poll WebDAV.
+Filing work, naming Nodes and other organization changes upload automatically. Local sessions refresh every **1 minute** by default. A **15-minute** fallback uploads changed projects, including unfinished Pending. Every upload captures local updates first; an unchanged library makes no scheduled cloud request. Both intervals can be changed or disabled in Settings.
 
-The library retains original session records. Node edits organize those records rather than rewriting the conversation. Cloud content is encrypted before upload. By default, the encryption passphrase stays in memory and is entered again after a restart. Unattended startup can explicitly use an owner-only key file; see the setup guide.
+**Sync** sends outstanding project changes—including unfinished Pending—and checks the cloud directory. The hover text shows the last upload and directory-check times. Native Active choices stay local to each device. Cloud reads follow startup, focus and explicit navigation with freshness checks; ordinary page refreshes do not poll WebDAV.
+
+The library retains original session records. Node edits organize those records rather than rewriting the conversation. Cloud content is encrypted when you enable encryption; a yellow status identifies unencrypted storage. Saved credentials and the optional passphrase live in owner-only local files so `pnpm dev` can reconnect. This is not macOS Keychain storage.
 
 ## Current scope
 
-**0.6.0 · experimental · macOS first.** Same-agent branching and cross-device continuation are supported; Claude-to-Codex conversion is not.
+**0.7.0 · experimental · macOS first.** Same-agent branching and cross-device continuation are supported; Claude-to-Codex conversion is not.
+
+**Context fidelity has limits.** Supported materialization preserves recorded tool calls/results, reasoning and instructions instead of rebuilding a conversation from visible prose. Unknown Codex paginated rewrites are blocked; an unchanged original paginated session can be restored byte-for-byte on the same machine/path. Dynamic client instructions, opaque compaction and external assets prevent a promise of identical model requests. See the [requirements and fidelity audit](docs/requirements-audit.md).
 
 Native activation changes currently require closing running agent processes first. The UI explains this in Settings. Codex native read/resume has been exercised with a real executable; Claude file adapters are tested, but real Claude-client verification is still pending. WebDAV has passed isolated protocol tests and a live Teracloud round trip; other providers can differ.
 
@@ -74,7 +78,7 @@ Node token counts are estimates. Before activation, Grove checks recorded usage 
 
 ## Testing and feedback
 
-If something fails, note what you selected, what you clicked, and the error reference shown in the UI. **Settings → Diagnostics → Download diagnostics** exports operation types, timings and error references without chat text or credentials.
+If something fails, note what you selected, what you clicked, and the error reference shown in the UI. **ⓘ Information → Diagnostics → Download diagnostics** exports operation types, timings and error references without chat text or credentials.
 
 ```sh
 pnpm test

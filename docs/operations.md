@@ -2,7 +2,7 @@
 
 ## Local service
 
-Node.js 24+ is required. `pnpm start` and `npm start` run the same local server. Demo mode (`pnpm run demo`) uses isolated sample data. The default URL is `http://127.0.0.1:7421`; the service binds only to loopback.
+Node.js 24+ is required. `pnpm dev` and `npm run dev` start the local server with source watching; `pnpm start` is also available. Demo mode (`pnpm run demo`) uses isolated sample data. The default URL is `http://127.0.0.1:7421`; the service binds only to loopback.
 
 ```sh
 pnpm start --port 7421 --data-dir /path/to/library \
@@ -11,7 +11,7 @@ pnpm start --port 7421 --data-dir /path/to/library \
 npm start -- --port 7421 --data-dir /path/to/library
 ```
 
-Defaults: library `~/.session-grove`, native roots `$CODEX_HOME` / `~/.codex` and `$CLAUDE_CONFIG_DIR` / `~/.claude`. Only one server may open a given library. Starting the real service discovers local transcripts without changing native activation. Configure WebDAV yourself in Settings; startup does not unlock it or upload ungrouped history.
+Defaults: library `~/.session-grove`, native roots `$CODEX_HOME` / `~/.codex` and `$CLAUDE_CONFIG_DIR` / `~/.claude`. Only one server may open a given library. Starting the real service discovers local transcripts without changing native activation. Configure WebDAV yourself in Settings; saved settings unlock automatically on startup; ungrouped history is never uploaded.
 
 ## Files and recovery
 
@@ -25,15 +25,15 @@ Defaults: library `~/.session-grove`, native roots `$CODEX_HOME` / `~/.codex` an
 | `recovery-snapshots/` | Files preserved before manual recovery |
 | `server.lock` | Current service PID |
 
-The operation log rotates at approximately 1 MiB and retains three older files. It does not record request bodies, transcript text, credentials, remote URLs or native working directories. Settings → Diagnostics downloads the latest 200 events, recent route timing metrics and memory usage. Error responses include an eight-character reference that can be matched to a log event. Raw transcripts and operation backups remain private library data and are **not** included in diagnostic downloads.
+The operation log rotates at approximately 1 MiB and retains three older files. It does not record request bodies, transcript text, credentials, remote URLs or native working directories. Information → Diagnostics downloads the latest 200 events, recent route timing metrics and memory usage. Error responses include an eight-character reference that can be matched to a log event. Raw transcripts and operation backups remain private library data and are **not** included in diagnostic downloads.
 
 For a bug report, include the version, the action and selection, expected/actual behavior, the error reference and the diagnostic export. Do not attach the whole library or `webdav.json`.
 
-Interrupted native writes can be recovered from Settings when a recovery journal exists. Recovery preserves the current files first. Backups are not automatically pruned.
+Interrupted native writes can be recovered from Information when a recovery journal exists. Recovery preserves the current files first. Backups are not automatically pruned.
 
 ## Compatibility
 
-- Codex legacy JSONL and `state_5.sqlite` are supported. Known paginated histories are rebuilt into fresh local conversation logs on activation; old machine-specific world/turn settings are not replayed. Unknown required schema fields and history records fail closed.
+- Codex legacy JSONL and `state_5.sqlite` are supported. Paginated histories are not converted to legacy: only unchanged adopted files can be restored at their original working path. Unknown required index fields and unsupported history modes fail closed.
 - Codex 0.155.0-alpha.16.3 has been tested with real App Server list/read/resume/deactivate/reactivate calls, without sending model turns.
 - Claude project JSONL, encoded paths and legacy indexes are covered by file-adapter tests; a real Claude client still needs validation.
 - Native activation writes require the agent processes to be closed. Opening and organizing Grove history does not.
@@ -90,7 +90,7 @@ An operator can opt into startup unlock with an existing owner-only key file:
 node bin/session-grove.js --sync-key-file /absolute/private/path/sync-key.txt
 ```
 
-The file must not be readable by group/other users. The default app behavior still keeps a manually entered passphrase only in memory. Keep a secure copy of the key for other devices; it is needed to decrypt the cloud vault. Do not add the file to Git or diagnostics. A remembered WebDAV password and the vault encryption key are separate credentials.
+The file must not be readable by group/other users. Settings remembers the chosen key in the same owner-only local format. Keep a secure copy of the key for other devices; it is needed to decrypt the cloud vault. Do not add the file to Git or diagnostics. A remembered WebDAV password and the vault encryption key are separate credentials.
 
 The setup can use an additional dedicated directory below the provider's DAV root. Grove creates `session-grove-v1/` below that configured directory and does not enumerate or modify unrelated folders.
 
@@ -101,4 +101,13 @@ The 0.5.0 live Teracloud check passed all these stages. No personal transcripts 
 Native discovery prefers the Codex database's current rollout path and title: duplicate historical files with the same native identity do not become extra active instances. User-facing `name` takes precedence over internal preview `title`; source metadata excludes subagents/guardians and zero-chat records. Previously imported helpers are hidden and excluded from native operations without deleting source data. Native archive flags are read even when a file is not in an archive-named folder.
 
 
-0.6.0 adds per-path compaction policy, live-provider request/CPU measurements, a thirty-minute fallback and throttling backoff. See [sync-policy.md](sync-policy.md). Diagnostics report successful body-transfer byte counts and HTTP request counts without remote URLs or credentials.
+0.7.0 adds per-path compaction policy, live-provider request/CPU measurements, a configurable fifteen-minute dirty-only fallback and throttling backoff. See [sync-policy.md](sync-policy.md). Diagnostics report successful body-transfer byte counts and HTTP request counts without remote URLs or credentials.
+
+
+## Development startup and settings recovery
+
+Use `pnpm dev` (or `npm run dev`) for the real local library; stop it with Ctrl+C. `pnpm run demo -- --port 7430` uses isolated samples. No service is installed. The CLI waits for a settings migration to finish before exiting.
+
+WebDAV setup lives in Settings. Grove appends `/Session-Grove/`, verifies a disposable write/read/delete, then offers optional content encryption. `sync-key.txt` is an owner-only local key file managed by Settings; `webdav.json` records verified connection settings. The key is never sent back to the browser. A saved key automatically unlocks on startup unless an unfinished `sync-settings-pending.json` journal requires recovery. Do not delete that private journal until the change is resolved; it contains the destination recovery key.
+
+Changing encryption requires strong ETags or WebDAV locking; Teracloud uses the locking path. Other devices should pause sync during migration and reconnect afterward. Source objects are verified before a conditional vault-pointer switch; old-generation cleanup occurs afterward. When moving to a new provider the previous provider is retained. A nonempty destination vault is rejected rather than overwritten.

@@ -1,3 +1,4 @@
+import { ledger } from './context-ledger.js';
 import { assert, hash, id as newId, now } from './util.js';
 import { estimateTokens, toolText } from './context.js';
 import { policyHash } from './context-policy.js';
@@ -64,14 +65,9 @@ export function buildGraph(store, branchId) {
     function pathFor(b, revisionId = b.head) {
         const key = `${b.id}:${revisionId}`;
         if (cache.has(key)) return cache.get(key);
-        const p = store.parsed(revisionId, b.agent), visible = p.messages.filter(m => m.role !== 'tool');
-        const toolCosts = new Map(), visibleByLine = new Map(visible.map(m => [m.line, m])), toolsByLine = new Map(p.messages.filter(m => m.role === 'tool').map(m => [m.line, m.text])); let previousLine = null;
-        for (const [index, record] of p.records.entries()) {
-            const shown = visibleByLine.get(index + 1);
-            if (shown) previousLine = shown.line;
-            const tool = b.agent === 'claude' ? toolsByLine.get(index + 1) || '' : toolText(record.value, b.agent);
-            if (previousLine && tool) toolCosts.set(previousLine, (toolCosts.get(previousLine) || 0) + estimateTokens(tool));
-        }
+        const p = store.parsed(revisionId, b.agent), inventory = ledger(p, b.agent), visible = p.messages.filter(m => m.role !== 'tool');
+        const byChat = new Map();
+        for (const e of inventory.entries) { if (!byChat.has(e.chatLine)) byChat.set(e.chatLine, []); byChat.get(e.chatLine).push(e); }
         let inherited = [];
         if (b.parentId && b.forkRevision) {
             const parent = store.get('branch', b.parentId);
@@ -86,7 +82,7 @@ export function buildGraph(store, branchId) {
         const path = visible.map((m, index) => {
             prefix = hash(prefix + JSON.stringify([m.role, m.text]));
             const message = inherited[index] || { ...m, id: `${b.chatIdentity || b.id}:${prefix.slice(0, 24)}`, ownerId: b.id };
-            const value = { ...message, line: m.line, toolTokens: toolCosts.get(m.line) || 0 };
+            const value = { ...message, line: m.line, toolTokens: (byChat.get(m.line) || []).filter(e => ['tool-call', 'tool-result'].includes(e.kind)).reduce((n,e) => n + e.tokens, 0), activity: byChat.get(m.line) || [] };
             if (!messages.has(value.id)) messages.set(value.id, value);
             return value;
         });
@@ -94,8 +90,8 @@ export function buildGraph(store, branchId) {
         return path;
     }
     const paths = members.filter(b => visibleSession(store, b)).map(b => ({ branchId: b.id, name: b.name, agent: b.agent, archived: !!b.archived,
-        head: b.head, active: store.instances().some(i => i.branchId === b.id && isActive(i)),
-        context: { ...store.parsed(b.head, b.agent).context, compactions: store.parsed(b.head, b.agent).context.compactions.map(e => ({ ...e, enabled: !(b.contextPolicy?.disabled || []).includes(e.id) })) }, contextPolicy: b.contextPolicy || null, contextPending: store.instances().some(i => i.branchId === b.id && isActive(i) && ((i.contextPolicyHash || policyHash(null)) !== policyHash(b.contextPolicy) || i.baseRevision !== b.head)), messages: pathFor(b), checkpoints: store.parsed(b.head, b.agent).checkpoints }));
+        head: b.head, canRewriteContext: !store.parsed(b.head, b.agent).meta?.history_mode || store.parsed(b.head, b.agent).meta.history_mode === 'legacy', canActivate: !store.parsed(b.head, b.agent).meta?.history_mode || store.parsed(b.head, b.agent).meta.history_mode === 'legacy' || store.instances().some(i => i.branchId === b.id && i.adopted && i.baseRevision === b.head && (i.contextPolicyHash || policyHash(null)) === policyHash(b.contextPolicy)), active: store.instances().some(i => i.branchId === b.id && isActive(i)),
+        context: { ...store.parsed(b.head, b.agent).context, ledger: (() => { const l = ledger(store.parsed(b.head, b.agent), b.agent); return { ...l, entries: l.entries.filter(e => e.chatLine === null) }; })(), compactions: store.parsed(b.head, b.agent).context.compactions.map(e => ({ ...e, enabled: !(b.contextPolicy?.disabled || []).includes(e.id) })) }, contextPolicy: b.contextPolicy || null, contextPending: store.instances().some(i => i.branchId === b.id && isActive(i) && ((i.contextPolicyHash || policyHash(null)) !== policyHash(b.contextPolicy) || i.baseRevision !== b.head)), messages: pathFor(b), checkpoints: store.parsed(b.head, b.agent).checkpoints }));
     const assignments = {};
     // Read legacy append-only nodes as initial annotations without changing history.
     for (const b of members) {

@@ -38,7 +38,7 @@ test('primary display name wins; guardians and empty logs are excluded by metada
 });
 function compacted(cwd) {
     const values = codexSample(cwd, [['Original context marker', 'Original answer']]).trim().split('\n').map(JSON.parse);
-    values[0].payload.history_mode = 'paginated';
+    values[0].payload.history_mode = 'legacy';
     return lines([...values, { type: 'world_state', payload: { full: true, state: { permissions: { source: 'must-not-replay' } } } }, { type: 'compacted', payload: { message: 'Readable summary marker', replacement_history: [{ type: 'message', role: 'user', content: [{ type: 'input_text', text: 'Readable summary marker' }] }] } }, ...codexTurn('Post compact question', 'Post compact answer')]);
 }
 test('compaction preview is per path; cold apply rebuilds a native copy, preserving original history and capturing new suffixes', t => {
@@ -54,7 +54,7 @@ test('compaction preview is per path; cold apply rebuilds a native copy, preserv
     const live = store.instances().find(i => i.branchId === b.id && i.applied), parked = store.instances().find(i => i.branchId === b.id && !i.applied);
     assert.ok(live && parked); assert.equal(fs.readFileSync(parked.file, 'utf8'), raw);
     let p = parse(fs.readFileSync(live.file, 'utf8'), 'codex'); assert.equal(p.meta.history_mode, 'legacy'); assert.equal(p.context.compactions.length, 0); assert.ok(p.messages.some(m => m.text === 'Original context marker'));
-    assert.ok(!p.records.some(r => r.value?.type === 'world_state')); assert.equal(store.raw(store.get('branch', b.id).head), raw);
+    assert.ok(p.records.some(r => r.value?.type === 'world_state'));  assert.equal(store.raw(store.get('branch', b.id).head), raw);
     fs.appendFileSync(live.file, lines(codexTurn('Continued in expanded context', 'Complete'))); native.collect();
     const current = store.get('branch', b.id); assert.ok(store.raw(current.head).includes('Continued in expanded context')); assert.equal(store.treeGraph(b.id).paths.find(p => p.branchId === b.id).contextPending, false);
     store.setCompaction(b.id, { eventId: event.id, enabled: true, head: current.head }); native.setActive(b.id, cwd, true); native.apply([b.id]);

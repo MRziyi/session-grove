@@ -58,7 +58,8 @@ export function parse(raw, agent) {
                         pendingTools.delete(c.tool_use_id);
                 }
                 const isTool = Array.isArray(content) && content.length && content.every(c => c.type === 'tool_result');
-                messages.push({ role: isTool ? 'tool' : v.type, text: contentText(content), line: i + 1, timestamp: v.timestamp });
+                const prose = typeof content === 'string' ? content : (content || []).filter(c => c.type === 'text').map(c => c.text || '').join('\n');
+                if (isTool || prose) messages.push({ role: isTool ? 'tool' : v.type, text: isTool ? contentText(content) : prose, line: i + 1, timestamp: v.timestamp });
                 if (v.type === 'user' && !isTool)
                     hasUser = true;
                 if (v.type === 'assistant' && !pendingTools.size && ['end_turn', 'stop_sequence'].includes(v.message.stop_reason))
@@ -69,7 +70,7 @@ export function parse(raw, agent) {
     const warnings = [...errors];
     if (!nativeId && records.length)
         warnings.push('无法识别原生会话身份');
-    if (agent === 'codex' && meta?.history_mode === 'paginated') warnings.push('Paginated history is resumed through a rebuilt local copy.');
+    if (agent === 'codex' && meta?.history_mode === 'paginated') warnings.push('Paginated history is preserved. Only the unchanged original native session can be reactivated; context rewriting is not verified.');
     if (agent === 'codex' && meta?.history_mode && !['legacy', 'paginated'].includes(meta.history_mode))
         warnings.push(`暂不支持 ${meta.history_mode} 历史格式的原生写回`);
     if (turnOpen || pendingTools.size)
@@ -84,7 +85,7 @@ export function renderNative(raw, agent, nativeId, cwd, title, contextPolicy = n
     assert(!parsed.errors.length, '损坏或尚未写完的记录不能激活');
     assert(!raw || parsed.nativeId, '未知会话格式，不能写回');
     assert(parsed.complete, '请等待原生轮次结束，或从已完成检查点创建分支');
-    assert(!parsed.meta?.history_mode || parsed.meta.history_mode === 'legacy' || contextPolicy && agent === 'codex' && parsed.meta.history_mode === 'paginated', parsed.warnings.join('；'));
+    assert(!parsed.meta?.history_mode || parsed.meta.history_mode === 'legacy', parsed.warnings.join('；'));
     const old = parsed.nativeId;
     const records = contextPolicy ? contextProjection(parsed, agent, contextPolicy, nativeId, cwd) : parsed.records;
     const rows = records.map(({ raw: line, value }) => {
@@ -97,17 +98,13 @@ export function renderNative(raw, agent, nativeId, cwd, title, contextPolicy = n
                 if (v.payload.session_id === old)
                     v.payload.session_id = nativeId;
                 v.payload.cwd = cwd;
-                v.payload.runtime_workspace_roots = [cwd];
+                if (v.payload.runtime_workspace_roots) v.payload.runtime_workspace_roots = [cwd];
             }
             if (v.type === 'turn_context') {
                 v.payload.cwd = cwd;
                 if (v.payload.workspace_roots)
                     v.payload.workspace_roots = [cwd];
-                // Permissions are re-established by the destination client, not copied between machines.
-                for (const k of ['permission_profile', 'active_permission_profile', 'file_system_sandbox_policy'])
-                    delete v.payload[k];
-                v.payload.approval_policy = 'on-request';
-                v.payload.sandbox_policy = { type: 'read-only' };
+
             }
             if (v.type === 'token_usage_record')
                 for (const k of ['thread_id', 'session_id'])

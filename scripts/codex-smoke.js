@@ -86,7 +86,7 @@ try {
     assert.ok(JSON.stringify(restored).includes('grove-42'));
     await client.close();
     const payload = codexSample(cwd, [['Original context marker', 'Original answer']]).trim().split('\n').map(JSON.parse);
-    payload[0].payload.history_mode = 'paginated';
+    payload[0].payload.history_mode = 'legacy';
     payload.push({ type: 'world_state', payload: { full: true, state: { permissions: {} } } }, { type: 'compacted', payload: { message: 'Summary marker', replacement_history: [{ type: 'message', role: 'user', content: [{ type: 'input_text', text: 'Summary marker' }] }] } }, ...codexTurn('After compaction marker', 'Done'));
     const compact = store.branch(p.id, 'Compaction verification', 'codex', payload.map(v => JSON.stringify(v) + '\n').join(''));
     for (const enabled of [true, false, true]) {
@@ -96,7 +96,7 @@ try {
         const live = store.instances().find(i => i.branchId === compact.id && i.applied);
         const output = fs.readFileSync(live.file, 'utf8');
         assert.equal(output.includes('"type":"compacted"'), enabled);
-        assert.ok(output.includes('Original context marker')); assert.ok(!output.includes('"type":"world_state"'));
+        assert.ok(output.includes('Original context marker')); assert.ok(output.includes('"type":"world_state"'));
         client = connect(); await client.init();
         const readContext = await client.request('thread/read', { threadId: live.nativeId, includeTurns: true });
         assert.ok(JSON.stringify(readContext).includes('After compaction marker'));

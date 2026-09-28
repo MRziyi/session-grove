@@ -1,6 +1,6 @@
 # Sync triggers and measured overhead
 
-Implemented in 0.6.0. Local capture and cloud traffic are separate.
+Implemented in 0.7.0. Local capture and cloud traffic are separate.
 
 | Event | Upload | Check directory / fetch |
 | --- | --- | --- |
@@ -15,9 +15,9 @@ Implemented in 0.6.0. Local capture and cloud traffic are separate.
 | Window regains focus | No | Check only if older than 5 minutes |
 | Local UI polling | No | No directory checks; reuse cached content |
 | Sync button | All dirty filed trees, including Pending | Explicit check, even with no local changes |
-| Idle fallback | Only previously queued organization | Every 30 minutes, if directory is stale |
+| Idle fallback | All dirty filed trees, including Pending, after local capture | Default 15 minutes; no requests when unchanged |
 
-A paused/unconfigured vault makes no network calls. The fallback does not upload raw-only Pending. Repeated clicks and background refreshes do not bypass cache freshness. Publishing reads the necessary remote versions to detect conflicts; manual Sync does not redundantly re-read the same directory before publication.
+A paused/unconfigured vault makes no network calls. The fallback uploads Pending belonging to changed Projects. Unfiled sessions remain local. Repeated clicks and background refreshes do not bypass cache freshness. Publishing reads the necessary remote versions to detect conflicts; manual Sync does not redundantly re-read the same directory before publication.
 
 The Sync button shows the most recent successful cloud action time. Its tooltip distinguishes last upload from last directory check. A failed attempt does not advance a success timestamp.
 
@@ -29,9 +29,9 @@ HTTP 429/503 responses honor `Retry-After`, with at least a one-minute pause. Ot
 
 [InfiniCLOUD's speed documentation](https://infini-cloud.net/en/support_guide_general_speed.html) describes per-IP, best-effort bandwidth; it does not specify a fixed WebDAV request-count ban threshold. Directory check frequency is not the same as HTTP request count: a check can require PROPFIND and conditional GETs for several device heads.
 
-## Measurements
+## Measurements from 0.6.0 (historical baseline)
 
-The former fallback scheduled 240 directory checks per hour. The new fallback schedules at most 2 per hour before accounting for cache freshness, plus intentional user actions. That is a 120× reduction in scheduled idle checks, not a guarantee about total traffic during editing/upload.
+An unchanged library now sends zero fallback cloud requests. The default 15-minute fallback only publishes changed Projects, after a fresh local capture. Explicit user navigation and Sync may still check the directory. Local capture defaults to 1 minute; both settings persist and can be disabled.
 
 In a live Teracloud check confined to a new disposable test folder:
 

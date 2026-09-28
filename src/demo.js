@@ -62,7 +62,11 @@ export function seedDemo(store, roots) {
     }
     const compactTarget = store.get('branch', method.id);
     const compactMarker = { timestamp: now(), type: 'compacted', payload: { message: 'Keep the Chrono research goals and use explicit temporal representations.', replacement_history: [{ type: 'message', role: 'user', content: [{ type: 'input_text', text: 'Continue the Chrono temporal representation study.' }] }] } };
-    store.ingest(method.id, store.raw(compactTarget.head) + JSON.stringify(compactMarker) + '\n' + codexTurn('Continue after compacting the context.', 'Compare event time with observation time in a controlled experiment.').map(r => JSON.stringify(r) + '\n').join(''), compactTarget.head, { agent: 'codex', cwd, operation: 'demo-compaction' });
+    const continuation = codexTurn('Continue after compacting the context.', '## Next experiment\n\nCompare **event time** with observation time.\n\n- Keep the context budget fixed.\n- Read `notes/experiment.md` before changing the plan.');
+    continuation.splice(2, 0,
+        { timestamp: now(), type: 'response_item', payload: { type: 'function_call', name: 'read_file', call_id: 'demo-file-read', arguments: JSON.stringify({ file_path: 'notes/experiment.md' }) } },
+        { timestamp: now(), type: 'response_item', payload: { type: 'function_call_output', call_id: 'demo-file-read', output: '# Experiment plan\nCompare event time and observation time with an equal token budget.\n' } });
+    store.ingest(method.id, store.raw(compactTarget.head) + JSON.stringify(compactMarker) + '\n' + continuation.map(r => JSON.stringify(r) + '\n').join(''), compactTarget.head, { agent: 'codex', cwd, operation: 'demo-compaction' });
     const sessionsDir = path.join(roots.codex, 'sessions');
     fs.mkdirSync(sessionsDir, { recursive: true });
     const common = [['Establish the Chrono research context.', 'We are studying temporal information in long-running reasoning.'], ['Keep the evaluation budget fixed.', 'Agreed. All experiments should use the same context and data budget.']];

@@ -1,12 +1,13 @@
 {
   "name": "session-grove",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "private": true,
   "description": "A project-centered workspace for branching and managing agent sessions.",
   "type": "module",
   "engines": { "node": ">=24.0.0" },
   "scripts": {
     "start": "node bin/session-grove.js",
+    "dev": "node --watch bin/session-grove.js",
     "demo": "node bin/session-grove.js --demo",
     "test": "node --test test/*.test.js",
     "test:codex": "node scripts/codex-smoke.js",

@@ -2,11 +2,13 @@ import { randomBytes, scryptSync, createCipheriv, createDecipheriv } from 'node:
 import { gzipSync, gunzipSync } from 'node:zlib';
 import { assert, hash, id, now } from './util.js';
 export function seal(value, key) {
+    if (key === null) return Buffer.concat([Buffer.from('SGP1'), gzipSync(Buffer.from(JSON.stringify(value)))]);
     const iv = randomBytes(12), cipher = createCipheriv('aes-256-gcm', key, iv);
     const body = Buffer.concat([cipher.update(gzipSync(Buffer.from(JSON.stringify(value)))), cipher.final()]);
     return Buffer.concat([iv, cipher.getAuthTag(), body]);
 }
 export function unseal(buffer, key) {
+    if (key === null) { assert(buffer.subarray(0, 4).toString() === 'SGP1', 'Expected an unencrypted object.'); return JSON.parse(gunzipSync(buffer.subarray(4), { maxOutputLength: 128 * 1024 * 1024 }).toString()); }
     assert(buffer.length > 28, '同步对象不完整');
     try {
         const cipher = createDecipheriv('aes-256-gcm', key, buffer.subarray(0, 12));
@@ -26,10 +28,11 @@ export class WebDAV {
         this.base = url.href.replace(/\/$/, '') + '/session-grove-v1/';
         this.authorization = 'Basic ' + Buffer.from(`${config.username || ''}:${config.password || ''}`).toString('base64');
     }
+    scoped(prefix) { const child = Object.create(this); child.base = this.base + prefix; return child; }
     async request(method, key = '', body, extra = {}) {
         assert(!key.split('/').some(p => p === '..' || p === '.'), '无效远程路径');
         const started = performance.now(); this.metrics.requests++; this.metrics.methods[method] = (this.metrics.methods[method] || 0) + 1; this.metrics.bytesSent += body ? Buffer.byteLength(body) : 0;
-        const response = await fetch(this.base + key.split('/').map(encodeURIComponent).join('/'), { method, body, headers: { Authorization: this.authorization, ...extra }, redirect: 'error', signal: AbortSignal.timeout(30000) });
+        const response = await fetch(this.base + key.split('/').map(encodeURIComponent).join('/'), { method, body, headers: { Authorization: this.authorization, 'Accept-Encoding': 'identity', ...extra }, redirect: 'error', signal: AbortSignal.timeout(30000) });
         this.metrics.requestMs += performance.now() - started;
         if ([429, 503].includes(response.status)) {
             const retry = response.headers.get('retry-after'), seconds = retry && /^\d+$/.test(retry) ? Number(retry) : retry ? Math.max(0, (Date.parse(retry) - Date.now()) / 1000) : 60;
@@ -46,6 +49,7 @@ export class WebDAV {
         return this.readResponse(r);
     }
     async readResponse(r, limit = 128 * 1024 * 1024) {
+        if (!r.body) return Buffer.alloc(0);
         const chunks = [];
         let size = 0;
         for await (const chunk of r.body) {
@@ -57,6 +61,7 @@ export class WebDAV {
     }
     async put(key, body, exclusive = false) {
         const r = await this.request('PUT', key, body, exclusive ? { 'If-None-Match': '*' } : {});
+        await this.readResponse(r, 1024 * 1024);
         if (exclusive && r.status === 412)
             return false;
         assert(r.ok, `WebDAV PUT 失败 (${r.status})`);
@@ -64,6 +69,7 @@ export class WebDAV {
     }
     async mkdir(key = '') {
         const r = await this.request('MKCOL', key);
+        await this.readResponse(r, 1024 * 1024);
         assert(r.ok || r.status === 405, `WebDAV 创建目录失败 (${r.status})`);
     }
     async list(directory = 'commits/', pattern = /^[0-9T-]+-[a-f0-9-]+\.bin$/) {

@@ -1,3 +1,5 @@
+import { Settings } from './settings.js';
+import { preferences } from './preferences.js';
 import http from 'node:http';
 import { performance } from 'node:perf_hooks';
 import { Diagnostics } from './diagnostics.js';
@@ -15,11 +17,16 @@ import { assert, atomic, json, text, now, id, hash } from './util.js';
 const webRoot = fileURLToPath(new URL('../web/', import.meta.url));
 export function createApp({ root, roots, guard, demo = false }) {
     const store = new Store(root), native = new Native(store, { roots, guard }), token = randomBytes(32).toString('hex');
-    const webAssets = new Map(['index.html', 'app.js', 'select.js', 'i18n.js', 'style.css'].map(file => [file, fs.readFileSync(path.join(webRoot, file))]));
+    const webAssets = new Map(['index.html', 'app.js', 'select.js', 'markdown.js', 'i18n.js', 'style.css'].map(file => [file, fs.readFileSync(path.join(webRoot, file))]));
     const configFile = path.join(root, 'webdav.json');
     const diagnostics = new Diagnostics(root);
     const autoSync = new AutoSync(store, () => json(configFile, {}));
     autoSync.diagnostics = diagnostics;
+    autoSync.beforeUpload = () => { const r = native.refreshLocal(); diagnostics.record('capture', { updated: r.updates.length, discovered: r.discovered, count: r.errors.length }); };
+    let interval;
+    const settings = new Settings(root, store, autoSync, configureCapture); settings.diagnostics = diagnostics;
+    const savedKey = settings.savedKey();
+    if (savedKey !== null && !fs.existsSync(settings.journal)) autoSync.unlock(savedKey);
     try {
         const started = performance.now(), captured = native.refreshLocal();
         diagnostics.record('capture', { mode: demo ? 'demo' : 'personal', discovered: captured.discovered, updated: captured.updates.length, count: captured.errors.length, durationMs: Math.round(performance.now() - started) });
@@ -46,12 +53,12 @@ export function createApp({ root, roots, guard, demo = false }) {
             assert(!req.headers.origin || req.headers.origin === `http://${expected}`, '不允许跨站请求', 403);
             assert(!req.headers['sec-fetch-site'] || ['same-origin', 'none'].includes(req.headers['sec-fetch-site']), '不允许跨站请求', 403);
             const url = new URL(req.url, `http://${expected}`), route = url.pathname;
-            if (req.method === 'GET' && ['/', '/app.js', '/i18n.js', '/select.js', '/style.css'].includes(route)) {
+            if (req.method === 'GET' && ['/', '/app.js', '/i18n.js', '/select.js', '/markdown.js', '/style.css'].includes(route)) {
                 const file = route === '/' ? 'index.html' : route.slice(1);
                 return send(200, webAssets.get(file), file.endsWith('.css') ? 'text/css' : file.endsWith('.js') ? 'text/javascript' : 'text/html; charset=utf-8');
             }
             if (req.method === 'GET' && route === '/api/bootstrap') {
-                if (autoSync.passphrase) autoSync.checkCatalog(5 * 60 * 1000).catch(() => {});
+                if (autoSync.passphrase !== null) autoSync.checkCatalog(5 * 60 * 1000).catch(() => {});
                 return send(200, { token, demo, ...snapshot(), roots: native.roots, cloud: autoSync.status(), lastSync: store.local('lastSync'), plan: native.plan() });
             }
             const supplied = Buffer.from(req.headers['x-grove-token'] || '');
@@ -73,16 +80,18 @@ export function createApp({ root, roots, guard, demo = false }) {
                     throw Object.assign(new Error('JSON 格式错误'), { status: 400 });
                 }
                 assert(!autoSync.running, '同步进行中，请稍后操作', 409);
+                assert(settings.job?.state !== 'running', 'Settings migration in progress.', 409);
             }
             if (req.method === 'GET' && route === '/api/state')
                 return send(200, { ...snapshot(), cloud: autoSync.status(), discoveryError: store.local('discoveryError'), lastSync: store.local('lastSync'), plan: native.plan() });
-            if (req.method === 'GET' && route === '/api/diagnostics') return send(200, { ...diagnostics.report(), webdav: autoSync.cloud.connection?.dav.metrics || null, fallbackMinutes: 30 });
+            if (req.method === 'GET' && route === '/api/diagnostics') return send(200, { ...diagnostics.report(), webdav: autoSync.cloud.connection?.dav.metrics || null, fallbackMinutes: autoSync.status().fallbackMinutes });
             if (req.method === 'GET' && route === '/api/discover')
                 return send(200, native.discover());
-            if (req.method === 'GET' && route === '/api/webdav') {
-                const c = json(configFile, {});
-                return send(200, { url: c.url || '', username: c.username || '', hasPassword: !!c.password });
-            }
+            if (req.method === 'GET' && ['/api/webdav', '/api/settings'].includes(route)) return send(200, settings.status());
+            if (req.method === 'POST' && route === '/api/settings/verify') return send(200, await settings.verify(body));
+            if (req.method === 'POST' && route === '/api/settings/confirm') return send(202, settings.start(body));
+            if (req.method === 'POST' && route === '/api/settings/recover') return send(200, await settings.recover());
+            if (req.method === 'POST' && route === '/api/settings/timers') return send(200, settings.timers(body));
             if (req.method === 'GET' && route === '/api/list') {
                 const check = url.searchParams.get('check') === '1';
                 const scope = url.searchParams.get('scope') || 'active:codex', query = url.searchParams.get('q') || '';
@@ -104,7 +113,7 @@ export function createApp({ root, roots, guard, demo = false }) {
             if (req.method === 'POST' && route === '/api/activation-check') return send(200, activationInfo(store, native, body.branchId, body.cwd));
             if (req.method === 'POST' && route === '/api/manage') {
                 assert(['activate', 'deactivate', 'archive', 'restore'].includes(body.action), 'Unknown session action.');
-                if (body.projectId && autoSync.passphrase) {
+                if (body.projectId && autoSync.passphrase !== null) {
                     await autoSync.openProject(body.projectId);
                     for (const i of autoSync.cloud.items().filter(i => i.projectId === body.projectId)) await autoSync.openTree(i.id);
                 }
@@ -172,6 +181,8 @@ export function createApp({ root, roots, guard, demo = false }) {
             }
             const compaction = route.match(/^\/api\/branches\/([^/]+)\/compaction$/);
             if (req.method === 'POST' && compaction) return send(200, store.setCompaction(compaction[1], body));
+            const record = route.match(/^\/api\/branches\/([^/]+)\/records\/(\d+)$/);
+            if (req.method === 'GET' && record) { const branch = store.get('branch', record[1]); assert(url.searchParams.get('head') === branch.head, 'History changed. Refresh before opening this record.', 409); const r = store.parsed(branch.head, branch.agent).records[Number(record[2]) - 1]; assert(r, 'Record not found.', 404); return send(200, { value: r.value, raw: r.raw }); }
             const detail = route.match(/^\/api\/branches\/([^/]+)$/);
             if (req.method === 'GET' && detail)
                 return send(200, store.detail(detail[1]));
@@ -210,12 +221,7 @@ export function createApp({ root, roots, guard, demo = false }) {
                 return send(200, native.apply());
             if (req.method === 'POST' && route === '/api/recover')
                 return send(200, native.recover(body.id));
-            if (req.method === 'POST' && route === '/api/webdav') {
-                const old = json(configFile, {}), url = new URL(body.url);
-                assert(['http:', 'https:'].includes(url.protocol), '无效 URL');
-                atomic(configFile, JSON.stringify({ url: body.url, username: String(body.username || ''), password: body.password || old.password || '' }));
-                return send(200, { saved: true });
-            }
+            if (req.method === 'POST' && route === '/api/webdav') return send(200, await settings.verify(body));
             if (req.method === 'POST' && route === '/api/cloud/check') { await autoSync.checkCatalog(5 * 60 * 1000); return send(200, autoSync.status()); }
             if (req.method === 'POST' && route === '/api/sync/lock') {
                 autoSync.lock();
@@ -266,17 +272,19 @@ export function createApp({ root, roots, guard, demo = false }) {
             send(e.status || 400, { error: e.message, requestId });
         }
     });
-    const interval = setInterval(() => {
-        if (!autoSync.running) {
-            try {
-                const start = performance.now(), r = native.refreshLocal();
-                if (r.updates.length || r.discovered || r.errors.length) diagnostics.record('capture', { updated: r.updates.length, discovered: r.discovered, count: r.errors.length, durationMs: Math.round(performance.now() - start) });
-                // Native chat growth updates local Pending only; organization queues upload.
+    function configureCapture() {
+        clearInterval(interval);
+        const p = preferences(store);
+        if (!p.localUpdateEnabled) return;
+        interval = setInterval(() => {
+            if (!autoSync.running && settings.job?.state !== 'running') {
+                try { const start = performance.now(), r = native.refreshLocal();
+                    if (r.updates.length || r.discovered || r.errors.length) diagnostics.record('capture', { updated: r.updates.length, discovered: r.discovered, count: r.errors.length, durationMs: Math.round(performance.now() - start) });
+                } catch { diagnostics.record('capture-error', { code: 'capture_failed' }); }
             }
-            catch { diagnostics.record('capture-error', { code: 'capture_failed' }); }
-        }
-    }, 10000);
-    interval.unref();
+        }, p.localUpdateMinutes * 60000); interval.unref();
+    }
+    configureCapture();
     server.on('close', () => { clearInterval(interval); autoSync.close(); store.close(); });
-    return { server, store, native, autoSync, diagnostics };
+    return { server, store, native, autoSync, diagnostics, settings };
 }

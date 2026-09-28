@@ -135,11 +135,11 @@ test('remote archives update cached list projections without fetching bodies or 
     assert.equal(b.cloud.listing(p.id).itemCount, 0); assert.equal(b.cloud.listing('archived').itemCount, 1);
     assert.deepEqual(b.cloud.dirtyIds(), []); assert.ok(!requests.some(([m, p]) => m === 'GET' && /\/(trees|objects)\//.test(p)));
 });
-test('cached page refreshes and repeated opens make no remote requests; fallback is thirty minutes', async t => {
+test('cached page refreshes and repeated opens make no remote requests; fallback is fifteen minutes', async t => {
     const env = await setup(t), { pass, config, requests } = env, a = env.device('a');
     const project = a.store.project('Event sync'), item = branch(a.store, project.id, 'Main');
     const auto = new AutoSync(a.store, () => config); t.after(() => auto.close()); auto.unlock(pass);
-    await auto.flush('both', true); assert.equal(auto.interval._idleTimeout, 30 * 60 * 1000);
+    await auto.flush('both', true); assert.equal(auto.interval._idleTimeout, 15 * 60 * 1000);
     requests.length = 0;
     for (let i = 0; i < 25; i++) { await auto.openProject(project.id); await auto.openTree(item.id); await auto.checkCatalog(); }
     assert.equal(requests.length, 0);

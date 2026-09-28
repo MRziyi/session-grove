@@ -1,4 +1,4 @@
-import { assert, hash, now } from './util.js';
+import { assert, hash } from './util.js';
 export const policyHash = policy => hash(JSON.stringify([...(policy?.disabled || [])].sort()));
 export const validPolicy = policy => !policy || Array.isArray(policy.disabled) && policy.disabled.every(id => typeof id === 'string' && /^[a-f0-9]{64}$/.test(id));
 export function contextProjection(parsed, agent, policy, nativeId, cwd) {
@@ -8,12 +8,10 @@ export function contextProjection(parsed, agent, policy, nativeId, cwd) {
         remove.add(event.line); if (event.summaryLine) remove.add(event.summaryLine);
     }
     if (agent === 'codex') {
-        assert(parsed.records.every(r => !r.value || ['session_meta', 'response_item', 'event_msg', 'turn_context', 'world_state', 'token_usage_record', 'compacted'].includes(r.value.type)), 'This history format cannot be rebuilt safely.');
-        const kept = parsed.records.filter((r, i) => !remove.has(i + 1) && (['response_item', 'compacted'].includes(r.value?.type) || r.value?.type === 'event_msg' && ['task_started', 'task_complete', 'user_message', 'agent_message', 'item_completed'].includes(r.value.payload?.type)));
-        // Rebuild a fresh legacy rollout from conversation items. Do not replay a
-        // paginated world's old permission/environment settings on this device.
-        const meta = { timestamp: now(), type: 'session_meta', payload: { id: nativeId, timestamp: now(), cwd, source: 'cli', originator: 'session_grove', cli_version: parsed.meta?.cli_version || '', model_provider: parsed.meta?.model_provider || 'openai', history_mode: 'legacy' } };
-        return [{ value: meta, raw: JSON.stringify(meta) + '\n' }, ...kept];
+        assert(!parsed.meta?.history_mode || parsed.meta.history_mode === 'legacy', 'Paginated history cannot be rebuilt with verified context fidelity. Resume the original native session.');
+        // Preserve every original record and unknown field. Only an explicitly
+        // disabled compaction boundary is removed; never synthesize new instructions.
+        return parsed.records.filter((r, i) => !remove.has(i + 1));
     }
     // Claude compact summaries can start a new parent chain. Reconnect only the
     // removed boundary/summary UUIDs to the retained prefix when expansion is requested.

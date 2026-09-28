@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.7.0
+
+- Progressive WebDAV verification, fixed application folder, masked saved secrets, optional encryption and verified key migration with progress.
+- Configurable one-minute local capture and dirty-only fifteen-minute upload fallback; capture before every upload.
+- Markdown transcripts with tools, named files, reasoning and recorded-instruction inspection.
+- Record-preserving activation; reject unverified paginated rewrites instead of downgrading histories.
+- Sidebar About/Information, separate settings and diagnostics, and `pnpm dev`.
+
 ## 0.2.0
 
 - Default English interface, persistent Chinese switch, and localized forms / status labels.

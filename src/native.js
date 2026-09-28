@@ -172,7 +172,7 @@ export class Native {
         }
         else {
             let instance = [...instances].reverse().find(i => i.branchId === branchId && i.cwd === cwd && i.root === this.roots[b.agent]);
-            if (instance?.adopted && (this.store.parsed(b.head, b.agent).meta?.history_mode === 'paginated' || b.contextPolicy && (instance.contextPolicyHash || policyHash(null)) !== policyHash(b.contextPolicy))) { instance.desired = false; instance = null; }
+            if (instance?.adopted && ((instance.contextPolicyHash || policyHash(null)) !== policyHash(b.contextPolicy))) { instance.desired = false; instance = null; }
             if (!instance) {
                 instance = { id: id(), branchId, agent: b.agent, root: this.roots[b.agent], nativeId: id(), cwd, desired: true, applied: false, file: null, baseRevision: b.head, baseline: '', adopted: false };
                 instances.push(instance);
@@ -297,7 +297,8 @@ export class Native {
                     const raw = this.store.raw(b.head), parsed = parse(raw, b.agent);
                     assert(!this.store.detail(b.id).lineage.some(r => r.source.requiresAuxiliary), '此分支继承了含伴随目录的会话，当前版本尚不支持完整物化');
                     assert(!parsed.warnings.some(w => w.includes('外部附件')), '此会话包含外部附件引用。当前版本可浏览和分支，完整附件迁移尚未支持。');
-                    const output = renderNative(raw, b.agent, i.nativeId, i.cwd, b.name, b.contextPolicy || (b.agent === 'codex' && parsed.meta?.history_mode === 'paginated' ? { disabled: [] } : null));
+                    const original = i.adopted && i.baseRevision === b.head && (i.contextPolicyHash || policyHash(null)) === policyHash(b.contextPolicy) && parsed.cwd === i.cwd;
+                    const output = original ? (i.baseline ?? raw) : renderNative(raw, b.agent, i.nativeId, i.cwd, b.name, b.contextPolicy);
                     const dest = safePath(root, op.file);
                     assert(!fs.existsSync(dest) || dest === i.file, '目标记录已存在，拒绝覆盖');
                     backup(dest);

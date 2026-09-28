@@ -1,4 +1,4 @@
-import { randomBytes, scryptSync } from 'node:crypto';
+import { createVault, vaultKey } from './vault.js';
 import { WebDAV, seal, unseal } from './sync.js';
 import { assert, hash, now, mapConcurrent } from './util.js';
 import { parse } from './transcript.js';
@@ -37,18 +37,16 @@ export class Cloud {
         await dav.mkdir();
         let bytes = await dav.get('vault.json');
         if (!bytes) {
-            const salt = randomBytes(16).toString('hex'), key = scryptSync(passphrase, salt, 32);
-            await dav.put('vault.json', Buffer.from(JSON.stringify({ schema: 1, salt, check: seal('session-grove', key).toString('base64') })), true);
+            const { vault } = createVault(passphrase);
+            await dav.put('vault.json', Buffer.from(JSON.stringify(vault)), true);
             bytes = await dav.get('vault.json');
         }
-        const vault = JSON.parse(bytes.toString());
-        assert(vault.schema === 1 && /^[a-f0-9]{32}$/.test(vault.salt), 'Unsupported cloud vault.');
-        const key = scryptSync(passphrase, vault.salt, 32);
-        assert(unseal(Buffer.from(vault.check, 'base64'), key) === 'session-grove', 'Incorrect encryption passphrase.');
-        for (const dir of ['objects/', 'trees/', 'projects/', 'heads/']) await dav.mkdir(dir);
+        const vault = JSON.parse(bytes.toString()), key = vaultKey(vault, passphrase);
+        const rootDav = dav, dataDav = vault.generation ? dav.scoped('generations/' + vault.generation + '/') : dav;
+        for (const dir of ['objects/', 'trees/', 'projects/', 'heads/']) await dataDav.mkdir(dir);
         this.cacheKey = 'cloud:' + hash(dav.base + vault.salt);
         this.store.local('cloudCacheKey', this.cacheKey);
-        return this.connection = { dav, key, signature };
+        return this.connection = { dav: dataDav, rootDav, vaultBytes: bytes, key, signature };
     }
     useSavedCache() { this.cacheKey ||= this.store.local('cloudCacheKey'); }
     lock() { this.connection = null; }
@@ -68,7 +66,10 @@ export class Cloud {
         });
     }
     async catalog(passphrase) {
-        const { dav, key } = await this.connect(passphrase), c = this.cache();
+        const connection = await this.connect(passphrase);
+        const current = await connection.rootDav.get('vault.json');
+        if (!current?.equals(connection.vaultBytes)) { this.lock(); throw new Error('Cloud encryption settings changed. Reconnect in Settings.'); }
+        const { dav, key } = connection, c = this.cache();
         const names = await dav.list('heads/', /^[a-f0-9-]+\.bin$/);
         for (const name of names) {
             const response = await dav.request('GET', 'heads/' + name, undefined, c.heads[name]?.etag ? { 'If-None-Match': c.heads[name].etag } : {});
@@ -166,7 +167,8 @@ export class Cloud {
     async publish(treeIds, passphrase, { catalogFresh = false } = {}) {
         if (!catalogFresh) await this.catalog(passphrase);
         else await this.connect(passphrase);
-        const { dav, key } = this.connection;
+        const { dav, key, rootDav, vaultBytes } = this.connection;
+        assert(!await rootDav.get('migration.json'), 'Cloud migration in progress; retry after it completes.');
         const projectIds = new Set(treeIds.map(id => this.store.get('branch', id).projectId).filter(Boolean));
         const before = this.cache();
         if (Object.keys(before.legacyGraphs || {}).length) for (const p of this.summaries()) projectIds.add(p.id);
@@ -212,6 +214,7 @@ export class Cloud {
         }
         const head = { schema: 4, deviceId: this.store.device.id, at: now(), projects: [...ownProjects.values()] };
         // Publication point: every referenced immutable dependency is already durable.
+        assert((await rootDav.get('vault.json'))?.equals(vaultBytes) && !await rootDav.get('migration.json'), 'Cloud settings changed before publication.');
         await dav.put('heads/' + this.store.device.id + '.bin', seal(head, key));
         c.heads[this.store.device.id + '.bin'] = head; c.ownProjects = head.projects;
         c.locations ||= {};

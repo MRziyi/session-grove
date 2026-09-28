@@ -9,11 +9,12 @@ import { Store } from '../src/store.js';
 import { Cloud } from '../src/cloud.js';
 import { AutoSync } from '../src/auto-sync.js';
 import { Native } from '../src/native.js';
+import { migrateVault } from '../src/vault.js';
 import { WebDAV } from '../src/sync.js';
 import { codexSample, codexTurn, claudeSample } from '../src/demo.js';
 const configFile = process.argv[2] || path.join(os.homedir(), '.session-grove/webdav.json');
 const config = JSON.parse(fs.readFileSync(configFile, 'utf8'));
-const passphrase = fs.readFileSync(path.join(path.dirname(configFile), 'sync-key.txt'), 'utf8').trim();
+const passphrase = fs.readFileSync(path.join(path.dirname(configFile), 'sync-key.txt'), 'utf8').replace(/\r?\n$/, '');
 const base = new URL(config.url);
 assert.equal(base.protocol, 'https:'); assert.ok(base.pathname.split('/').filter(Boolean).length >= 2, 'Use a dedicated folder below the DAV root.');
 base.pathname = base.pathname.replace(/\/?$/, '/');
@@ -24,7 +25,7 @@ const remote = async (method, url) => {
     controlRequests++; return fetch(url, { method, headers: { Authorization: authorization }, redirect: 'error', signal: AbortSignal.timeout(30000) });
 };
 const started = performance.now(), totalCpuStart = process.cpuUsage(), connections = new Set();
-const report = { version: '0.6.0', startedAt: new Date().toISOString(), checks: {}, cleaned: false };
+const report = { version: '0.7.0', startedAt: new Date().toISOString(), checks: {}, cleaned: false };
 const root = fs.mkdtempSync(path.join(os.tmpdir(), 'grove-provider-')), stores = [];
 const folder = 'self-check-' + Date.now() + '-' + randomBytes(4).toString('hex');
 const target = new URL(folder + '/', base).href;
@@ -80,8 +81,13 @@ try {
     assert.equal(a.store.get('branch', codex.id).archived, true); report.checks.archiveSync = true;
     b.store.edit(codex.id, { archived: false }); auto.schedule([codex.id]); await auto.flush('queued');
     native.setActive(codex.id, workspace, true); native.apply([codex.id]); assert.equal(b.store.treeGraph(codex.id).chatCount, 6); report.checks.restore = true;
+    const rotated = 'isolated-rotation-' + randomBytes(16).toString('hex');
+    await migrateVault(testConfig, testConfig, passphrase, rotated, p => { report.migration = p; });
+    const c = device('rotation'); await c.cloud.catalog(rotated); await c.cloud.project(project.id, rotated); await c.cloud.hydrate(codex.id, rotated);
+    assert.equal(c.store.raw(c.store.get('branch', codex.id).head), b.store.raw(b.store.get('branch', codex.id).head)); report.checks.reEncryption = true;
+    await migrateVault(testConfig, testConfig, rotated, ''); c.cloud.lock(); await c.cloud.catalog(''); assert.equal(c.cloud.connection.key, null); report.checks.optionalEncryption = true;
 } catch (e) {
-    report.failure = { type: e.name, code: e.code || 'CHECK_FAILED' };
+    report.failure = { type: e.name, code: e.code || 'CHECK_FAILED', message: [config.password, passphrase, config.username, config.url].filter(Boolean).reduce((s, value) => s.split(value).join('[redacted]'), e.message) };
     console.error(`Provider verification failed: ${e.name}${e.code ? ' (' + e.code + ')' : ''}. No credentials were printed.`);
     process.exitCode = 1;
 } finally {
@@ -91,7 +97,7 @@ try {
         catch { report.cleanupRequired = folder; process.exitCode = 1; }
     }
     const totalCpu = process.cpuUsage(totalCpuStart);
-    report.performance = { wallMs: Math.round(performance.now() - started), cpuMs: Math.round((totalCpu.user + totalCpu.system) / 1000), requests: controlRequests + [...connections].reduce((n, c) => n + c.metrics.requests, 0), payloadBytesSent: [...connections].reduce((n, c) => n + c.metrics.bytesSent, 0), payloadBytesReceived: [...connections].reduce((n, c) => n + c.metrics.bytesReceived, 0), memoryMB: Math.round(process.memoryUsage().rss / 1048576) };
+    report.performance = { wallMs: Math.round(performance.now() - started), cpuMs: Math.round((totalCpu.user + totalCpu.system) / 1000), requests: controlRequests + [...new Set([...connections].map(c => c.metrics))].reduce((n, c) => n + c.requests, 0), payloadBytesSent: [...new Set([...connections].map(c => c.metrics))].reduce((n, c) => n + c.bytesSent, 0), payloadBytesReceived: [...new Set([...connections].map(c => c.metrics))].reduce((n, c) => n + c.bytesReceived, 0), memoryMB: Math.round(process.memoryUsage().rss / 1048576) };
     report.finishedAt = new Date().toISOString();
     fs.writeFileSync(path.join(path.dirname(configFile), 'provider-verification.json'), JSON.stringify(report, null, 2), { mode: 0o600 });
     console.log(JSON.stringify(report));

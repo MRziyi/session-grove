@@ -1,6 +1,6 @@
 # Context visibility and incremental cloud sync
 
-Updated for 0.6.0. This document complements the [interaction model](interaction-model.md).
+Updated for 0.7.0. This document complements the [interaction model](interaction-model.md).
 
 ## Three different token quantities
 
@@ -51,15 +51,15 @@ References checked for this change:
 | Activate / Deactivate alone | Change device-local native availability | None |
 | Resolve an organization conflict | Save the chosen version with merge ancestry | Queue the changed tree |
 | Manual Sync | Preserve all current history | Publish dirty filed trees, including remaining Pending |
-| Background interval | Refresh cloud directory | Read indexes; no automatic Pending publication |
+| Background interval | Capture local records first | Upload dirty filed trees, including Pending; no requests when unchanged |
 
-Management changes debounce for two seconds. Only affected trees are queued, so organizing one project does not automatically publish unrelated Pending in another. An uploaded tree is a coherent snapshot including any remaining Pending; the trigger policy controls **when**, not whether the transcript is complete. New native changes arriving later remain local until another organization action or manual Sync.
+Management changes debounce for two seconds. Only affected trees are queued, so organizing one project does not automatically publish unrelated Pending in another. An uploaded tree is a coherent snapshot including any remaining Pending; the trigger policy controls **when**, not whether the transcript is complete. New native changes arriving later remain local until an organization action, manual Sync or the dirty-only fallback.
 
-The queue survives a service restart, retries after failures and remains pending while locked. Background fallback checks run every 30 minutes while configured and unlocked; normal UI refreshes do not check the cloud. Explicit opens use freshness windows, and failed automatic operations back off. See [sync policy](sync-policy.md). Opening a browser also requests a directory check when the service is unlocked.
+The queue survives a service restart, retries after failures and remains pending while locked. Background upload fallback defaults to 15 minutes while configured and unlocked and runs only for dirty project content; normal UI refreshes do not check the cloud. Explicit opens use freshness windows, and failed automatic operations back off. See [sync policy](sync-policy.md). Opening a browser also requests a directory check when the service is unlocked.
 
 Sync has a single explicit role: publish unsent filed changes (including Pending) and refresh the cloud directory. Its tooltip shows last publication/check times. It remains useful without local changes because the directory may have changed remotely. Cloud glyphs show cached, cloud-only, updated and local-unsent states. Language and connection settings are in Settings.
 
-The encryption passphrase remains in memory under the existing policy: service restart still requires unlocking. Automatic synchronization is available after configuration/unlock; an optional explicit `--sync-key-file` supports operator-managed unattended startup; it is not macOS Keychain integration.
+Settings saves credentials and the optional key in owner-only local files. Empty keys mean explicitly unencrypted vaults. The next `pnpm dev` reuses saved settings. This is not Keychain integration.
 
 ## Three levels of cloud loading
 
@@ -108,8 +108,13 @@ Each path has a synchronized `contextPolicy` listing disabled compaction event I
 
 Apply is explicit for active paths; inactive paths use the choice on Activate. For adopted native sessions, a changed context is materialized into a new native instance and the previous instance is parked under the normal journal/rollback mechanism. Capturing subsequent native updates reattaches the new suffix to the retained original revision, so toggling does not destroy earlier history.
 
-Recognized Codex paginated records are rebuilt as a fresh compatible legacy conversation containing message/tool/reasoning items and selected compaction records. Old world-state permission/environment settings are not replayed. Unknown rollout types fail closed. Enabled opaque payloads are preserved; they are not decoded. Both enabled and expanded variants passed real Codex read/resume checks in an isolated home without model requests. That validates native loading, not a generated answer's quality.
+Codex legacy materialization preserves all recorded response items, tool inputs/results, reasoning, metadata instructions, turn settings and unknown fields. Only declared session identity/path fields and explicitly disabled compaction records change. Unverified paginated rewrites are blocked instead of converted to legacy. An adopted, unchanged native paginated file can be parked and restored byte-for-byte to its original working path.
 
 For recognized Claude boundaries, expanding omits the boundary/summary and reconnects known parent UUIDs to the retained prefix. Real Claude-client verification is still outstanding. The UI cannot offer expansion when no recorded prefix is available.
 
-All writing devices should use 0.6.0+ to honor path context policies. A native agent may compact again during later work; the switch does not change its global auto-compaction configuration. Expanded-history token estimates can differ substantially from the previous compacted input usage and are checked again at activation.
+All writing devices should use 0.7.0+ to honor path context policies. A native agent may compact again during later work; the switch does not change its global auto-compaction configuration. Expanded-history token estimates can differ substantially from the previous compacted input usage and are checked again at activation.
+
+
+## Optional encryption and key changes
+
+Schema 1 encrypted vaults remain readable. Schema 2 adds an explicit `encrypted`/`plain` mode and an optional generation pointer. Plain objects carry a format header and compression; they are not encrypted. Rekeying stages every old cloud object in a new generation, including unopened trees, and verifies every decoded read-back. A matching strong ETag or an exclusive WebDAV lock protects replacement of `vault.json`. Old files are removed only after verified publication; cleanup errors remain visible. The local private migration journal keeps the destination key until local settings commit. See the settings state machine in the interaction model.
