@@ -1,4 +1,4 @@
-# Requirements and context-fidelity audit — 0.7.1
+# Requirements and context-fidelity audit — 0.8.0
 
 | Requirement | Status / evidence |
 | --- | --- |
@@ -40,3 +40,13 @@ External attachments/companion directories still block unsupported materializati
 The installed VS Code Codex executable (`0.155.0-alpha.16.3`) supports experimental paginated read/resume/fork. Blanket disabling based on older public documentation was too broad. `scripts/codex-fork-smoke.js` compares native `thread/fork(lastTurnId)` with Grove Fork → Activate using private, isolated copies, no authentication and no model turns. One comparison matched 46 projected items and 88 complete response-item payloads. Another matched 79 items and 134 payloads while explicitly disabling compaction, then re-enabling it and resuming a fresh native projection. World-state and base instructions matched; source file hashes remained unchanged. No personal fixture or transcript is committed.
 
 `history_base` may reference a parent thread, an earlier segment of the same thread, or a context-window segment UUID. Its byte offset and exclusive ordinal bound the inherited prefix. The complete chain is resolved before inference, display, export or materialization. Earlier unselected suffixes are not appended to the selected path. Referenced parent segments remain discoverable when a parent is deactivated.
+
+## 0.8 review
+
+- Ungrouped now synchronizes, supports lazy retrieval and keeps device Active separate. Time grouping and batch archive address everyday-session growth without mandatory categorization.
+- Lists/Nodes expose actual tool provenance; device badges identify the latest content source. Cross-agent context conversion remains unimplemented and has no selectable placeholder. A future conversion must preserve prefix provenance and mark the new suffix with its actual tool.
+- Native ancestry uses verified pointer bounds and immutable reference slices, bypassing content comparison. Ordinal gaps caused by explicitly disabled compaction are accepted when order is valid.
+- Ongoing turns may be captured for display; unsafe materialization still waits for completion. No-op applies bypass process checks; writes only check the target Agent. Missing history, unsupported attachments and index-schema checks remain necessary.
+- Cached summaries avoid re-parsing old transcripts for list refreshes. Appends hash new fragments only; graph traversal uses indexes and a topological queue.
+- Configuration changes queue behind running sync rather than failing immediately. Cloud cache writes use independent objects across vaults.
+- Remote archive/native Active differences are explicit pending actions rather than silently hidden rows.

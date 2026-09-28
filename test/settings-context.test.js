@@ -89,3 +89,10 @@ test('weak ETag providers use a short exclusive DAV lock for the verified pointe
  await migrateVault(e.config,e.config,pass,'new-synthetic-key');assert.ok(e.requests.some(([m])=>m==='LOCK'));assert.ok(e.requests.some(([m])=>m==='UNLOCK'));
  const c=e.device('reader');await c.cloud.catalog('new-synthetic-key');await c.cloud.project(p.id,'new-synthetic-key');await c.cloud.hydrate(b.id,'new-synthetic-key');assert.equal(c.store.raw(c.store.get('branch',b.id).head),a.store.raw(b.head));
 });
+
+test('settings confirmation queues behind a running sync instead of rejecting the user',async t=>{
+ const e=await fixture(t),a=e.device('settings-wait'),auto=new AutoSync(a.store,()=>settings.read()),settings=new Settings(a.store.root,a.store,auto,()=>{});t.after(()=>auto.close());
+ await settings.verify(e.config);settings.start({passphrase:'initial-settings-key'});await settings.pending;assert.equal(settings.job.state,'complete');
+ let release;const active=auto.exclusive(()=>new Promise(r=>release=r));await new Promise(r=>setTimeout(r,0));
+ settings.start({passphrase:'replacement-settings-key'});assert.equal(settings.job.phase,'waiting');release();await active;await settings.pending;assert.equal(settings.job.state,'complete');assert.equal(auto.passphrase,'replacement-settings-key');
+});

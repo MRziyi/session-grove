@@ -49,11 +49,25 @@ test('self-contained paginated materialization preserves model items and exposes
  const f=fixture(t),rows=parse(readCodexHistory(f.currentFile,codexFiles(f.home)),'codex').records.map(r=>r.value);rows.push({type:'compacted',ordinal:rows.length,payload:{message:'Summary',replacement_history:[{type:'compaction',encrypted_content:'opaque-preserved'}]}});rows.push(...codexTurn('After compact','Done').map((v,i)=>({...v,ordinal:rows.length+i})));
  const raw=lines(rows),project=f.store.project('Work'),b=f.store.branch(project.id,'Main','codex',raw),p=parse(raw,'codex'),event=p.context.compactions[0];
  f.store.setCompaction(b.id,{head:b.head,eventId:event.id,enabled:false});assert.equal(f.store.treeGraph(b.id).paths[0].canRewriteContext,true);
- const output=parse(renderNative(raw,'codex',randomUUID(),f.root,'Continued',{disabled:[event.id]}),'codex');assert.equal(output.context.compactions.length,0);assert.ok(output.records.filter(r=>r.value.type==='session_meta').every(r=>!r.value.payload.history_base));
+ const output=parse(renderNative(raw,'codex',randomUUID(),f.root,'Continued',{disabled:[event.id]}),'codex');assert.equal(output.context.compactions.length,0);assert.equal(supportedHistory(output),true);assert.ok(output.records.filter(r=>r.value.type==='session_meta').every(r=>!r.value.payload.history_base));
  assert.deepEqual(output.records.filter(r=>r.value.type==='response_item').map(r=>r.value.payload),p.records.filter(r=>r.value.type==='response_item').map(r=>r.value.payload));assert.equal(f.store.raw(b.head),raw);
 });
 
 test('deactivating a paginated parent keeps its native prefix reachable by active children',t=>{
  const f=fixture(t),native=new Native(f.store,{roots:{codex:f.home,claude:path.join(f.root,'claude')},guard:()=>{}});native.refreshLocal();const parent=f.store.all('branch').find(b=>!b.synthetic&&f.store.parsed(b.head,'codex').nativeId===f.parentId),expected=readCodexHistory(f.currentFile,codexFiles(f.home));
  native.setActive(parent.id,null,false);native.apply([parent.id]);assert.equal(readCodexHistory(f.currentFile,codexFiles(f.home)),expected);assert.equal(f.store.collections().activeCounts.codex,1);native.refreshLocal();assert.equal(f.store.collections().activeCounts.codex,1);
+});
+
+test('authoritative native pointers link already summarized sessions without parsing or hashing their prefix again',t=>{
+ const f=fixture(t),native=new Native(f.store,{roots:{codex:f.home,claude:path.join(f.root,'claude')},guard:()=>{}}),infer=f.store.detectFamilies;
+ f.store.detectFamilies=()=>({grouped:0});native.refreshLocal();f.store.detectFamilies=infer;
+ for(const b of f.store.all('branch'))f.store.summary(b.head,b.agent);
+ const before=f.store.db.prepare('SELECT COUNT(*) AS n FROM objects').get().n,original=f.store.parsed;f.store.parsed=()=>{throw new Error('Unexpected full-history parse');};
+ const result=f.store.detectFamilies();f.store.parsed=original;assert.equal(result.trustedLinks,1);assert.equal(f.store.db.prepare('SELECT COUNT(*) AS n FROM objects').get().n,before);
+});
+
+test('restart reuses verified summaries and file stamps without reading unchanged history bodies',t=>{
+ const f=fixture(t),roots={codex:f.home,claude:path.join(f.root,'claude')},native=new Native(f.store,{roots,guard:()=>{}});native.refreshLocal();native.refreshLocal();
+ const reopened=new Store(f.store.root);t.after(()=>reopened.close());const next=new Native(reopened,{roots,guard:()=>{}});reopened.raw=()=>{throw new Error('Unchanged history should not be read again');};
+ assert.equal(next.refreshLocal().errors.length,0);assert.equal(reopened.snapshot().items.length,1);assert.ok(reopened.snapshot().instances.every(i=>!('summaryJson' in i)&&!('baseline' in i)));
 });

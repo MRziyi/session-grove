@@ -157,3 +157,35 @@ test('failed automatic uploads back off instead of retrying on every local refre
     assert.ok(auto.status().retryAt > Date.now());
     await assert.rejects(auto.flush('both', true), /pause/); assert.equal(requests.length, 0);
 });
+
+test('Ungrouped is a shared lazy inbox, moves both ways, and never copies device Active',async t=>{
+    const {INBOX_ID}=await import('../src/inbox.js');const e=await setup(t),a=e.device('inbox-a'),b=e.device('inbox-b');
+    a.store.device={...a.store.device,name:'Studio',model:'Mac Studio',platform:'darwin',kind:'desktop'};
+    const loose=branch(a.store,null,'Daily note','Keep this daily context'),other=branch(a.store,null,'Other note');
+    await a.cloud.publish([loose.id,other.id],e.pass);e.requests.length=0;await b.cloud.catalog(e.pass);
+    assert.equal(b.store.all('branch').length,0);assert.equal(b.cloud.decorate(b.store.snapshot()).projects.find(p=>p.id===INBOX_ID).count,2);
+    assert.ok(!e.requests.some(([m,p])=>m==='GET'&&p.includes('/objects/')));
+    await b.cloud.project(INBOX_ID,e.pass);assert.equal(b.cloud.listing(INBOX_ID).itemCount,2);assert.equal(b.store.all('branch').length,0);
+    await b.cloud.hydrate(loose.id,e.pass);assert.equal(b.store.get('branch',loose.id).projectId,null);assert.equal(b.store.instances().length,0);assert.equal(b.cloud.dirtyIds().length,0);
+    assert.equal(b.cloud.listing(INBOX_ID).items.find(i=>i.id===loose.id).origin.model,'Mac Studio');
+    const project=b.store.project('Focused work');b.store.moveItems({itemIds:[loose.id],projectId:project.id});await b.cloud.publish([loose.id],e.pass);
+    await a.cloud.catalog(e.pass);await a.cloud.project(project.id,e.pass);await a.cloud.project(INBOX_ID,e.pass);
+    assert.equal(a.cloud.listing(project.id).itemCount,1);assert.equal(a.cloud.listing(INBOX_ID).itemCount,1);await a.cloud.hydrate(loose.id,e.pass);assert.equal(a.store.get('branch',loose.id).projectId,project.id);
+    a.store.moveItems({itemIds:[loose.id],projectId:INBOX_ID});await a.cloud.publish([loose.id],e.pass);await b.cloud.catalog(e.pass);await b.cloud.project(INBOX_ID,e.pass);await b.cloud.hydrate(loose.id,e.pass);assert.equal(b.store.get('branch',loose.id).projectId,null);
+    assert.equal(b.cloud.listing(INBOX_ID).itemCount,2);assert.equal(b.store.instances().length,0);
+    a.store.edit(loose.id,{archived:true});await a.cloud.publish([loose.id],e.pass);await b.cloud.catalog(e.pass);await b.cloud.project(INBOX_ID,e.pass);await b.cloud.hydrate(loose.id,e.pass);assert.equal(b.cloud.listing(INBOX_ID).itemCount,1);assert.equal(b.cloud.listing('archived').itemCount,1);
+    b.store.edit(loose.id,{archived:false});await b.cloud.publish([loose.id],e.pass);assert.equal(b.cloud.listing(INBOX_ID).itemCount,2);
+});
+test('cloud inbox removes an old standalone row when native ancestry folds it into another tree',async t=>{
+    const {INBOX_ID}=await import('../src/inbox.js');const e=await setup(t),a=e.device('merge-inbox'),b=e.device('reader-inbox');const one=branch(a.store,null,'Parent'),two=branch(a.store,null,'Child');await a.cloud.publish([one.id,two.id],e.pass);
+    a.store.put('branch',{...two,parentId:one.id,forkRevision:one.head,forkEnd:a.store.get('revision',one.head).refs.length});await a.cloud.publish([one.id],e.pass);
+    await b.cloud.catalog(e.pass);await b.cloud.project(INBOX_ID,e.pass);assert.equal(b.cloud.listing(INBOX_ID).itemCount,1);
+});
+test('cloud cache writes remain durable after a cached object is edited in place',async t=>{
+    const e=await setup(t),a=e.device('cache');a.store.local('cloud:test',{heads:{},ack:{}});const c=a.store.local('cloud:test');c.ack.example='updated';a.store.local('cloud:test',c);assert.equal(JSON.parse(a.store.db.prepare("SELECT body FROM local WHERE key='cloud:test'").get().body).ack.example,'updated');
+    const before=a.store.cloudVersion;a.store.local('cloud:test',c);assert.equal(a.store.cloudVersion,before);
+});
+
+test('vault caches stay independent when settings migration reuses the old cache',async t=>{
+ const e=await setup(t),a=e.device('independent-cache');a.store.local('cloud:old',{ack:{root:'before'}});a.store.local('cloud:new',a.store.local('cloud:old'));const next=a.store.local('cloud:new');next.ack.root='after';a.store.local('cloud:new',next);assert.equal(a.store.local('cloud:old').ack.root,'before');assert.equal(a.store.local('cloud:new').ack.root,'after');
+});

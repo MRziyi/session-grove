@@ -103,7 +103,7 @@ export function forest(store, scope) {
 // Compare complete semantic event sequences, never a bag of matching messages.
 // Volatile native identifiers are excluded, tool arguments/results remain included.
 function signatures(raw, agent) {
-    const p = parse(raw, agent), units = [];
+    const p = typeof raw === 'string' ? parse(raw, agent) : raw, units = [];
     for (let i = 0; i < p.records.length; i++) {
         const v = p.records[i].value;
         if (agent === 'codex' && v?.type === 'response_item') {
@@ -118,16 +118,34 @@ function signatures(raw, agent) {
     return { p, boundaries: p.checkpoints.map(c => ({ end: c.end, count: p.messages.filter(m => m.line <= c.end && m.role !== 'tool').length, key: hash(units.filter(u => u.line <= c.end).map(u => u.key).join(':')) })) };
 }
 export function detectFamilies(store) {
-    let grouped = 0;
+    let grouped = 0, trustedLinks = 0;
+    const parsedById = new Map(); const parsed = b => { if (!parsedById.has(b.id)) parsedById.set(b.id,store.parsed(b.head,b.agent)); return parsedById.get(b.id); };
+    const branches = store.all('branch').filter(b => !b.synthetic && !b.excluded), byId = new Map(branches.map(b => [b.id,b])), nativeParents = new Map();
+    for (const i of store.instances()) if (byId.has(i.branchId)) nativeParents.set(i.nativeId, byId.get(i.branchId));
+    for (const b of branches) { const p = store.summary(b.head,b.agent); if (p.nativeId && !nativeParents.has(p.nativeId)) nativeParents.set(p.nativeId,b); }
+    // Native pointers already identify the parent and exact prefix. Pin those
+    // existing immutable object references; do not hash/compare the conversation.
+    for (const b of branches.filter(b => !b.parentId && !b.projectId && !b.archived && !b.layoutHead && !b.nodeHead)) {
+        const p = store.summary(b.head,b.agent), cutoff = p.forkOrdinal, parent = nativeParents.get(p.forkedFrom);
+        if (parent?.projectId && store.get('project',parent.projectId).archived) continue;
+        if (b.agent !== 'codex' || p.mode !== 'paginated' || !p.supported || !parent || parent.id === b.id || parent.agent !== b.agent || !Number.isSafeInteger(cutoff) || cutoff <= 0 || rootOf(store,parent.id).id === b.id) continue;
+        const end = p.forkEnd; if (end <= 0 || end >= store.get('revision',b.head).refs.length) continue;
+        const source = store.get('revision',b.head), frozen = { id:id(), parent:null, refs:source.refs.slice(0,end), createdAt:now(), source:{ ...store.get('revision',parent.head).source, operation:'native-fork-snapshot' } };
+        store.put('revision',frozen);
+        store.put('branch',metadata(b,{parentId:parent.id,projectId:parent.projectId,forkRevision:frozen.id,forkEnd:end,forkParentEnd:end,inferred:true,nativeLinked:true}));
+        grouped++; trustedLinks++;
+    }
+
     // Only automatically organize the unfiled inbox; user project structure is authoritative.
     let roots = store.all('branch').filter(b => !b.projectId && !b.parentId && !b.archived && !b.excluded);
     const signaturesById = new Map();
     const get = b => { if (!signaturesById.has(b.id))
-        signaturesById.set(b.id, signatures(store.raw(b.head), b.agent)); return signaturesById.get(b.id); };
+        signaturesById.set(b.id, signatures(parsed(b), b.agent)); return signaturesById.get(b.id); };
     // Native forks can arrive after their parent was filed or organized. Keep
     // the existing family root and its annotations when adopting such a fork.
     for (const fresh of [...roots]) {
         if (fresh.synthetic || fresh.layoutHead || fresh.nodeHead) continue;
+        if (store.summary(fresh.head,fresh.agent).mode === 'paginated') continue;
         const x = get(fresh);
         const candidates = store.all('branch').filter(b => b.id !== fresh.id && b.agent === fresh.agent && !b.archived && !b.excluded && (b.projectId || b.parentId || b.synthetic || b.layoutHead || b.nodeHead));
         let best = null;
@@ -153,6 +171,7 @@ export function detectFamilies(store) {
             // Existing named logical nodes are never silently reorganized by inference.
             if ([left, right].some(b => !b.synthetic && store.all('node').some(n => n.branchId === b.id)))
                 continue;
+            if ([left,right].some(b => store.summary(b.head,b.agent).mode === 'paginated')) continue;
             const x = get(left), y = get(right);
             if (!x.p.cwd || x.p.cwd !== y.p.cwd)
                 continue;
@@ -188,5 +207,5 @@ export function detectFamilies(store) {
             grouped++;
             roots.push(root);
         }
-    return { grouped };
+    return { grouped, trustedLinks };
 }

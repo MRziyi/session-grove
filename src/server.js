@@ -1,3 +1,5 @@
+import { VERSION } from './version.js';
+import { INBOX_ID, inboxProject } from './inbox.js';
 import { Settings } from './settings.js';
 import { preferences } from './preferences.js';
 import http from 'node:http';
@@ -22,27 +24,28 @@ export function createApp({ root, roots, guard, demo = false }) {
     const diagnostics = new Diagnostics(root);
     const autoSync = new AutoSync(store, () => json(configFile, {}));
     autoSync.diagnostics = diagnostics;
-    autoSync.beforeUpload = () => { const r = native.refreshLocal(); diagnostics.record('capture', { updated: r.updates.length, discovered: r.discovered, count: r.errors.length }); };
-    let interval;
+    autoSync.beforeUpload = () => captureLocal();
+    let interval, nextCaptureAt = null, lastCaptureAt = null;
     const settings = new Settings(root, store, autoSync, configureCapture); settings.diagnostics = diagnostics;
     const savedKey = settings.savedKey();
     if (savedKey !== null && !fs.existsSync(settings.journal)) autoSync.unlock(savedKey);
     try {
-        const started = performance.now(), captured = native.refreshLocal();
+        const started = performance.now(), captured = captureLocal();
         diagnostics.record('capture', { mode: demo ? 'demo' : 'personal', discovered: captured.discovered, updated: captured.updates.length, count: captured.errors.length, durationMs: Math.round(performance.now() - started) });
     }
     catch (e) {
         diagnostics.record('capture-error', { code: 'INITIAL_CAPTURE_FAILED' });
         store.local('discoveryError', e.message);
     }
-    const management = () => new Map(store.collections().items.filter(i => i.projectId).map(i => [i.id, hash(JSON.stringify([
-        store.get('project', i.projectId), i.sessionIds.map(id => { const b = store.get('branch', id); return [b.id, b.name, b.projectId, b.archived, b.parentId, b.forkEnd, b.nodeHead, b.layoutHead, b.contextPolicy]; }),
+    const management = () => new Map(store.collections().items.map(i => [i.id, hash(JSON.stringify([
+        i.projectId ? store.get('project', i.projectId) : inboxProject(), i.sessionIds.map(id => { const b = store.get('branch', id); return [b.id, b.name, b.projectId, b.archived, b.parentId, b.forkEnd, b.nodeHead, b.layoutHead, b.contextPolicy]; }),
         store.get('branch', i.id).layoutHead
     ]))]));
+    const timing = () => ({ appVersion: VERSION, serverNow: Date.now(), stateVersion: diagnostics.startedAt + ':' + store.version + ':' + store.cloudVersion, update: { nextRunAt: nextCaptureAt, lastRunAt: lastCaptureAt } });
     const snapshot = () => autoSync.decorate(store.snapshot());
     const server = http.createServer(async (req, res) => {
         const started = performance.now(), requestId = id().slice(0, 8);
-        const beforeManagement = req.method !== 'GET' ? management() : null;
+        const beforeManagement = req.method !== 'GET' && /^\/api\/(trees|move|manage|projects|branches|conflicts)(?:\/|$)/.test(req.url) ? management() : null;
         const send = (status, value, type = 'application/json') => { diagnostics.request(req.method, req.url.split('?')[0], status, performance.now() - started, requestId); res.writeHead(status, { 'Content-Type': type, 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff', 'Referrer-Policy': 'no-referrer', 'Content-Security-Policy': "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'" }); res.end(type === 'application/json' ? JSON.stringify(value) : value); if (beforeManagement && status < 400 && !req.url.startsWith('/api/sync') && !['/api/collect', '/api/webdav'].includes(req.url)) {
             const changed = [...management()].filter(([id, value]) => beforeManagement.get(id) !== value).map(([id]) => id);
             if (changed.length) autoSync.schedule(changed);
@@ -59,7 +62,7 @@ export function createApp({ root, roots, guard, demo = false }) {
             }
             if (req.method === 'GET' && route === '/api/bootstrap') {
                 if (autoSync.passphrase !== null) autoSync.checkCatalog(5 * 60 * 1000).catch(() => {});
-                return send(200, { token, demo, ...snapshot(), roots: native.roots, cloud: autoSync.status(), lastSync: store.local('lastSync'), plan: native.plan() });
+                return send(200, { token, demo, ...snapshot(), ...timing(), roots: native.roots, cloud: autoSync.status(), lastSync: store.local('lastSync'), plan: native.plan() });
             }
             const supplied = Buffer.from(req.headers['x-grove-token'] || '');
             assert(supplied.length === token.length && timingSafeEqual(supplied, Buffer.from(token)), '本地访问凭证无效，请刷新页面', 403);
@@ -79,11 +82,12 @@ export function createApp({ root, roots, guard, demo = false }) {
                 catch {
                     throw Object.assign(new Error('JSON 格式错误'), { status: 400 });
                 }
-                assert(!autoSync.running, '同步进行中，请稍后操作', 409);
+                assert(!autoSync.running || ['/api/settings/confirm','/api/settings/verify','/api/settings/timers'].includes(route), '同步进行中，请稍后操作', 409);
                 assert(settings.job?.state !== 'running', 'Settings migration in progress.', 409);
             }
+            if (req.method === 'GET' && route === '/api/status') return send(200, { ...timing(), cloud: autoSync.status() });
             if (req.method === 'GET' && route === '/api/state')
-                return send(200, { ...snapshot(), cloud: autoSync.status(), discoveryError: store.local('discoveryError'), lastSync: store.local('lastSync'), plan: native.plan() });
+                return send(200, { ...snapshot(), ...timing(), cloud: autoSync.status(), discoveryError: store.local('discoveryError'), lastSync: store.local('lastSync'), plan: native.plan() });
             if (req.method === 'GET' && route === '/api/diagnostics') return send(200, { ...diagnostics.report(), webdav: autoSync.cloud.connection?.dav.metrics || null, fallbackMinutes: autoSync.status().fallbackMinutes });
             if (req.method === 'GET' && route === '/api/discover')
                 return send(200, native.discover());
@@ -104,7 +108,7 @@ export function createApp({ root, roots, guard, demo = false }) {
             if (req.method === 'POST' && tree) return send(200, store.organize(tree[1], body));
             if (req.method === 'POST' && route === '/api/move') {
                 for (const id of body.itemIds || []) await autoSync.openTree(id, { check: true });
-                if (body.projectId && !store.all('project').some(p => p.id === body.projectId)) {
+                if (body.projectId && body.projectId !== INBOX_ID && !store.all('project').some(p => p.id === body.projectId)) {
                     const p = autoSync.cloud.summaries().find(p => p.id === body.projectId); assert(p, 'Project not found.');
                     const { index, treeIds, indexAncestors, count, ...project } = p; store.put('project', project);
                 }
@@ -122,6 +126,7 @@ export function createApp({ root, roots, guard, demo = false }) {
                     const p = autoSync.cloud.summaries().find(p => p.id === body.destinationProjectId); assert(p, 'Project not found.');
                     const { index, treeIds, indexAncestors, count, ...project } = p; store.put('project', project);
                 }
+                assert(body.projectId !== INBOX_ID, 'Select individual inbox sessions.');
                 let members;
                 if (body.projectId) members = store.all('branch').filter(b => b.projectId === store.get('project', body.projectId).id);
                 else if (body.itemIds?.length) members = [...new Map(body.itemIds.flatMap(id => treeMembers(store, id)).map(b => [b.id, b])).values()];
@@ -132,6 +137,7 @@ export function createApp({ root, roots, guard, demo = false }) {
                 if (body.action === 'deactivate' && body.agent) members = members.filter(b => b.agent === body.agent && store.instances().some(i => i.branchId === b.id && isActive(i)));
                 if (body.action === 'activate') {
                     assert(members.length === 1 && !members[0].synthetic, 'Select one native session to activate.');
+                    assert(!body.agent || body.agent === members[0].agent, 'Cross-agent context conversion is not supported.');
                     assert(!members[0].projectId || !store.get('project', members[0].projectId).archived, 'Restore the project first.');
                 }
                 if (body.action === 'archive' && !body.projectId && !body.itemIds) {
@@ -158,8 +164,7 @@ export function createApp({ root, roots, guard, demo = false }) {
                     }
                 }
                 if (['archive', 'restore'].includes(body.action)) store.transaction(() => {
-                    if (body.action === 'restore' && members.some(b => !b.projectId)) {
-                        assert(body.destinationProjectId || body.projectName, 'Choose a project to restore ungrouped sessions.');
+                    if (body.action === 'restore' && members.some(b => !b.projectId) && (body.destinationProjectId || body.projectName)) {
                         const destination = body.destinationProjectId ? store.get('project', body.destinationProjectId) : store.project(body.projectName);
                         assert(!destination.archived, 'Restore the destination project first.');
                         const unfiled = [...new Map(members.filter(b => !b.projectId).flatMap(b => treeMembers(store, b.id)).map(b => [b.id, b])).values()];
@@ -216,7 +221,7 @@ export function createApp({ root, roots, guard, demo = false }) {
             }
             if (req.method === 'POST' && route === '/api/import')
                 return send(201, native.import(body.key, body.projectId, body.name));
-            if (req.method === 'POST' && route === '/api/collect') { const r = native.refreshLocal(); diagnostics.record('capture', { updated: r.updates.length, discovered: r.discovered, count: r.errors.length }); return send(200, r); }
+            if (req.method === 'POST' && route === '/api/collect') { const r = captureLocal(); return send(200, r); }
             if (req.method === 'POST' && route === '/api/apply')
                 return send(200, native.apply());
             if (req.method === 'POST' && route === '/api/recover')
@@ -230,7 +235,6 @@ export function createApp({ root, roots, guard, demo = false }) {
             if (req.method === 'POST' && route === '/api/sync') {
                 if (body.passphrase)
                     autoSync.unlock(body.passphrase);
-                native.refreshLocal();
                 return send(200, await autoSync.flush(body.direction || 'both', true));
             }
             if (req.method === 'POST' && route === '/api/conflicts/resolve') {
@@ -272,16 +276,18 @@ export function createApp({ root, roots, guard, demo = false }) {
             send(e.status || 400, { error: e.message, requestId });
         }
     });
+    function captureLocal() {
+        const start = performance.now(), r = native.refreshLocal(); lastCaptureAt = Date.now();
+        diagnostics.record('capture', { updated: r.updates.length, discovered: r.discovered, count: r.errors.length, durationMs: Math.round(performance.now() - start) });
+        configureCapture(); return r;
+    }
     function configureCapture() {
-        clearInterval(interval);
-        const p = preferences(store);
-        if (!p.localUpdateEnabled) return;
-        interval = setInterval(() => {
-            if (!autoSync.running && settings.job?.state !== 'running') {
-                try { const start = performance.now(), r = native.refreshLocal();
-                    if (r.updates.length || r.discovered || r.errors.length) diagnostics.record('capture', { updated: r.updates.length, discovered: r.discovered, count: r.errors.length, durationMs: Math.round(performance.now() - start) });
-                } catch { diagnostics.record('capture-error', { code: 'capture_failed' }); }
-            }
+        clearTimeout(interval); nextCaptureAt = null;
+        const p = preferences(store); if (!p.localUpdateEnabled) return;
+        nextCaptureAt = Date.now() + p.localUpdateMinutes * 60000;
+        interval = setTimeout(() => {
+            try { if (!autoSync.running && settings.job?.state !== 'running') captureLocal(); else configureCapture(); }
+            catch { diagnostics.record('capture-error', { code: 'capture_failed' }); configureCapture(); }
         }, p.localUpdateMinutes * 60000); interval.unref();
     }
     configureCapture();

@@ -1,6 +1,6 @@
 # Session Grove interaction model
 
-Implemented in 0.7.0. This document supersedes earlier interface proposals. The product workflow is in the README; runtime and diagnosis details are in [operations.md](operations.md).
+Implemented in 0.8.0. This document supersedes earlier interface proposals. The product workflow is in the README; runtime and diagnosis details are in [operations.md](operations.md).
 
 ## Terms
 
@@ -20,10 +20,10 @@ Ordinary conversations start in the agent. Grove has no blank-session creator, e
 The application bar contains **Sync**, **Update**, and **Settings**.
 
 - Update refreshes native session capture without cloud publication.
-- Sync publishes unsent filed changes, including Pending, and checks the cloud directory. Its tooltip shows last upload/check times.
+- Sync publishes unsent changes, including Pending, and checks the cloud directory. Its tooltip shows last upload/check times.
 - Settings contains Language, a staged WebDAV/encryption form and automatic-update intervals. About and Information live at the sidebar bottom; Information contains action help and diagnostics. There is no separate top-level language or Upload button.
 
-Navigation has Current Active (Codex / Claude Code with native-session counts), Projects (one count per tree or standalone session), and Archived. A project is omitted when it has no content. Current Active groups entries only by Project or Ungrouped, ordered by latest conversation activity.
+Navigation has Current Active (Codex / Claude Code with native-session counts), Projects (one count per tree or standalone session), and Archived. Named projects are omitted when empty; the built-in Ungrouped inbox remains visible. Current Active groups entries only by Project or Ungrouped, ordered by latest conversation activity.
 
 List rows show the title, chat/branch count for the applicable paths, activity time, cloud state and an optional selection box. Archived has no bulk selection boxes. Search covers titles/content; cloud searches can fetch the content required for the query.
 
@@ -66,7 +66,7 @@ Existing fork boundaries remain meaningful even if a sibling path is currently a
 | Selected Pending Node | Rename; saving its title creates a named Node |
 | Selected in-use Node ends at a complete native turn | Fork |
 | Selected endpoint of an inactive path with a supported materialization or unchanged native copy | Activate |
-| Selected endpoint of an active filed path | Deactivate |
+| Selected endpoint of an active path | Deactivate |
 | Selected endpoint of an in-use path | Archive that one complete session |
 | Selected endpoint of an archived path | Restore |
 | Archived content | No Rename, Fork, Combine or Dissolve |
@@ -82,14 +82,14 @@ The in-use and archive views are projections of the same immutable underlying gr
 1. In-use includes only unarchived paths. Nodes/edges not referenced by any remaining path disappear from that view.
 2. Archived includes only archived paths, each with its complete shared prefix. It never adds live siblings to the path picker or Transcript.
 3. Shared nodes retain stable identities and fork boundaries. No transcript prefix is deleted merely because one path stops referencing the in-use view.
-4. Restoring returns a filed path to its Project without activation. An Ungrouped archived path must be assigned to a Project during restoration, so it has a visible destination.
+4. Restoring returns a filed path to its Project without activation. An Ungrouped archived path returns to the shared Ungrouped inbox without activation.
 5. Empty projections return to the list rather than displaying stale details. The stored graph and raw history remain intact.
 
 Historical whole-project archives are still readable/restorable. The normal UI does not offer a duplicate bulk Archive action; individual session Archive lives at the graph endpoint.
 
 ## Updates, sync and feedback
 
-New completed native work extends Pending locally. Organizing, filing, renaming, Grove forks and archive/restore changes queue the affected filed tree for upload after a short debounce. Manual Sync can publish unfinished Pending. Automatic directory checks and lazy loading remain independent of native Active choices.
+New complete JSON records extend Pending locally, including during an ongoing turn. Organizing, filing, renaming, Grove forks and archive/restore changes queue the affected tree for upload after a short debounce. Manual Sync can publish unfinished Pending. Automatic directory checks and lazy loading remain independent of native Active choices.
 
 All graph edits carry a version to reject stale selections. Native compatibility and cold-write guards remain in force. A failed action keeps its error visible with a reference code; Information offers diagnostic export without conversation text or credentials.
 
@@ -116,3 +116,16 @@ Migration reports actual copy/verification counts, publishes a conditional vault
 Local capture defaults to 1 minute; dirty-project fallback defaults to 15 minutes. Each can be disabled. Before every upload the service captures local records, independently of the timer schedule. A no-change fallback sends no cloud requests. Manual Sync checks the directory even without local changes.
 
 Transcript renders safe Markdown, with non-prose activity in collapsible sections. Named file arguments are displayed as paths; shell previews are not misrepresented as a complete list of accessed files. Clicking an activity opens its recorded content. The token breakdown distinguishes estimates from native usage and explicitly identifies opaque/non-text content.
+
+
+## Shared inbox and provenance (0.8)
+
+Ungrouped is a permanent home for everyday sessions. It appears under Projects and synchronizes with the same indexed/lazy protocol. Locally its membership stays null; the wire format uses a deterministic built-in project identity, decoded back to null on merge. Moves preserve the whole tree and update the old/new project indexes. Restoring an unfiled archive no longer asks for a project.
+
+The inbox groups entries into Last 7 days, Last 30 days and Older. Older rows are constructed only when expanded; search covers all dates. Selected inbox rows offer Move and Archive. Nothing is automatically classified, archived or deleted.
+
+Tool badges appear on rows and graph Nodes. Shared prefix Nodes retain their original tool; a tree with actual multiple tools can display Mixed. Last-device badges follow content revisions, not title/Node edits or activation. Imports are labeled as observed/imported sources when the historical writing device is unknown.
+
+Remote archive metadata does not silently remove a still-running native copy. Current Active shows an explicit pending-deactivation notice and action until that local copy is deactivated.
+
+Countdowns use server-provided deadlines and a local one-second clock. No HTTP or WebDAV request is made by a tick. The clock pauses for hidden pages and when neither timer has a deadline. A small status endpoint replaces repeated full-library polling.

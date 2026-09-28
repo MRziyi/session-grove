@@ -28,18 +28,19 @@ export class Settings {
     }
     start(body) {
         assert(!this.job || this.job.state !== 'running', 'Settings migration in progress.');
-        assert(!this.autoSync.running, 'Wait for the current sync to finish.');
         const old = this.read(), destination = this.draft?.config || old;
         assert(this.draft || old.verified, 'Verify WebDAV first.');
         const oldPassphrase = body.currentPassphrase ?? this.savedKey();
         const passphrase = body.passphrase === undefined ? oldPassphrase ?? (this.draft?.vault?.mode === 'plain' ? '' : null) : body.passphrase;
         assert(typeof passphrase === 'string' && (!passphrase.length || passphrase.length >= 12), 'Use at least 12 characters, or leave encryption off.');
-        this.job = { state: 'running', phase: 'preparing', completed: 0, total: 0 };
-        this.autoSync.lock(); this.autoSync.migrating = true;
+        this.job = { state: 'running', phase: this.autoSync.running ? 'waiting' : 'preparing', completed: 0, total: 0 };
+        this.autoSync.migrating = true;
         const started = Date.now(); this.diagnostics?.record('settings-change', { phase: 'started' });
         this.pending = (async () => {
             let cleanupPending = 0, migratedCache = null;
             try {
+                await this.autoSync.pending?.catch(() => {});
+                this.autoSync.lock();
                 // Journal is private and contains the new key before the remote publication point.
                 atomic(this.journal, JSON.stringify({ destination, passphrase }));
                 const sourceConfig = (old.encryptionReady || old.url && this.savedKey() !== null) && old.url !== destination.url ? old : destination;
@@ -55,14 +56,14 @@ export class Settings {
                 }
                 const cloud = new Cloud(this.store, () => destination); await cloud.connect(passphrase); if (migratedCache) cloud.save(migratedCache); cloud.lock();
                 this.commit(destination, passphrase);
-                this.autoSync.unlock(passphrase); await this.autoSync.flush('pull');
+                this.autoSync.unlock(passphrase); await this.autoSync.flush('pull', true);
                 this.diagnostics?.record('settings-change', { phase: 'complete', count: cleanupPending, durationMs: Date.now() - started });
                 this.job = { ...this.job, state: 'complete', phase: 'complete', cleanupPending }; this.draft = null;
             } catch (e) {
                 this.diagnostics?.record('settings-change', { phase: 'failed', code: 'SETTINGS_CHANGE_FAILED', durationMs: Date.now() - started });
                 this.job = { ...this.job, state: 'failed', error: e.message };
                 this.autoSync.lock();
-            } finally { this.autoSync.migrating = false; }
+            } finally { this.autoSync.migrating = false; if (this.autoSync.passphrase !== null && this.autoSync.queue.size) this.autoSync.schedule([...this.autoSync.queue]); }
         })();
         return this.status();
     }

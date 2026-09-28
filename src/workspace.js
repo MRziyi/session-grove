@@ -1,18 +1,16 @@
+import { INBOX_ID, inboxProject, cloudProjectId } from './inbox.js';
+import { contentOrigin } from './device.js';
 import { supportedHistory } from './codex-history.js';
-import { ledger } from './context-ledger.js';
 import { assert, hash, id as newId, now } from './util.js';
-import { estimateTokens, toolText } from './context.js';
+import { estimateTokens } from './context.js';
 import { policyHash } from './context-policy.js';
-import { sessionExclusion } from './session-kind.js';
-import { parse } from './transcript.js';
 import { rootOf, treeMembers } from './organization.js';
 
 // Native threads, collection rows, and logical nodes are distinct projections.
 export const isActive = i => i.applied && !i.missing && !i.excluded && i.cwdAvailable !== false;
 export function visibleSession(store, b) {
     if (b.synthetic || b.excluded) return false;
-    const p = store.parsed(b.head, b.agent);
-    return !sessionExclusion({ agent: b.agent, source: p.meta?.source, sidechain: b.agent === 'claude' && p.records.find(r => ['user', 'assistant'].includes(r.value?.type))?.value?.isSidechain === true, chats: p.messages.filter(m => m.role !== 'tool').length });
+    return !store.summary(b.head,b.agent).excluded;
 }
 const modified = b => b.contentUpdatedAt || b.updatedAt;
 export function collections(store) {
@@ -26,11 +24,11 @@ export function collections(store) {
         const sessions = members.filter(b => visibleSession(store, b));
         if (!sessions.length) return [];
         const representative = root.synthetic ? [...sessions].sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id))[0] : root;
-        const count = b => store.parsed(b.head, b.agent).messages.filter(m => m.role !== 'tool').length;
-        return [{ id: root.id, name: representative.name, projectId: root.projectId, agent: root.agent,
+        const count = b => store.summary(b.head, b.agent).chats;
+        return [{ id: root.id, name: representative.name, projectId: root.projectId, agent: root.agent, agents: [...new Set(sessions.map(b => b.agent))], origin: contentOrigin(store, [...sessions].sort((a,b) => modified(b).localeCompare(modified(a)))[0].head),
             kind: sessions.length > 1 ? 'tree' : 'session', sessionIds: sessions.map(b => b.id),
             sessions: sessions.map(b => ({ id: b.id, name: b.name, agent: b.agent, archived: !!b.archived,
-                active: instances.some(i => i.branchId === b.id && isActive(i)), chats: count(b), updatedAt: modified(b) })),
+                origin: contentOrigin(store, b.head), active: instances.some(i => i.branchId === b.id && isActive(i)), chats: count(b), updatedAt: modified(b) })),
             archived: sessions.every(b => b.archived), updatedAt: sessions.map(modified).sort().at(-1) }];
     });
     return { items, activeCounts: Object.fromEntries(['codex', 'claude'].map(agent => [agent, branches.filter(b => visibleSession(store, b) && b.agent === agent && instances.some(i => i.branchId === b.id && isActive(i))).length])) };
@@ -44,11 +42,11 @@ export function listing(store, scope = 'active:codex', query = '') {
         let sessions = item.sessions;
         if (activeAgent) sessions = sessions.filter(s => s.agent === activeAgent && s.active && !s.archived && !project?.archived);
         else if (scope === 'archived') sessions = sessions.filter(s => s.archived || project?.archived);
-        else sessions = sessions.filter(s => item.projectId === scope && !s.archived && !project?.archived);
+        else sessions = sessions.filter(s => cloudProjectId(item.projectId) === scope && !s.archived && !project?.archived);
         if (!sessions.length) return [];
-        const matching = q ? sessions.filter(s => s.name.toLocaleLowerCase().includes(q) || parse(store.raw(store.get('branch', s.id).head), s.agent).messages.some(m => m.text.toLocaleLowerCase().includes(q))) : sessions;
+        const matching = q ? sessions.filter(s => s.name.toLocaleLowerCase().includes(q) || store.parsed(store.get('branch', s.id).head, s.agent).messages.some(m => m.text.toLocaleLowerCase().includes(q))) : sessions;
         if (!matching.length && !item.name.toLocaleLowerCase().includes(q)) return [];
-        return [{ ...item, sessions, sessionIds: sessions.map(s => s.id), name: sessions.find(s => s.id === item.id)?.name || sessions[0].name, kind: sessions.length > 1 ? 'tree' : 'session', visibleSessionIds: sessions.map(s => s.id), matchedSessionIds: matching.map(s => s.id),
+        return [{ ...item, agents:[...new Set(sessions.map(s=>s.agent))], origin:[...sessions].sort((a,b)=>b.updatedAt.localeCompare(a.updatedAt))[0]?.origin || item.origin, sessions, sessionIds: sessions.map(s => s.id), name: sessions.find(s => s.id === item.id)?.name || sessions[0].name, kind: sessions.length > 1 ? 'tree' : 'session', visibleSessionIds: sessions.map(s => s.id), matchedSessionIds: matching.map(s => s.id),
             visibleCount: sessions.length, updatedAt: sessions.map(s => s.updatedAt).sort().at(-1),
             chats: sessions.length === 1 ? sessions[0].chats : null,
             groupName: project?.name || null, groupId: project?.id || null }];
@@ -56,7 +54,8 @@ export function listing(store, scope = 'active:codex', query = '') {
     const groupTimes = new Map();
     for (const item of result) groupTimes.set(item.groupId, [groupTimes.get(item.groupId) || '', item.updatedAt].sort().at(-1));
     result.sort((a, b) => (groupTimes.get(b.groupId) || '').localeCompare(groupTimes.get(a.groupId) || '') || String(a.groupId).localeCompare(String(b.groupId)) || b.updatedAt.localeCompare(a.updatedAt) || a.id.localeCompare(b.id));
-    return { items: result, sessionCount: result.reduce((n, i) => n + i.visibleCount, 0), itemCount: result.length };
+    const pendingDeactivation = activeAgent ? items.flatMap(i => i.sessions.filter(s => s.agent === activeAgent && s.active && (s.archived || projects.find(p => p.id === i.projectId)?.archived))) : [];
+    return { items: result, pendingDeactivation, sessionCount: result.reduce((n, i) => n + i.visibleCount, 0) + pendingDeactivation.length, itemCount: result.length };
 }
 
 // IDs are derived from the owning native thread and the semantic prefix. Metadata
@@ -66,7 +65,7 @@ export function buildGraph(store, branchId) {
     function pathFor(b, revisionId = b.head) {
         const key = `${b.id}:${revisionId}`;
         if (cache.has(key)) return cache.get(key);
-        const p = store.parsed(revisionId, b.agent), inventory = ledger(p, b.agent), visible = p.messages.filter(m => m.role !== 'tool');
+        const p = store.parsed(revisionId, b.agent), inventory = store.activity(revisionId, b.agent), visible = p.messages.filter(m => m.role !== 'tool');
         const byChat = new Map();
         for (const e of inventory.entries) { if (!byChat.has(e.chatLine)) byChat.set(e.chatLine, []); byChat.get(e.chatLine).push(e); }
         let inherited = [];
@@ -82,7 +81,7 @@ export function buildGraph(store, branchId) {
         let prefix = '';
         const path = visible.map((m, index) => {
             prefix = hash(prefix + JSON.stringify([m.role, m.text]));
-            const message = inherited[index] || { ...m, id: `${b.chatIdentity || b.id}:${prefix.slice(0, 24)}`, ownerId: b.id };
+            const message = inherited[index] || { ...m, id: `${b.chatIdentity || b.id}:${prefix.slice(0, 24)}`, ownerId: b.id, agent: b.agent, origin: contentOrigin(store, revisionId) };
             const value = { ...message, line: m.line, toolTokens: (byChat.get(m.line) || []).filter(e => ['tool-call', 'tool-result'].includes(e.kind)).reduce((n,e) => n + e.tokens, 0), activity: byChat.get(m.line) || [] };
             if (!messages.has(value.id)) messages.set(value.id, value);
             return value;
@@ -91,8 +90,8 @@ export function buildGraph(store, branchId) {
         return path;
     }
     const paths = members.filter(b => visibleSession(store, b)).map(b => ({ branchId: b.id, name: b.name, agent: b.agent, archived: !!b.archived,
-        head: b.head, canRewriteContext: supportedHistory(store.parsed(b.head, b.agent)), canActivate: supportedHistory(store.parsed(b.head, b.agent)) || store.instances().some(i => i.branchId === b.id && i.adopted && i.baseRevision === b.head && (i.contextPolicyHash || policyHash(null)) === policyHash(b.contextPolicy)), active: store.instances().some(i => i.branchId === b.id && isActive(i)),
-        context: { ...store.parsed(b.head, b.agent).context, ledger: (() => { const l = ledger(store.parsed(b.head, b.agent), b.agent); return { ...l, entries: l.entries.filter(e => e.chatLine === null) }; })(), compactions: store.parsed(b.head, b.agent).context.compactions.map(e => ({ ...e, enabled: !(b.contextPolicy?.disabled || []).includes(e.id) })) }, contextPolicy: b.contextPolicy || null, contextPending: store.instances().some(i => i.branchId === b.id && isActive(i) && ((i.contextPolicyHash || policyHash(null)) !== policyHash(b.contextPolicy) || i.baseRevision !== b.head)), messages: pathFor(b), checkpoints: store.parsed(b.head, b.agent).checkpoints }));
+        head: b.head, canRewriteContext: supportedHistory(store.parsed(b.head, b.agent)), canActivate: store.summary(b.head,b.agent).complete && !store.summary(b.head,b.agent).external && (supportedHistory(store.parsed(b.head, b.agent)) || store.instances().some(i => i.branchId === b.id && i.adopted && i.baseRevision === b.head && (i.contextPolicyHash || policyHash(null)) === policyHash(b.contextPolicy))), active: store.instances().some(i => i.branchId === b.id && isActive(i)),
+        context: { ...store.parsed(b.head, b.agent).context, ledger: (() => { const l = store.activity(b.head, b.agent); return { ...l, entries: l.entries.filter(e => e.chatLine === null) }; })(), compactions: store.parsed(b.head, b.agent).context.compactions.map(e => ({ ...e, enabled: !(b.contextPolicy?.disabled || []).includes(e.id) })) }, contextPolicy: b.contextPolicy || null, contextPending: store.instances().some(i => i.branchId === b.id && isActive(i) && ((i.contextPolicyHash || policyHash(null)) !== policyHash(b.contextPolicy) || i.baseRevision !== b.head)), messages: pathFor(b), checkpoints: store.parsed(b.head, b.agent).checkpoints }));
     const assignments = {};
     // Read legacy append-only nodes as initial annotations without changing history.
     for (const b of members) {
@@ -136,40 +135,42 @@ export function buildGraph(store, branchId) {
             nodeByChat.set(m.id, current);
         }
     }
+    const byNode = new Map(nodes.map(n => [n.id,n]));
     for (const p of paths) {
         p.nodeIds = [...new Set(p.messages.map(m => nodeByChat.get(m.id).id))];
         for (const id of p.nodeIds) {
-            const n = nodes.find(n => n.id === id);
+            const n = byNode.get(id);
             n.branchIds.push(p.branchId);
         }
-        if (p.nodeIds.length) nodes.find(n => n.id === p.nodeIds.at(-1)).endBranchIds.push(p.branchId);
+        if (p.nodeIds.length) byNode.get(p.nodeIds.at(-1)).endBranchIds.push(p.branchId);
         for (let i = 1; i < p.nodeIds.length; i++) {
             const a = p.nodeIds[i - 1], b = p.nodeIds[i];
             edges.set(`${a}:${b}`, { from: a, to: b });
         }
     }
     for (const { from, to } of edges.values()) {
-        nodes.find(n => n.id === from).childIds.push(to);
-        nodes.find(n => n.id === to).parentIds.push(from);
+        byNode.get(from).childIds.push(to);
+        byNode.get(to).parentIds.push(from);
     }
     // Topological order, deterministic colors, and adjacent Pending warm colors.
-    const ordered = [], remaining = new Set(nodes.map(n => n.id));
-    while (remaining.size) {
-        const ready = nodes.filter(n => remaining.has(n.id) && n.parentIds.every(id => !remaining.has(id)));
-        assert(ready.length, 'Conversation graph contains a cycle.');
-        for (const n of ready) {
-            n.depth = n.parentIds.length ? 1 + Math.max(...n.parentIds.map(id => nodes.find(x => x.id === id).depth)) : 0;
-            const used = new Set(n.parentIds.map(id => nodes.find(x => x.id === id).color));
+    const ordered = [], indegree = new Map(nodes.map(n => [n.id,n.parentIds.length])), ready = nodes.filter(n => !n.parentIds.length);
+    for(let cursor=0;cursor<ready.length;cursor++) {
+        const n=ready[cursor];
+            n.depth = n.parentIds.length ? 1 + Math.max(...n.parentIds.map(id => byNode.get(id).depth)) : 0;
+            const used = new Set(n.parentIds.map(id => byNode.get(id).color));
             let color = parseInt(hash(n.annotationId || n.id).slice(0, 4), 16) % (n.pending ? 4 : 7);
             while (used.has(`${n.pending ? 'pending' : 'color'}-${color}`)) color = (color + 1) % (n.pending ? 4 : 7);
             n.color = `${n.pending ? 'pending' : 'color'}-${color}`;
             n.splitBoundary = n.childIds.length > 1 || n.endBranchIds.length > 0;
             n.count = n.chatIds.length;
+            n.agents = [...new Set(n.chatIds.map(id => messages.get(id)?.agent).filter(Boolean))];
+            n.origin = messages.get(n.chatIds.at(-1))?.origin || null;
             n.tokens = { estimate: n.chatIds.reduce((sum, id) => sum + estimateTokens(messages.get(id)?.text), 0), recordedEstimate: n.chatIds.reduce((sum, id) => sum + estimateTokens(messages.get(id)?.text) + (messages.get(id)?.toolTokens || 0), 0), kind: 'recorded-text-estimate' };
             n.afterCompaction = compactStarts.has(n.chatIds[0]);
-            ordered.push(n); remaining.delete(n.id);
-        }
+        ordered.push(n);
+        for(const id of n.childIds) { indegree.set(id,indegree.get(id)-1); if(indegree.get(id)===0) ready.push(byNode.get(id)); }
     }
+    assert(ordered.length===nodes.length,'Conversation graph contains a cycle.');
     return { id: root.id, projectId: root.projectId, layoutHead: root.layoutHead || null,
         version: hash(JSON.stringify([members.map(b => [b.id, b.head, b.nodeHead, b.parentId, b.archived, b.contextPolicy]), root.layoutHead || null])),
         name: store.collections().items.find(i => i.id === root.id)?.name || root.name,
@@ -228,12 +229,12 @@ export function moveItems(store, { itemIds, projectId, projectName }) {
     assert(Array.isArray(itemIds) && itemIds.length, 'Select sessions to move.');
     return store.transaction(() => {
         const roots = [...new Set(itemIds.map(id => rootOf(store, id).id))];
-        const project = projectId ? store.get('project', projectId) : store.project(projectName);
+        const project = projectId === INBOX_ID ? inboxProject() : projectId ? store.get('project', projectId) : store.project(projectName);
         assert(!project.archived, 'Restore the destination project first.');
         for (const id of roots) {
             for (const b of treeMembers(store, id)) {
                 // Written directly here to keep project creation and all moves atomic.
-                store.put('branch', { ...b, projectId: project.id, group: '', metaVersion: newId(),
+                store.put('branch', { ...b, projectId: project.id === INBOX_ID ? null : project.id, group: '', metaVersion: newId(),
                     metaAncestors: [...new Set([...(b.metaAncestors || []), b.metaVersion].filter(Boolean))] });
             }
         }

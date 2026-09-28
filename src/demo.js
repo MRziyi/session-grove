@@ -82,4 +82,6 @@ export function seedDemo(store, roots) {
     const nativeId = parse(raw, 'claude').nativeId, dir = path.join(roots.claude, 'projects', cwd.replace(/[^a-zA-Z0-9]/g, '-'));
     fs.mkdirSync(dir, { recursive: true });
     fs.writeFileSync(path.join(dir, `${nativeId}.jsonl`), raw);
+    const older = store.branch(null, 'An older daily note', 'codex', codexSample(cwd, [['A small everyday question.', 'Kept for later reference.']]));
+    store.put('branch', { ...older, contentUpdatedAt: new Date(Date.now()-90*86400000).toISOString() });
 }

@@ -1,6 +1,6 @@
 # Context visibility and incremental cloud sync
 
-Updated for 0.7.1. This document complements the [interaction model](interaction-model.md).
+Updated for 0.8.0. This document complements the [interaction model](interaction-model.md).
 
 ## Three different token quantities
 
@@ -47,17 +47,17 @@ References checked for this change:
 | Update button | Immediately collect native changes | None |
 | Move into a Project / create Project while filing | Assign the whole tree | Queue the changed tree |
 | Combine / Dissolve / supported rename / Grove Fork | Save organization or membership | Queue the changed tree |
-| Archive / Restore | Save membership/archive state after applicable native actions | Queue affected filed trees |
+| Archive / Restore | Save membership/archive state after applicable native actions | Queue affected trees |
 | Activate / Deactivate alone | Change device-local native availability | None |
 | Resolve an organization conflict | Save the chosen version with merge ancestry | Queue the changed tree |
-| Manual Sync | Preserve all current history | Publish dirty filed trees, including remaining Pending |
+| Manual Sync | Preserve all current history | Publish dirty trees, including remaining Pending |
 | Background interval | Capture local records first | Upload dirty filed trees, including Pending; no requests when unchanged |
 
 Management changes debounce for two seconds. Only affected trees are queued, so organizing one project does not automatically publish unrelated Pending in another. An uploaded tree is a coherent snapshot including any remaining Pending; the trigger policy controls **when**, not whether the transcript is complete. New native changes arriving later remain local until an organization action, manual Sync or the dirty-only fallback.
 
 The queue survives a service restart, retries after failures and remains pending while locked. Background upload fallback defaults to 15 minutes while configured and unlocked and runs only for dirty project content; normal UI refreshes do not check the cloud. Explicit opens use freshness windows, and failed automatic operations back off. See [sync policy](sync-policy.md). Opening a browser also requests a directory check when the service is unlocked.
 
-Sync has a single explicit role: publish unsent filed changes (including Pending) and refresh the cloud directory. Its tooltip shows last publication/check times. It remains useful without local changes because the directory may have changed remotely. Cloud glyphs show cached, cloud-only, updated and local-unsent states. Language and connection settings are in Settings.
+Sync has a single explicit role: publish unsent changes (including Pending) and refresh the cloud directory. Its tooltip shows last publication/check times. It remains useful without local changes because the directory may have changed remotely. Cloud glyphs show cached, cloud-only, updated and local-unsent states. Language and connection settings are in Settings.
 
 Settings saves credentials and the optional key in owner-only local files. Empty keys mean explicitly unencrypted vaults. The next `pnpm dev` reuses saved settings. This is not Keychain integration.
 

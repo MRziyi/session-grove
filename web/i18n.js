@@ -1,5 +1,19 @@
 let language = localStorage.getItem('grove-language') === 'zh' ? 'zh' : 'en';
 const dictionary = {
+    'Due': '待执行', 'Updating…': '更新中…',
+    'Periodic upload fallback': '定时上传兜底',
+    '{count} archived sessions are still active on this device.': '有 {count} 条已归档会话仍在本机激活。', 'Deactivate archived sessions': '停用已归档会话',
+    'Waiting for current sync': '等待当前同步完成',
+    'This turn is still running. Wait for it to finish, or fork from a completed checkpoint.': '当前轮次仍在运行。请等待完成，或从已完成的检查点分支。',
+    'This context needs external files or an unsupported history format. Check Source before activating.': '此上下文依赖外部文件或暂不支持的历史格式。请先查看来源信息。',
+
+    'Last 7 days': '最近 7 天', 'Last 30 days': '最近 30 天', 'Older': '更早', 'Mixed': '混合',
+    'Next automatic sync check; uploads only changes.': '下次自动同步检查；仅上传发生改动的内容。',
+    'Next local session update.': '下次读取本地会话。', 'Last local update: {time}': '最近本地更新：{time}',
+    'Imported on {device}': '在 {device} 导入', 'Last conversation update on {device}': '最近对话更新来自 {device}',
+    'Archive selected sessions': '归档所选会话', 'Archive {count} selected trees and sessions?': '归档选中的 {count} 棵树或会话？',
+    'Cross-agent context conversion is not supported.': '暂不支持跨 Agent 上下文转换。',
+
     'Some native history is missing or unsupported. Update to read the referenced segments before changing context.': '部分原生历史缺失或格式暂不支持。请先更新并读取引用的历史段，再修改上下文。',
     'The complete native history is unavailable. Update before changing context.': '尚未取得完整原生历史，请先更新再修改上下文。',
     'Native history prefix is missing. Keep the earlier rollout segments available.': '缺少原生历史前缀，请保留早期历史段文件并重新更新。',
@@ -187,6 +201,8 @@ export function t(key, values = {}) {
 export const locale = () => language;
 export function setLocale(value) { language = value === 'zh' ? 'zh' : 'en'; localStorage.setItem('grove-language', language); document.documentElement.lang = language === 'zh' ? 'zh-CN' : 'en'; }
 const errors = {
+    '请先关闭目标 Agent 的运行会话及对应 IDE 扩展，再应用 Active 清单。资料库浏览与分支不受影响。': 'Close the target agent and its IDE extension before applying native changes. Browsing and organization remain available.',
+
     '请先关闭 Codex / Claude 的运行会话及对应 IDE 扩展，再应用 Active 清单。资料库浏览与分支不受影响。': 'Close running Codex / Claude sessions and their IDE extensions before applying the Active set.',
     '目标必须是本机存在的绝对工程目录': 'Choose an existing absolute working-directory path.',
     '同步进行中，请稍后操作': 'Project sync is in progress. Please try again shortly.',

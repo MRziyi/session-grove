@@ -1,3 +1,4 @@
+import { cloudProjectId } from './inbox.js';
 import { preferences } from './preferences.js';
 import { Cloud } from './cloud.js';
 import { assert, now } from './util.js';
@@ -10,36 +11,38 @@ export class AutoSync {
         this.configureTimer();
     }
     configureTimer() {
-        clearInterval(this.interval);
+        clearInterval(this.interval); this.nextFallbackAt = null;
         const p = preferences(this.store);
-        if (p.autoUploadEnabled) { this.interval = setInterval(() => this.fallback().catch(() => {}), p.autoUploadMinutes * 60000); this.interval.unref(); }
+        if (p.autoUploadEnabled) { this.nextFallbackAt = Date.now() + p.autoUploadMinutes * 60000; this.interval = setInterval(() => { this.nextFallbackAt = Date.now() + p.autoUploadMinutes * 60000; this.fallback().catch(() => {}); }, p.autoUploadMinutes * 60000); this.interval.unref(); }
     }
     async fallback() {
         if (!preferences(this.store).autoUploadEnabled || this.running || this.closed || !this.readConfig()?.url || this.passphrase === null || this.retryAt > Date.now()) return;
         await this.beforeUpload?.();
-        if (this.cloud.dirtyIds().length) return this.flush('push');
+        if (this.cloud.dirtyIds().length) return this.flush('push', false, true);
     }
     status() {
         const configured = !!this.readConfig()?.url, dirty = this.cloud.dirtyIds();
         this.cloud.useSavedCache(); const cache = this.cloud.cache();
         return { configured, unlocked: this.passphrase !== null, queued: this.queue.size > 0, dirty: dirty.length > 0, dirtyCount: dirty.length,
             phase: this.migrating ? 'migrating' : this.running ? 'syncing' : !configured ? 'unconfigured' : this.passphrase === null ? 'locked' : this.error ? 'retrying' : this.queue.size ? 'queued' : dirty.length ? 'local' : 'synced',
-            error: this.error, retryAt: this.retryAt || null, fallbackMinutes: preferences(this.store).autoUploadEnabled ? preferences(this.store).autoUploadMinutes : null, lastUpload: cache.lastUpload || null, lastCheck: cache.checkedAt || null, lastSuccess: cache.lastUpload || null };
+            nextRunAt: this.passphrase === null || !configured ? null : this.retryAt > Date.now() ? this.retryAt : this.queue.size && this.queuedAt ? this.queuedAt : this.nextFallbackAt, error: this.error, retryAt: this.retryAt || null, fallbackMinutes: preferences(this.store).autoUploadEnabled ? preferences(this.store).autoUploadMinutes : null, lastUpload: cache.lastUpload || null, lastCheck: cache.checkedAt || null, lastSuccess: cache.lastUpload || null };
     }
-    unlock(passphrase) { assert(typeof passphrase === 'string' && (passphrase.length === 0 || passphrase.length >= 12), 'Encryption passphrase needs at least 12 characters.'); this.passphrase = passphrase; this.error = null; this.retryAt = 0; this.failures = 0; this.rateLimitUntil = 0; }
-    lock() { this.passphrase = null; this.cloud.lock(); clearTimeout(this.timer); clearTimeout(this.retryTimer); }
+    unlock(passphrase) { assert(typeof passphrase === 'string' && (passphrase.length === 0 || passphrase.length >= 12), 'Encryption passphrase needs at least 12 characters.'); this.passphrase = passphrase; this.error = null; this.retryAt = 0; this.failures = 0; this.rateLimitUntil = 0; if (this.queue.size) this.schedule([...this.queue]); }
+    lock() { this.queuedAt = null; this.passphrase = null; this.cloud.lock(); clearTimeout(this.timer); clearTimeout(this.retryTimer); }
     schedule(ids = this.cloud.dirtyIds()) {
         if (this.closed) return;
         for (const id of ids) this.queue.add(id);
         this.store.local('uploadQueue', [...this.queue]);
         clearTimeout(this.timer);
-        this.timer = setTimeout(() => this.flush('queued').catch(() => {}), Math.min(2147483647, Math.max(2000, this.retryAt - Date.now())));
+        this.queuedAt = Date.now() + Math.max(2000, this.retryAt - Date.now());
+        this.timer = setTimeout(() => { this.queuedAt = null; this.flush('queued').catch(() => {}); }, Math.min(2147483647, Math.max(2000, this.retryAt - Date.now())));
         this.timer.unref();
     }
-    async exclusive(fn) {
+    async exclusive(fn, allowMigration = false) {
         if (this.pending) await this.pending.catch(() => {});
         // Multiple GETs may wait together; recheck after yielding.
-        if (this.pending) return this.exclusive(fn);
+        if (this.pending) return this.exclusive(fn, allowMigration);
+        if (this.migrating && !allowMigration) throw new Error('Settings migration in progress.');
         this.running = true; const started = Date.now(); this.diagnostics?.record('cloud-operation', { phase: 'started' });
         this.pending = Promise.resolve().then(fn);
         try { const result = await this.pending; this.error = null; this.retryAt = 0; this.failures = 0; this.rateLimitUntil = 0; this.diagnostics?.record('cloud-operation', { phase: 'complete', durationMs: Date.now() - started }); return result; }
@@ -47,15 +50,16 @@ export class AutoSync {
             clearTimeout(this.retryTimer); this.retryTimer = setTimeout(() => this.flush(this.queue.size ? 'queued' : 'pull').catch(() => {}), Math.min(2147483647, Math.max(1, this.retryAt - Date.now()))); this.retryTimer.unref(); this.diagnostics?.record('cloud-operation', { phase: 'failed', code: 'cloud_failed', durationMs: Date.now() - started }); throw e; }
         finally { this.pending = null; this.running = false; }
     }
-    async flush(direction = 'queued', explicit = false) {
+    async flush(direction = 'queued', explicit = false, captured = false) {
+        if (direction === 'queued' && !this.queue.size) return { published: 0, uploaded: 0 };
         if (explicit && this.rateLimitUntil > Date.now()) throw new Error('Provider requested a pause. Try again after ' + new Date(this.rateLimitUntil).toLocaleTimeString());
-        if (this.closed || !explicit && this.retryAt > Date.now()) return null;
+        if (this.closed || !explicit && (this.migrating || this.retryAt > Date.now())) return null;
         if (!this.readConfig()?.url || this.passphrase === null) {
             if (explicit) throw new Error('Configure WebDAV and unlock project sync first.');
             return null;
         }
         return this.exclusive(async () => {
-            if (direction !== 'pull') await this.beforeUpload?.();
+            if (direction !== 'pull' && !captured) await this.beforeUpload?.();
             if (direction === 'pull') return this.run ? this.run(this.store, this.readConfig(), this.passphrase, 'pull') : this.cloud.catalog(this.passphrase);
             assert(['push', 'both', 'queued'].includes(direction), 'Unknown sync direction.');
             if (direction !== 'both' && !this.cloud.dirtyIds().length) return { published: 0, uploaded: 0 };
@@ -71,10 +75,10 @@ export class AutoSync {
             this.store.local('uploadQueue', [...this.queue]);
             this.store.local('lastSync', { at: now(), ...result });
             return result;
-        });
+        }, explicit);
     }
     async checkCatalog(maxAge = 2 * 60 * 1000) {
-        if (this.passphrase === null || !this.readConfig()?.url || this.retryAt > Date.now()) return;
+        if (this.migrating || this.passphrase === null || !this.readConfig()?.url || this.retryAt > Date.now()) return;
         const checked = this.cloud.cache().checkedAt;
         if (checked && Date.now() - new Date(checked).getTime() < maxAge) return;
         return this.exclusive(async () => {
@@ -104,19 +108,18 @@ export class AutoSync {
     }
     async openTree(treeId, { check = false } = {}) {
         const local = this.store.all('branch').find(b => b.id === treeId);
-        if (local && !local.projectId) return;
         if (this.passphrase === null || !this.readConfig()?.url) {
             assert(this.store.all('branch').some(b => b.id === treeId), 'Unlock sync to download this session.'); return;
         }
         if (check) await this.checkCatalog();
-        const projectId = local?.projectId || this.cloud.items().find(i => i.id === treeId)?.projectId;
+        const projectId = local ? cloudProjectId(local.projectId) : this.cloud.items().find(i => i.id === treeId)?.projectId;
         if (projectId) await this.openProject(projectId);
         const item = this.cloud.items().find(i => i.id === treeId);
         if (!item || item.versions.every(v => (this.cloud.cache().loaded[treeId] || []).includes(v.ref))) return;
         if (this.retryAt > Date.now() && local) return;
         return this.exclusive(async () => {
             const b = this.store.all('branch').find(b => b.id === treeId);
-            const projectId = b?.projectId || this.cloud.items().find(i => i.id === treeId)?.projectId;
+            const projectId = b ? cloudProjectId(b.projectId) : this.cloud.items().find(i => i.id === treeId)?.projectId;
             if (projectId) await this.cloud.project(projectId, this.passphrase);
             return this.cloud.hydrate(treeId, this.passphrase);
         }).catch(e => { if (!this.store.all('branch').some(b => b.id === treeId)) throw e; });

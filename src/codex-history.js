@@ -4,7 +4,7 @@ import { assert, walk } from './util.js';
 // Keep the original records (including metadata), never reconstruct them from chats.
 export function readCodexHistory(file, files, stack = new Set()) {
     assert(!stack.has(file), 'Cyclic native history reference.');
-    const bytes = fs.readFileSync(file); assert(bytes.length <= 100 * 1024 * 1024, 'Native history segment exceeds 100 MB.');
+    const bytes = fs.readFileSync(file); if (!bytes.length) return ''; assert(bytes.length <= 100 * 1024 * 1024, 'Native history segment exceeds 100 MB.');
     return resolve(bytes, file, files, stack);
 }
 function resolve(bytes, file, files, stack) {
@@ -21,8 +21,8 @@ function resolve(bytes, file, files, stack) {
         const fd = fs.openSync(candidate, 'r'), prefix = Buffer.alloc(base.end_byte_offset);
         try { assert(fs.readSync(fd, prefix, 0, prefix.length, 0) === prefix.length, 'Native history prefix changed while reading.'); } finally { fs.closeSync(fd); }
         if (prefix.at(-1) !== 10) continue;
-        let rows; try { rows = prefix.toString('utf8').split('\n').filter(Boolean).map(JSON.parse); } catch { continue; }
-        if (rows.at(-1)?.ordinal !== base.end_ordinal_exclusive - 1 || !(rows[0]?.payload?.id === base.thread_id || candidate.endsWith('_' + base.thread_id + '.jsonl'))) continue;
+        let first, last; try { const text = prefix.toString('utf8'); first = JSON.parse(text.slice(0,text.indexOf('\n'))); last = JSON.parse(text.slice(text.lastIndexOf('\n',text.length-2)+1)); } catch { continue; }
+        if (last.ordinal !== base.end_ordinal_exclusive - 1 || !(first.payload?.id === base.thread_id || candidate.endsWith('_' + base.thread_id + '.jsonl'))) continue;
         const before = resolve(prefix, candidate, files, next);
         assert(Buffer.byteLength(before) + bytes.length <= 100 * 1024 * 1024, 'Resolved native history exceeds 100 MB.');
         return before + raw;
@@ -34,5 +34,5 @@ export function supportedHistory(parsed) {
     if (!parsed.meta?.history_mode || parsed.meta.history_mode === 'legacy') return true;
     if (parsed.meta.history_mode !== 'paginated') return false;
     const rows = parsed.records.filter(r => r.value);
-    return rows.length > 0 && rows.every((r, i) => r.value.ordinal === i);
+    return rows.length > 0 && rows[0].value.ordinal === 0 && rows.every((r,i) => Number.isSafeInteger(r.value.ordinal) && (i === 0 || r.value.ordinal > rows[i-1].value.ordinal));
 }

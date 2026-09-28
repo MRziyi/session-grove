@@ -11,7 +11,7 @@ pnpm start --port 7421 --data-dir /path/to/library \
 npm start -- --port 7421 --data-dir /path/to/library
 ```
 
-Defaults: library `~/.session-grove`, native roots `$CODEX_HOME` / `~/.codex` and `$CLAUDE_CONFIG_DIR` / `~/.claude`. Only one server may open a given library. Starting the real service discovers local transcripts without changing native activation. Configure WebDAV yourself in Settings; saved settings unlock automatically on startup; ungrouped history is never uploaded.
+Defaults: library `~/.session-grove`, native roots `$CODEX_HOME` / `~/.codex` and `$CLAUDE_CONFIG_DIR` / `~/.claude`. Only one server may open a given library. Starting the real service discovers local transcripts without changing native activation. Configure WebDAV yourself in Settings; saved settings unlock automatically on startup; Ungrouped history is included in cloud publication.
 
 ## Files and recovery
 
@@ -120,3 +120,9 @@ pnpm run test:codex-fork -- /path/to/codex-home THREAD_UUID --expand
 ```
 
 This explicitly reads the chosen thread and its required prefix files into a private temporary home. It invokes native New branch at the same completed turn as Grove Fork, compares all paginated items, response-item payloads, world-state and base instructions, and removes the copies. `--expand` also checks compaction off/on and fresh native projections. It sends no model turn. The anonymous report is saved under ignored `test-results/`.
+
+## Shared inbox and device setup (0.8)
+
+Ungrouped is now synchronized. On another Mac, start a fresh local library, enter the same WebDAV settings and encryption choice, then open Ungrouped or a named project. Opening lists fetches indexes; opening a tree fetches its history. Activate remains an explicit local choice. Keep each device’s own `device.json`; it identifies that writer.
+
+`node scripts/inbox-provider-check.js` verifies this flow using synthetic notes in a new disposable child of the configured app directory. It checks local activation, continuation/source-device changes, move/archive/restore and idle reads, then removes the child.

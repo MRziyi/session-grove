@@ -1,23 +1,23 @@
 # Sync triggers and measured overhead
 
-Implemented in 0.7.0. Local capture and cloud traffic are separate.
+Implemented in 0.8.0. Local capture and cloud traffic are separate.
 
 | Event | Upload | Check directory / fetch |
 | --- | --- | --- |
 | New native chat / Update | No; extend local Pending | No |
 | File into a Project / move trees | Changed trees, debounced 2 seconds | Read relevant remote versions before publishing |
 | Combine, Dissolve, Rename, Grove Fork | Changed trees, debounced | Same pre-publication check |
-| Archive / Restore | Changed filed trees | Same pre-publication check |
+| Archive / Restore | Changed trees | Same pre-publication check |
 | Change a path's compaction choice | Saved context policy, debounced | Same pre-publication check |
 | Activate / Deactivate / Apply context | Device-local availability only | No unrelated publication |
 | App start / unlock | Retry previously queued organization | Initial directory check |
 | Explicit project/tree open | No | Check if last directory check is older than 2 minutes; fetch only missing index/body versions |
 | Window regains focus | No | Check only if older than 5 minutes |
 | Local UI polling | No | No directory checks; reuse cached content |
-| Sync button | All dirty filed trees, including Pending | Explicit check, even with no local changes |
+| Sync button | All dirty trees, including Pending | Explicit check, even with no local changes |
 | Idle fallback | All dirty filed trees, including Pending, after local capture | Default 15 minutes; no requests when unchanged |
 
-A paused/unconfigured vault makes no network calls. The fallback uploads Pending belonging to changed Projects. Unfiled sessions remain local. Repeated clicks and background refreshes do not bypass cache freshness. Publishing reads the necessary remote versions to detect conflicts; manual Sync does not redundantly re-read the same directory before publication.
+A paused/unconfigured vault makes no network calls. The fallback uploads Pending belonging to changed Projects. Ungrouped is a shared default inbox and is included in publication. Repeated clicks and background refreshes do not bypass cache freshness. Publishing reads the necessary remote versions to detect conflicts; manual Sync does not redundantly re-read the same directory before publication.
 
 The Sync button shows the most recent successful cloud action time. Its tooltip distinguishes last upload from last directory check. A failed attempt does not advance a success timestamp.
 
@@ -42,3 +42,11 @@ In a live Teracloud check confined to a new disposable test folder:
 These are measurements of that synthetic workflow against one live provider. CPU time, wakeups and traffic are useful overhead indicators; they are **not a watt-hour measurement**. TLS/header overhead is not included in payload byte counters. Latency and file sizes affect real workloads.
 
 The main remaining costs are first-time encryption/transfer, parsing changed large histories, and rendering a very large open path. Changes in 0.6.0 skip agent-owned records before parsing, reuse immutable caches, avoid redundant catalog reads and coalesce Sankey redraws into one animation frame. Graph movement does not send network requests. Diagnostics expose CPU, request, byte and timing counters for actual testing.
+
+## 0.8 overhead checks
+
+The shared inbox uses the same encrypted objects and lazy indexes as named projects. Live-provider validation covers inbox upload, metadata-only listing, lazy hydration, local activation, a second device continuing the context, source-device updates, move-out, archive and restore-to-inbox. It uses synthetic data in a disposable child and removes it afterward.
+
+The 40-session / 40-chat benchmark measured about 0.01 ms for an unchanged cloud dirty-status check and 0.82 ms for a metadata-only list refresh, with zero history-body reads for that refresh. These are local synthetic CPU/latency indicators, not measured electrical energy. The countdown updates two text nodes once a second while visible; it performs no networking.
+
+A private copy of the real 12-session library (about 52 MB of current native logs) was also profiled. After saving verified summary/file-state hints, an independent process established native/list/cloud state in about 12 ms with roughly 72 MB RSS. First-scan transient RSS remained much higher (about 854 MB in that run); this is a remaining cost of decoding large histories, not the steady-state footprint. Imported/adopted sessions no longer retain a redundant full native-body baseline.

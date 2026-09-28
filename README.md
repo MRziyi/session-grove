@@ -15,18 +15,20 @@ You build a useful context, branch to try another idea, then branch again to wri
 Session Grove gives that work a structure:
 
 - **One Project for one piece of work.** Keep a paper, repository or research topic together across sessions and devices. Shared-prefix conversations appear as one tree. Internal agent workers and empty sessions stay out of your list.
+- **A home for everyday questions.** Ungrouped is a shared inbox across devices. Browse recent work, expand older sessions, search everything, and archive in batches without having to classify every conversation.
+- **See the source.** Tool badges identify Codex/Claude history; a device badge shows the latest recorded conversation source.
 - **Name the work, not every message.** Turn a stretch of conversation into “Set up context”, “Draft the introduction” or “Test the alternative”. New conversation stays in Pending until you organize it.
 - **See the branch and read its context together.** The Transcript and Graph stay side by side, with color bands connecting the actual chats to your logical Nodes.
 - **Choose which context to continue with.** Use a recorded compaction result or restore the recorded history before it. The graph shows which earlier Nodes are superseded; choices apply when you activate or explicitly apply the context.
 - **Keep only useful sessions active.** Activate the path you want in your agent. Archive a finished path without losing its shared prefix or cluttering the tree you are still using.
-- **Pick up on another Mac.** Filed projects sync through your WebDAV storage. Open a project to get its list; open a tree to download its context when needed.
+- **Pick up on another Mac.** Named projects and Ungrouped sync through your WebDAV storage. Open a project to get its list; open a tree to download its context when needed.
 
 Grove manages the session library. **Codex and Claude Code remain where you actually talk to the agent.** It does not replace their editor integrations or send model requests on your behalf.
 
 ## A typical workflow
 
 1. Start a conversation in Codex or Claude Code, then click **Update** in Grove.
-2. Select ungrouped sessions and **Move** them into an existing or new Project.
+2. Keep everyday conversations in **Ungrouped**, or **Move** a whole tree into a named Project. Both synchronize; filing is optional.
 3. Open a tree. Click a start chat and an end chat to select a continuous range, then **Combine** it under a useful title. **Dissolve** returns a range to Pending.
 4. Select any graph Node to **Rename** it. Naming a Pending segment turns it into a saved Node. **Fork** appears when that Node ends at a complete agent turn.
 5. Select a session's endpoint to **Activate**, **Deactivate**, or **Archive** that path. Archived paths disappear from the in-use graph and remain complete in Archived. Other branches stay visible.
@@ -62,17 +64,19 @@ WebDAV is optional. Enter your server address, account and password; Grove adds 
 
 Filing work, naming Nodes and other organization changes upload automatically. Local sessions refresh every **1 minute** by default. A **15-minute** fallback uploads changed projects, including unfinished Pending. Every upload captures local updates first; an unchanged library makes no scheduled cloud request. Both intervals can be changed or disabled in Settings.
 
-**Sync** sends outstanding project changes—including unfinished Pending—and checks the cloud directory. The hover text shows the last upload and directory-check times. Native Active choices stay local to each device. Cloud reads follow startup, focus and explicit navigation with freshness checks; ordinary page refreshes do not poll WebDAV.
+**Sync** sends outstanding project changes—including unfinished Pending—and checks the cloud directory. The hover text shows the last upload and directory-check times. Native Active choices stay local to each device. Cloud reads follow startup, focus and explicit navigation with freshness checks; ordinary page refreshes do not poll WebDAV. Sync and Update show live countdowns; ticking them makes no server request and pauses when the page is hidden.
 
 The library retains original session records. Node edits organize those records rather than rewriting the conversation. Cloud content is encrypted when you enable encryption; a yellow status identifies unencrypted storage. Saved credentials and the optional passphrase live in owner-only local files so `pnpm dev` can reconnect. This is not macOS Keychain storage.
 
 ## Current scope
 
-**0.7.1 · experimental · macOS first.** Same-agent branching and cross-device continuation are supported; Claude-to-Codex conversion is not.
+**0.8.0 · experimental · macOS first.** Same-agent branching and cross-device continuation are supported; Claude-to-Codex conversion is not.
 
 **Context fidelity has limits.** Supported materialization preserves recorded tool calls/results, reasoning and instructions instead of rebuilding a conversation from visible prose. Codex paginated forks resolve their recorded prefix references and remain paginated on activation. Native New branch and Grove Fork have been compared at the same checkpoint, including tool/reasoning records and native projected items. Missing history segments still block context changes. Dynamic client instructions, opaque compaction and external assets prevent a promise of identical model requests. See the [requirements and fidelity audit](docs/requirements-audit.md).
 
 Native activation changes currently require closing running agent processes first. The UI explains this in Settings. Codex native read/resume has been exercised with a real executable; Claude file adapters are tested, but real Claude-client verification is still pending. WebDAV has passed isolated protocol tests and a live Teracloud round trip; other providers can differ.
+
+Cross-agent conversion is not exposed yet. Agent tags describe actual content; an “Activate as” choice will require a verified conversion adapter.
 
 Node token counts are estimates. Before activation, Grove checks recorded usage and available local context-window settings and warns when the context may be near its limit.
 

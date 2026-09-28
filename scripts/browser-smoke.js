@@ -50,11 +50,23 @@ await call('Emulation.setDeviceMetricsOverride', { width: 1512, height: 982, dev
 await evaluate('localStorage.removeItem("grove-language")'); await call('Page.reload');
 await wait('document.querySelectorAll(".session-row").length === 1');
 assert.equal(await evaluate('document.documentElement.lang'), 'en');
+assert.ok(await evaluate('[...document.querySelectorAll("[data-scope]")].some(e=>e.textContent.includes("Ungrouped"))'));
+assert.ok(await evaluate('document.querySelector(".nav-footer").getBoundingClientRect().height <= 44'));
+assert.ok(await evaluate('document.querySelector(".row-tags .tool-tag") && document.querySelector(".row-tags .device-tag")'));
+const countdown = await evaluate('document.querySelector("#collect .button-countdown").textContent'); await new Promise(r=>setTimeout(r,1300));assert.notEqual(await evaluate('document.querySelector("#collect .button-countdown").textContent'),countdown);
 assert.equal(await evaluate('document.querySelectorAll(".banner-actions button").length'), 3);
 assert.equal(await evaluate('!!document.querySelector("#upload") || !!document.querySelector(".banner #language")'), false);
 fs.mkdirSync('test-results', { recursive: true });
 const screenshot = async name => { const result = await call('Page.captureScreenshot', { format: 'png' }); fs.writeFileSync('test-results/' + name + '.png', Buffer.from(result.data, 'base64')); };
-await screenshot('v7-active-list');
+await screenshot('v8-active-list');
+await evaluate('[...document.querySelectorAll("[data-scope]")].find(e=>e.dataset.scope==="00000000-0000-4000-8000-000000000001").click()');await wait('document.querySelector("[data-time-group=older]")');
+assert.equal(await evaluate('document.querySelector("[data-time-group=older]").open'),false);assert.equal(await evaluate('document.querySelector("[data-time-group=older]").querySelectorAll(".session-row").length'),0);
+await evaluate('document.querySelector("[data-time-group=older]").open=true');await wait('document.querySelector("[data-time-group=older]").querySelectorAll(".session-row").length===1');
+await evaluate('document.querySelector("[data-time-group=older]").open=false');await wait('document.querySelector("[data-time-group=older]").querySelectorAll(".session-row").length===0');
+await evaluate('document.querySelector("#search").value="older daily";document.querySelector("#search").dispatchEvent(new Event("input"))');await wait('document.querySelectorAll(".session-row").length===1&&document.querySelector(".session-row").textContent.includes("older daily")');
+await evaluate('[...document.querySelectorAll("[data-scope]")].find(e=>e.dataset.scope==="active:codex").click()');await wait('document.querySelectorAll(".session-row").length===1');
+await evaluate('document.querySelector("[data-select]").click()');assert.ok(await evaluate('(()=>{const a=document.querySelector(".selection-count").getBoundingClientRect(),b=document.querySelector("#move-items").getBoundingClientRect();return Math.abs((a.top+a.height/2)-(b.top+b.height/2))<2})()'));await evaluate('document.querySelector("[data-select]").click()');
+
 const language = async value => {
     await evaluate('document.querySelector("#settings").click()'); await wait('document.querySelector("#language")');
     await evaluate('document.querySelector("#language").closest(".select-control").querySelector(".select-trigger").click()');
@@ -100,7 +112,7 @@ assert.equal(await evaluate('!!document.querySelector("#archive-path")'), false)
 await evaluate('document.querySelector("#rename-node").click()'); await wait('document.querySelector("[name=name]")');
 await evaluate('document.querySelector("[name=name]").value="Set up research context";document.querySelector("#dialog-form").requestSubmit()');
 await wait('!document.querySelector("#dialog").open && [...document.querySelectorAll(".node-title")].some(e=>e.textContent==="Set up research context")');
-await screenshot('v7-workspace');
+await screenshot('v8-workspace');
 await evaluate('[...document.querySelectorAll(".graph-node:not(.dimmed)")].at(-1).click()');
 await wait('document.querySelector("#archive-path")');
 await evaluate('document.querySelector("#archive-path").click()'); await wait('document.querySelector("#dialog").open');
@@ -108,7 +120,7 @@ await evaluate('document.querySelector("#dialog-form").requestSubmit()');
 await wait('!document.querySelector("#dialog").open && document.querySelector("#branch-picker").options.length === 1');
 assert.ok(await evaluate('document.querySelector("#transcripts").textContent.includes("Method question")'));
 assert.ok(await evaluate('!document.querySelector("#transcripts").textContent.includes("Intro question")'));
-await screenshot('v7-in-use');
+await screenshot('v8-in-use');
 // Keep a slow in-use response in flight, then navigate to Archived. It must never
 // restore the previous path picker under the new navigation category.
 await evaluate('document.querySelector("#back").click();window.originalFetch=window.fetch;window.fetch=async (...args)=>{const r=await window.originalFetch(...args);if(String(args[0]).includes("/trees/")&&String(args[0]).includes("view=in-use"))await new Promise(done=>setTimeout(done,700));return r;};document.querySelector("[data-open]").click();document.querySelector("[data-scope=archived]").click()');
@@ -125,13 +137,12 @@ assert.equal(await evaluate('document.querySelector("#branch-picker").options.le
 assert.ok(await evaluate('document.querySelector("#transcripts").textContent.includes("Establish the Chrono")'));
 assert.ok(await evaluate('!document.querySelector("#transcripts").textContent.includes("Method question")'));
 assert.equal(await evaluate('document.querySelectorAll("[data-chat]").length'), 0);
-await screenshot('v7-archived-path');
+await screenshot('v8-archived-path');
 await evaluate('[...document.querySelectorAll(".graph-node")].at(-1).click()');
 assert.equal(await evaluate('!!document.querySelector("#rename-node") || !!document.querySelector("#fork")'), false);
-await evaluate('document.querySelector("#restore-session").click()'); await wait('document.querySelector("#destination")');
-await evaluate('document.querySelector("#dialog-form").requestSubmit()'); await wait('!document.querySelector("#dialog").open && document.querySelector("#detail-page").hidden');
-await evaluate('[...document.querySelectorAll("[data-scope]")].find(e=>e.textContent.includes("Chrono")).click()');
-await wait('document.querySelectorAll(".session-row").length >= 3');
+await evaluate('document.querySelector("#restore-session").click()'); await wait('document.querySelector("#detail-page").hidden');
+await evaluate('[...document.querySelectorAll("[data-scope]")].find(e=>e.dataset.scope==="00000000-0000-4000-8000-000000000001").click()');
+await wait('document.querySelectorAll(".session-row").length >= 1');
 await evaluate('[...document.querySelectorAll("[data-open]")].find(e=>e.textContent.includes("Introduction")||e.textContent.includes("Method alternatives")).click()');
 await wait('!document.querySelector("#detail-page").hidden');
 assert.equal(await evaluate('document.querySelector("#branch-picker").options.length'), 2);
@@ -142,6 +153,7 @@ await evaluate('document.querySelector("#toggle-active").click()'); await wait('
 await evaluate('document.querySelector("#dialog-form").requestSubmit()');
 await wait('!document.querySelector("#dialog").open && document.querySelector("#toggle-active")?.textContent === "Deactivate"');
 await evaluate('document.querySelector("#back").click()');
+await evaluate('[...document.querySelectorAll("[data-scope]")].find(e=>e.textContent.includes("Chrono")).click()'); await wait('[...document.querySelectorAll("[data-open]")].some(e=>e.textContent.includes("Research context"))');
 await evaluate('[...document.querySelectorAll("[data-open]")].find(e=>e.textContent.includes("Research context")).click()');
 await wait('!document.querySelector("#detail-page").hidden');
 await evaluate('{const p=document.querySelector("#branch-picker");p.value=[...p.options].find(o=>o.text.includes("Temporal representation")).value;p.dispatchEvent(new Event("change"));}');
@@ -163,7 +175,7 @@ await wait('!document.querySelector("#dialog").open && document.querySelector("#
 await evaluate('document.querySelector("#transcripts [data-compaction]").click()');
 await wait('document.querySelector("#apply-context")');
 assert.ok(await evaluate('document.querySelectorAll(".graph-node.context-muted").length > 0'));
-await screenshot('v7-compaction');
+await screenshot('v8-compaction');
 await evaluate('document.querySelector("#apply-context").click()');
 await wait('document.querySelector("#activation-budget")?.textContent.length > 0');
 await evaluate('document.querySelector("#dialog-form").requestSubmit()');
@@ -172,7 +184,7 @@ await evaluate('document.querySelector("#settings").click()'); await wait('docum
 assert.equal(await evaluate('!!document.querySelector("#download-diagnostics")'),false);
 assert.equal(await evaluate('document.querySelector("[name=localUpdateMinutes]").value'),'1');
 assert.equal(await evaluate('document.querySelector("[name=autoUploadMinutes]").value'),'15');
-await screenshot('v7-settings'); await evaluate('document.querySelector("#dialog-close").click();document.querySelector("#information").click()'); await wait('document.querySelector("#download-diagnostics")'); await evaluate('document.querySelector("#dialog-close").click();document.querySelector("#about").click()');assert.ok(await evaluate('document.querySelector(".about").textContent.includes("Ziyi Zhang")'));await evaluate('document.querySelector("#dialog-close").click()');
+await screenshot('v8-settings'); await evaluate('document.querySelector("#dialog-close").click();document.querySelector("#information").click()'); await wait('document.querySelector("#download-diagnostics")'); await evaluate('document.querySelector("#dialog-close").click();document.querySelector("#about").click()');assert.ok(await evaluate('document.querySelector(".about").textContent.includes("Ziyi Zhang")'));assert.ok(await evaluate('document.querySelector("#dialog").getBoundingClientRect().height<310'));assert.ok(await evaluate('document.querySelector("#dialog").getBoundingClientRect().width<=350'));await evaluate('document.querySelector("#dialog-close").click()');
 // Exercise the progressively disclosed connection and encryption workflow.
 await call('Emulation.setDeviceMetricsOverride', { width: 1512, height: 982, deviceScaleFactor: 1, mobile: false });
 await evaluate('document.querySelector("#settings").click()'); await wait('document.querySelector("#verify-connection")');
@@ -186,7 +198,8 @@ assert.equal(await evaluate('document.querySelector("[name=password]").type'),'p
 await evaluate('{ const el=document.querySelector("[name=passphrase]");el.value="browser-test-encryption";el.dispatchEvent(new Event("input",{bubbles:true}));document.querySelector("#confirm-encryption").click(); }');
 await wait('document.querySelector("#modify-encryption")');
 assert.ok(await evaluate('document.querySelector("[name=passphrase]").disabled&&document.querySelector("[name=passphrase]").value.length>0'));
-await screenshot('v7-settings-configured');
+await screenshot('v8-settings-configured');
+const clockValues=new Set();for(let i=0;i<15;i++){clockValues.add(await evaluate('document.querySelector("#sync .button-countdown")?.textContent'));await new Promise(r=>setTimeout(r,200));}assert.ok(clockValues.size>1,'Sync clock must advance while Settings is open');
 await evaluate('document.querySelector("#modify-encryption").click()');await wait('document.querySelector("#confirm-encryption")');
 await evaluate('{ const el=document.querySelector("[name=passphrase]");el.focus();el.value="";delete el.dataset.stored;el.dispatchEvent(new Event("input",{bubbles:true}));document.querySelector("#confirm-encryption").click(); }');
 await wait('document.querySelector("#modify-encryption")&&document.querySelector(".setting-warning")');
@@ -195,6 +208,6 @@ await wait('document.querySelector("[name=autoUploadMinutes]").value==="20"&&doc
 await evaluate('document.querySelector("#dialog-close").click()');
 await call('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 1, mobile: true });
 assert.ok(await evaluate('document.body.scrollWidth <= 390'));
-await screenshot('v7-mobile'); assert.deepEqual(errors, []);
-console.log('Browser smoke passed: styled selectors, zoom/pan/reset, clipped ribbons, stale-view rejection, compaction toggle/apply, contiguous ranges, Pending rename, endpoint archive, isolated archived paths, restore, activation preflight, diagnostics entry, narrow layout.');
+await screenshot('v8-mobile'); assert.deepEqual(errors, []);
+console.log('Browser smoke passed: live clocks, shared inbox/time groups, device/tool badges, compact About/footer, aligned selection actions, styled selectors, zoom/pan/reset, clipped ribbons, stale-view rejection, compaction toggle/apply, contiguous ranges, Pending rename, endpoint archive, isolated archived paths, restore, activation preflight, diagnostics entry, narrow layout.');
 await call('Page.close'); ws.close(); mock.close();

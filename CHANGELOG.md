@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.8.0
+
+- Shared Ungrouped inbox with lazy cross-device loading, time groups, batch archive and restore without mandatory filing.
+- Live local-only Sync/Update countdowns, compact About/footer and aligned selection controls.
+- Actual tool/device provenance on lists and graph Nodes; no placeholder cross-agent conversion.
+- Native pointer fast paths, append-only fragment hashing, lightweight status/summary caches and indexed graph traversal.
+- Capture ongoing conversations for Pending display; retain completion checks for materialization.
+- Queue settings changes behind sync and surface remote archives that still need local deactivation.
+
 ## 0.7.1
 
 - Resolve Codex parent, edited-version and context-window history references before grouping or displaying sessions. Repair existing suffix-only imports on Update.

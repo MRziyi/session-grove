@@ -100,17 +100,17 @@ test('project collections contain standalone items and trees; logical commits al
     store.branch(p.id, 'Loose notes', 'codex');
     assert.deepEqual(store.forest(p.id).map(i => i.kind).sort(), ['session', 'tree']);
 });
-test('cloud exports only filed projects, including logical nodes; device Active never transfers', t => {
+test('cloud exports named projects and Ungrouped, including logical nodes; device Active never transfers', t => {
     const a = setup(t), b = setup(t), p = a.store.project('Cloud');
     const local = a.store.branch(null, 'Private local', 'codex', codexSample(a.cwd, [['Private local text', 'Not for cloud']]));
     const filed = a.store.branch(p.id, 'Filed', 'codex', codexSample(a.cwd, [['File me', 'Okay']]));
     const d = a.store.detail(filed.id);
     a.store.commitPending(filed.id, { name: 'Milestone', end: d.checkpoints[0].end, revisionId: d.head, expectedStart: 0 });
     const graph = a.store.exportGraph();
-    assert.equal(graph.branches.length, 1);
+    assert.equal(graph.branches.length, 2);
     assert.equal(graph.nodes.length, 1);
     const bodies = graph.revisions.flatMap(r => r.refs).map(h => a.store.db.prepare('SELECT body FROM objects WHERE hash=?').get(h).body).join('');
-    assert.ok(!bodies.includes('Private local text'));
+    assert.ok(bodies.includes('Private local text'));
     copy(a.store, b.store);
     assert.equal(b.store.detail(filed.id).nodes[0].name, 'Milestone');
     assert.equal(b.store.instances().length, 0);

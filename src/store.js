@@ -1,8 +1,12 @@
+import { sessionExclusion } from './session-kind.js';
+import { supportedHistory } from './codex-history.js';
+import { INBOX_ID, inboxProject, cloudProjectId } from './inbox.js';
+import { deviceDetails } from './device.js';
+import { ledger } from './context-ledger.js';
 import fs from 'node:fs';
 import { validPolicy } from './context-policy.js';
 import { collections, listing, treeGraph, organize, moveItems } from './workspace.js';
 import path from 'node:path';
-import os from 'node:os';
 import { DatabaseSync } from 'node:sqlite';
 import { id, now, hash, assert, text, atomic, json } from './util.js';
 import { parse, recordRefs, blank } from './transcript.js';
@@ -12,7 +16,8 @@ export class Store {
         this.root = root;
         fs.mkdirSync(root, { recursive: true, mode: 0o700 });
         const deviceFile = path.join(root, 'device.json');
-        this.device = json(deviceFile, null) || { id: id(), name: os.hostname() };
+        const savedDevice = json(deviceFile, null);
+        this.device = savedDevice?.platform ? savedDevice : { ...deviceDetails(), ...savedDevice, id: savedDevice?.id || id() };
         atomic(deviceFile, JSON.stringify(this.device));
         this.db = new DatabaseSync(path.join(root, 'grove.sqlite'));
         this.db.exec(`PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000;
@@ -21,7 +26,7 @@ export class Store {
       CREATE TABLE IF NOT EXISTS objects (hash TEXT PRIMARY KEY, body TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS local (key TEXT PRIMARY KEY, body TEXT NOT NULL);`);
         fs.chmodSync(path.join(root, 'grove.sqlite'), 0o600);
-        this.version = 0; this.memoCache = new Map(); this.parseCache = new Map(); this.parseBytes = 0;
+        this.version = 0; this.cloudVersion = 0; this.cloudCache = new Map(); this.memoCache = new Map(); this.parseCache = new Map(); this.parseBytes = 0; this.summaryCache = new Map();
         this.getStatement = this.db.prepare('SELECT body FROM entities WHERE kind=? AND id=?');
         this.objectStatement = this.db.prepare('SELECT body FROM objects WHERE hash=?');
         this.insertObject = this.db.prepare('INSERT OR IGNORE INTO objects VALUES (?,?)');
@@ -41,6 +46,18 @@ export class Store {
         if (size < 24 * 1024 * 1024) { this.parseCache.set(key, { value, size }); this.parseBytes += size; }
         return value;
     }
+    summary(revisionId, agent) {
+        const key = agent + ':' + revisionId; if (this.summaryCache.has(key)) return this.summaryCache.get(key);
+        return this.rememberSummary(revisionId,agent,this.parsed(revisionId,agent));
+    }
+    rememberSummary(revisionId,agent,p) {
+        const key=agent+':'+revisionId, chats = p.messages.filter(m => m.role !== 'tool').length;
+        const value = { chats, firstUser:p.messages.find(m=>m.role==='user')?.text.slice(0,100), complete: p.complete && !p.errors.length, external: p.warnings.some(w=>w.includes('外部附件')), nativeId:p.nativeId, cwd:p.cwd, mode:p.meta?.history_mode, forkedFrom:p.meta?.forked_from_id || p.meta?.forkedFromId, forkOrdinal:p.meta?.forked_from_ordinal_exclusive, forkEnd:p.meta?.forked_from_ordinal_exclusive == null ? -1 : p.records.findIndex(r=>r.value?.ordinal >= p.meta.forked_from_ordinal_exclusive), supported:supportedHistory(p),
+            excluded:sessionExclusion({agent,source:p.meta?.source,sidechain:agent === 'claude' && p.records.find(r=>['user','assistant'].includes(r.value?.type))?.value?.isSidechain === true,chats}) };
+        if(this.summaryCache.size >= 4096) this.summaryCache.delete(this.summaryCache.keys().next().value);
+        this.summaryCache.set(key,value); return value;
+    }
+    activity(revisionId, agent) { const p = this.parsed(revisionId, agent), entry = this.parseCache.get(agent + ':' + revisionId); if (entry) return entry.ledger ||= ledger(p, agent); return ledger(p, agent); }
     close() { this.db.close(); }
     transaction(fn) {
         this.db.exec('BEGIN IMMEDIATE');
@@ -50,7 +67,7 @@ export class Store {
             return result;
         }
         catch (e) {
-            this.db.exec('ROLLBACK'); this.invalidate(); this.parseCache.clear(); this.parseBytes = 0; this.instanceCache = undefined;
+            this.db.exec('ROLLBACK'); this.invalidate(); this.parseCache.clear(); this.parseBytes = 0; this.instanceCache = undefined; this.summaryCache.clear(); this.cloudCache.clear(); this.cloudVersion++;
             throw e;
         }
     }
@@ -58,6 +75,15 @@ export class Store {
     get(kind, key) { const row = this.getStatement.get(kind, key); assert(row, `${kind} 不存在`, 404); return JSON.parse(row.body); }
     put(kind, value) { this.invalidate(); this.entityWrite.run(kind, value.id, JSON.stringify(value)); return value; }
     local(key, value) {
+        if (key.startsWith('cloud:')) {
+            if (!this.cloudCache.has(key)) { const body = this.localRead.get(key)?.body; this.cloudCache.set(key, { body, value: body ? JSON.parse(body) : null }); }
+            const cached = this.cloudCache.get(key);
+            if (arguments.length === 1) return cached.value;
+            const body = JSON.stringify(value);
+            if (body !== cached.body) { this.localWrite.run(key, body); this.cloudVersion++; this.cloudCache.set(key, { body, value: JSON.parse(body) }); }
+            return value;
+        }
+
         if (key === 'instances') {
             if (this.instanceCache === undefined) { const row = this.localRead.get(key); this.instanceCache = row ? JSON.parse(row.body) : []; }
             if (arguments.length === 2) {
@@ -80,11 +106,12 @@ export class Store {
     }
     instances() { return this.local('instances') || []; }
     project(name, description = '') { return this.put('project', { id: id(), name: text(name), description: String(description).slice(0, 2000), createdAt: now(), updatedAt: now(), metaVersion: id(), metaAncestors: [] }); }
-    revision(raw, parent = null, source = {}) {
-        const refs = recordRefs(raw);
+    revision(raw, parent = null, source = {}, prefixRaw = null) {
+        const inherited = parent && prefixRaw !== null && prefixRaw.endsWith('\n') && raw.startsWith(prefixRaw) ? this.get('revision',parent).refs : [];
+        const refs = recordRefs(inherited.length ? raw.slice(prefixRaw.length) : raw);
         for (const r of refs)
             this.insertObject.run(r.hash, r.body);
-        return this.put('revision', { id: id(), parent, refs: refs.map(r => r.hash), createdAt: now(), source: { deviceId: this.device.id, deviceName: this.device.name, ...source } });
+        return this.put('revision', { id: id(), parent, refs: [...inherited, ...refs.map(r => r.hash)], createdAt: now(), source: { deviceId: this.device.id, deviceName: this.device.name, deviceModel: this.device.model, devicePlatform: this.device.platform, deviceKind: this.device.kind, ...source } });
     }
     raw(revisionId, end) {
         const rev = this.get('revision', revisionId);
@@ -145,10 +172,11 @@ export class Store {
             return this.put('branch', child);
         }
         // A rewritten log is retained in full; no destructive line union or timestamp ordering.
-        const rev = this.revision(raw, b.head, { ...source, rewritten: !raw.startsWith(current) });
+        const rev = this.revision(raw, b.head, { ...source, rewritten: !raw.startsWith(current) }, current);
+        const previousContentTime = b.contentUpdatedAt || b.updatedAt;
         b.head = rev.id;
         b.updatedAt = now();
-        b.contentUpdatedAt = b.updatedAt;
+        b.contentUpdatedAt = source.operation === 'native-settings' ? previousContentTime : b.updatedAt;
         return this.put('branch', b);
     }
     detail(branchId) {
@@ -187,18 +215,16 @@ export class Store {
     moveItems(options) { return moveItems(this, options); }
     snapshot() { return this.memo('snapshot', () => this.buildSnapshot()); }
     buildSnapshot() {
-        const summaries = Object.fromEntries(this.all('branch').filter(b => !b.excluded).map(b => {
-            const { pending, nodes } = pendingDetail(this, b, this.parsed(b.head, b.agent));
-            return [b.id, { pendingCount: pending.count, pendingStart: pending.start, pendingEnd: pending.end, nodeIds: nodes.map(n => n.id) }];
-        }));
-        return { ...this.collections(), device: this.device, projects: this.all('project'), branches: this.all('branch').filter(b => !b.excluded), nodes: this.all('node'), summaries, localItems: this.forest('local'), projectItems: Object.fromEntries(this.all('project').map(p => [p.id, this.forest(p.id)])), instances: this.instances().filter(i => !i.excluded).map(({ baseline, observedHash, ...i }) => i), stats: this.db.prepare('SELECT COUNT(*) AS objects, COALESCE(SUM(length(body)),0) AS bytes FROM objects').get(), conflicts: this.local('conflicts') || [] };
+        return { ...this.collections(), device:this.device, projects:this.all('project'), branches:this.all('branch').filter(b=>!b.excluded),
+            instances:this.instances().filter(i=>!i.excluded).map(({baseline,observedHash,summaryJson,summaryRevision,summaryVersion,observedStamp,...i})=>i), conflicts:this.local('conflicts') || [] };
     }
+
     exportGraph() { return this.memo('exportGraph', () => this.buildExportGraph()); }
     buildExportGraph() {
-        const all = this.all('branch'), wanted = new Set(all.filter(b => b.projectId && !b.excluded).map(b => b.id));
+        const all = this.all('branch'), wanted = new Set(this.collections().items.flatMap(i => [i.id, ...i.sessionIds]));
         // Preserve frozen ancestry dependencies, while excluding unrelated helpers.
         for (const id of [...wanted]) { let b = this.get('branch', id); while (b.parentId) { wanted.add(b.parentId); b = this.get('branch', b.parentId); } }
-        const branches = all.filter(b => wanted.has(b.id)), branchIds = new Set(branches.map(b => b.id));
+        const branches = all.filter(b => wanted.has(b.id)).map(b => ({ ...b, projectId: cloudProjectId(b.projectId) })), branchIds = new Set(branches.map(b => b.id));
         const nodes = this.all('node').filter(n => branchIds.has(n.branchId)), revisions = new Map();
         const visit = revisionId => { if (!revisionId || revisions.has(revisionId))
             return; const r = this.get('revision', revisionId); revisions.set(r.id, r); visit(r.parent); };
@@ -208,11 +234,12 @@ export class Store {
         }
         for (const n of nodes)
             visit(n.revisionId);
-        return { schema: 3, layouts: this.all('layout').filter(l => branchIds.has(l.rootId)), projects: this.all('project'), branches, nodes, revisions: [...revisions.values()] };
+        return { schema: 3, layouts: this.all('layout').filter(l => branchIds.has(l.rootId)), projects: [...this.all('project'), ...(branches.some(b => b.projectId === INBOX_ID) ? [inboxProject()] : [])], branches, nodes, revisions: [...revisions.values()] };
     }
     merge(graph, objects) {
         assert([1, 2, 3].includes(graph?.schema) && Array.isArray(graph.projects) && Array.isArray(graph.branches) && Array.isArray(graph.revisions), '不兼容的同步格式');
         assert(graph.revisions.length < 100000 && graph.branches.length < 100000, '远端资料库过大');
+        graph = { ...graph, projects: graph.projects.filter(p => p.id !== INBOX_ID), branches: graph.branches.map(b => b.projectId === INBOX_ID ? { ...b, projectId: null } : b) };
         return this.transaction(() => {
             for (const [h, body] of Object.entries(objects)) {
                 assert(hash(body) === h, '远端对象校验失败');
@@ -256,7 +283,7 @@ export class Store {
             for (const b of graph.branches) {
                 text(b.name, 'Session name', 10000); assert(validPolicy(b.contextPolicy), 'Invalid context policy.');
                 assert(['codex', 'claude'].includes(b.agent), '无效 Agent');
-                this.get('project', b.projectId);
+                if (b.projectId) this.get('project', b.projectId);
                 this.get('revision', b.head);
                 const old = this.all('branch').find(x => x.id === b.id);
                 if (!old) {
@@ -276,9 +303,9 @@ export class Store {
                         remapped.set(b.id, forkId);
                     }
                 }
-                if (old.name !== b.name || old.archived !== b.archived || old.group !== b.group || old.projectId !== b.projectId || JSON.stringify(old.contextPolicy || {}) !== JSON.stringify(b.contextPolicy || {})) {
+                if (old.name !== b.name || old.archived !== b.archived || old.group !== b.group || old.projectId !== b.projectId || old.parentId !== b.parentId || old.forkRevision !== b.forkRevision || JSON.stringify(old.contextPolicy || {}) !== JSON.stringify(b.contextPolicy || {})) {
                     if (b.metaAncestors?.includes(old.metaVersion))
-                        this.put('branch', { ...this.get('branch', b.id), name: b.name, archived: b.archived, group: b.group, projectId: b.projectId, contextPolicy: b.contextPolicy, metaVersion: b.metaVersion, metaAncestors: b.metaAncestors });
+                        this.put('branch', { ...this.get('branch', b.id), name: b.name, archived: b.archived, group: b.group, projectId: b.projectId, contextPolicy: b.contextPolicy, parentId: b.parentId, forkRevision: b.forkRevision, forkEnd: b.forkEnd, forkParentEnd: b.forkParentEnd, metaVersion: b.metaVersion, metaAncestors: b.metaAncestors });
                     else if (!old.metaAncestors?.includes(b.metaVersion))
                         conflicts.push({ kind: 'branch', local: old, remote: b });
                 }

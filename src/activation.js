@@ -60,5 +60,5 @@ export function activationInfo(store, native, branchId, cwd, env = process.env) 
     const formatSupported = supportedHistory(parsed) || original;
     const complete = formatSupported && parsed.complete && !parsed.errors.length && !parsed.warnings.some(w => w.includes('历史格式') || w.includes('外部附件'));
     const fingerprint = hash(JSON.stringify([branch.head, branch.contextPolicy, target, model, window, compactAt, estimated, basis]));
-    return { fidelity: formatSupported ? 'record-preserving' : 'unsupported-history-mode', model, window, compactAt, source, estimated, basis, risk, unknown: !window && !compactAt, complete, fingerprint, cwd: target || '', observedAt: usage?.at || null };
+    return { readiness: !parsed.complete ? 'unfinished-turn' : parsed.warnings.some(w=>w.includes('外部附件')) ? 'external-attachments' : !formatSupported ? 'unsupported-history' : 'ready', fidelity: formatSupported ? 'record-preserving' : 'unsupported-history-mode', model, window, compactAt, source, estimated, basis, risk, unknown: !window && !compactAt, complete, fingerprint, cwd: target || '', observedAt: usage?.at || null };
 }

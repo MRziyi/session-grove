@@ -9,7 +9,7 @@ import { execFileSync } from 'node:child_process';
 import { DatabaseSync } from 'node:sqlite';
 import { assert, atomic, hash, id, inside, json, now, safePath, walk } from './util.js';
 import { parse, renderNative } from './transcript.js';
-export function coldGuard() {
+export function coldGuard(agents = ['codex', 'claude']) {
     let output;
     try {
         output = execFileSync('/bin/ps', ['-axo', 'pid=,comm='], { encoding: 'utf8' });
@@ -18,7 +18,7 @@ export function coldGuard() {
         throw new Error('无法检查 Agent 是否仍在运行，暂不写入原生数据');
     }
     const busy = output.split('\n').map(line => line.replace(/^\s*\d+\s+/, '')).filter(command => /(?:^|\/)(codex|claude)(?:\s|$)/i.test(command));
-    assert(!busy.length, '请先关闭 Codex / Claude 的运行会话及对应 IDE 扩展，再应用 Active 清单。资料库浏览与分支不受影响。', 409);
+    assert(!busy.some(command => agents.some(agent => new RegExp('(?:^|/)' + agent + '(?:\\s|$)', 'i').test(command))), '请先关闭目标 Agent 的运行会话及对应 IDE 扩展，再应用 Active 清单。资料库浏览与分支不受影响。', 409);
 }
 export class Native {
     constructor(store, options = {}) {
@@ -31,7 +31,11 @@ export class Native {
         // Adopted logs are already stored as immutable revisions. A null baseline
         // references that revision instead of duplicating the whole log in local state.
         const instances = store.instances(); let compacted = false;
-        for (const i of instances) if (i.baseline && i.baseRevision && i.baseline === store.raw(i.baseRevision)) { i.baseline = null; compacted = true; }
+        for (const i of instances) {
+            if (i.summaryVersion === 1 && i.summaryRevision === i.baseRevision && i.summaryJson) { try { store.summaryCache.set(i.agent+':'+i.baseRevision,JSON.parse(i.summaryJson)); } catch {} }
+            if (i.adopted && i.baseline) { i.baseline=null; compacted=true; }
+            else if (i.baseline && i.baseRevision && i.baseline === store.raw(i.baseRevision)) { i.baseline = null; compacted = true; }
+        }
         if (compacted) store.local('instances', instances);
     }
     read(file) {
@@ -85,8 +89,11 @@ export class Native {
                         const namedId = path.basename(file).match(/[a-f0-9]{8}-(?:[a-f0-9]{4}-){3}[a-f0-9]{12}/)?.[0];
                         if (namedId && canonicalPaths.has(namedId) && canonicalPaths.get(namedId) !== path.resolve(file)) continue;
                         const stat = fs.statSync(file), stamp = `${stat.ino}:${stat.size}:${stat.mtimeMs}:${stat.ctimeMs}`;
-                        let p = this.scanCache.get(file)?.stamp === stamp ? this.scanCache.get(file).summary : null;
-                        if (!p) { const full = parse(this.history(file, agent), agent); p = { nativeId: full.nativeId, cwd: full.cwd, title: full.records.filter(r => r.value?.type === 'custom-title').at(-1)?.value?.customTitle, firstUser: full.messages.find(m => m.role === 'user')?.text.slice(0, 100), count: full.messages.filter(m => m.role !== 'tool').length, source: full.meta?.source, sidechain: full.records.find(r => ['user', 'assistant'].includes(r.value?.type))?.value?.isSidechain === true, warnings: full.warnings }; this.scanCache.set(file, { stamp, summary: p }); }
+                        const known = agent === 'codex' && indexed?.source && instances.find(i=>i.nativeId===indexed.id && i.agent===agent);
+                        const saved = known && this.store.summary(known.baseRevision,agent);
+                        let p = saved ? { nativeId:known.nativeId,cwd:known.cwd,count:saved.chats,firstUser:saved.firstUser,source:indexed.source,warnings:[],errors:0 } : this.scanCache.get(file)?.stamp === stamp ? this.scanCache.get(file).summary : null;
+                        if (!p) { const full = parse(this.history(file, agent), agent); p = { nativeId: full.nativeId, cwd: full.cwd, title: full.records.filter(r => r.value?.type === 'custom-title').at(-1)?.value?.customTitle, firstUser: full.messages.find(m => m.role === 'user')?.text.slice(0, 100), count: full.messages.filter(m => m.role !== 'tool').length, source: full.meta?.source, sidechain: full.records.find(r => ['user', 'assistant'].includes(r.value?.type))?.value?.isSidechain === true, warnings: full.warnings, errors: full.errors.length }; this.scanCache.set(file, { stamp, summary: p }); }
+                        if (p.errors) { errors.push({ file:path.basename(file), message:'Native record is still being written.' }); continue; }
                         if (!p.nativeId)
                             continue;
                         if (canonicalPaths.has(p.nativeId) && canonicalPaths.get(p.nativeId) !== path.resolve(file)) continue;
@@ -122,7 +129,7 @@ export class Native {
             b.archived = !!item.archived;
             this.store.put('branch', b);
             const instances = this.store.instances();
-            instances.push({ id: id(), branchId: b.id, agent: b.agent, root: this.roots[b.agent], nativeId: item.nativeId, file: item.file, cwd: item.cwd, cwdAvailable: item.cwdAvailable, desired: observe && !item.archived, applied: !item.archived, baseRevision: b.head, baseline: physical === raw ? null : physical, historyResolved: true, observedHash: hash(physical), adopted: true, title: b.name, excluded: false, requiresAuxiliary });
+            instances.push({ id: id(), branchId: b.id, agent: b.agent, root: this.roots[b.agent], nativeId: item.nativeId, file: item.file, cwd: item.cwd, cwdAvailable: item.cwdAvailable, desired: observe && !item.archived, applied: !item.archived, baseRevision: b.head, baseline: null, historyResolved: true, observedHash: hash(physical), adopted: true, title: b.name, excluded: false, requiresAuxiliary });
             this.store.local('instances', instances);
             return b;
         });
@@ -201,12 +208,12 @@ export class Native {
             }
             try {
                 const stat = fs.statSync(i.file), stamp = `${stat.ino}:${stat.size}:${stat.mtimeMs}:${stat.ctimeMs}`;
-                if (!i.missing && this.observedStats.get(i.id) === stamp) continue;
+                if (!i.missing && (this.observedStats.get(i.id) || i.observedStamp) === stamp) continue;
                 const raw = this.read(i.file);
                 i.missing = false;
-                if (hash(raw) === i.observedHash && (!i.adopted || i.historyResolved)) { this.observedStats.set(i.id, stamp); continue; }
+                if (hash(raw) === i.observedHash && (!i.adopted || i.historyResolved)) { this.observedStats.set(i.id, stamp); i.observedStamp=stamp; i.summaryJson=JSON.stringify(this.store.summary(i.baseRevision,i.agent)); i.summaryRevision=i.baseRevision; i.summaryVersion=1; continue; }
                 const p = parse(raw, i.agent);
-                if (p.errors.length || !p.complete) {
+                if (p.errors.length) {
                     i.pending = '等待完整轮次';
                     this.observedStats.set(i.id, stamp);
                     continue;
@@ -216,12 +223,18 @@ export class Native {
                 const baseline = i.baseline ?? base;
                 const resolved = this.history(i.file, i.agent);
                 const logical = i.adopted ? resolved : resolved.startsWith(baseline) ? base + resolved.slice(baseline.length) : resolved;
-                const b = this.store.ingest(i.branchId, logical, i.baseRevision, { agent: i.agent, nativeId: i.nativeId, cwd: i.cwd, client: 'unknown', operation: 'capture' });
+                const suffix = base.endsWith('\n') && logical.startsWith(base) ? logical.slice(base.length) : null;
+                const conversationChanged = suffix === null || suffix.split('\n').filter(Boolean).some(line => { const v = JSON.parse(line); return i.agent === 'codex' ? ['response_item','compacted'].includes(v.type) || v.type === 'event_msg' && ['task_started','user_message','agent_message'].includes(v.payload?.type) : ['user','assistant'].includes(v.type) || v.subtype === 'compact_boundary'; });
+                const b = this.store.ingest(i.branchId, logical, i.baseRevision, { agent: i.agent, nativeId: i.nativeId, cwd: i.cwd, client: 'unknown', operation: conversationChanged ? 'capture' : 'native-settings' });
                 i.branchId = b.id;
                 i.baseRevision = b.head;
-                i.baseline = raw === logical ? null : raw;
+                if(logical===raw)this.store.rememberSummary(b.head,i.agent,p);
+                const summary=this.store.summary(b.head,i.agent);
+                if(b.excluded==='empty' && !summary.excluded){this.store.put('branch',metadata(b,{excluded:null}));i.excluded=false;}
+                i.summaryJson=JSON.stringify(summary);i.summaryRevision=b.head;i.summaryVersion=1;i.observedStamp=stamp;
+                i.baseline = i.adopted || raw === logical ? null : raw;
                 i.observedHash = hash(raw);
-                i.historyResolved = true; i.pending = null; this.observedStats.set(i.id, stamp);
+                i.historyResolved = true; i.pending = p.complete ? null : '等待完整轮次'; this.observedStats.set(i.id, stamp);
                 results.push({ branchId: b.id, conflict: !!b.conflict });
             }
             catch (e) {
@@ -265,7 +278,9 @@ export class Native {
         return safePath(root, path.join(root, files[0]));
     }
     apply(branchIds = null) {
-        this.guard();
+        const targeted = this.plan().operations.filter(op => !branchIds || branchIds.includes(op.branchId));
+        if (!targeted.length) return { applied: 0 };
+        this.guard([...new Set(targeted.map(op => op.agent))]);
         assert(!this.plan().pendingRecovery.length, '存在未完成操作，请先恢复备份', 409);
         this.collect();
         const instances = this.store.instances(), plan = this.plan();
@@ -306,7 +321,7 @@ export class Native {
                     assert(!this.store.detail(b.id).lineage.some(r => r.source.requiresAuxiliary), '此分支继承了含伴随目录的会话，当前版本尚不支持完整物化');
                     assert(!parsed.warnings.some(w => w.includes('外部附件')), '此会话包含外部附件引用。当前版本可浏览和分支，完整附件迁移尚未支持。');
                     const original = i.adopted && i.baseRevision === b.head && (i.contextPolicyHash || policyHash(null)) === policyHash(b.contextPolicy) && parsed.cwd === i.cwd;
-                    const output = original ? (i.baseline ?? raw) : renderNative(raw, b.agent, i.nativeId, i.cwd, b.name, b.contextPolicy);
+                    const output = original && i.file && fs.existsSync(i.file) ? this.read(i.file) : renderNative(raw, b.agent, i.nativeId, i.cwd, b.name, b.contextPolicy);
                     const dest = safePath(root, op.file);
                     assert(!fs.existsSync(dest) || dest === i.file, '目标记录已存在，拒绝覆盖');
                     backup(dest);
@@ -318,7 +333,7 @@ export class Native {
                     i.file = dest;
                     i.applied = true;
                     i.baseRevision = b.head;
-                    i.baseline = output;
+                    i.baseline = i.adopted ? null : output;
                     i.observedHash = hash(output);
                     i.missing = false;
                     i.title = b.name; i.contextPolicyHash = policyHash(b.contextPolicy);
@@ -377,7 +392,7 @@ export class Native {
                         assert(index.version === 1 && Array.isArray(index.entries), '不支持的 Claude sessions-index 格式');
                         const entries = index.entries.filter(e => !managed.has(e.sessionId));
                         for (const i of after.filter(i => i.agent === 'claude' && i.applied && changedIds.has(i.id) && path.dirname(i.file) === dir)) {
-                            const b = this.store.get('branch', i.branchId), p = parse(i.baseline, 'claude');
+                            const b = this.store.get('branch', i.branchId), p = parse(writes.get(i.file) ?? i.baseline ?? this.read(i.file), 'claude');
                             const previous = index.entries.find(e => e.sessionId === i.nativeId) || {};
                             entries.push({ ...previous, sessionId: i.nativeId, fullPath: i.file, fileMtime: Date.now(), firstPrompt: p.messages.find(m => m.role === 'user')?.text || b.name, summary: b.name, messageCount: p.messages.length, created: previous.created || b.createdAt, modified: now(), projectPath: i.cwd, isSidechain: false });
                         }

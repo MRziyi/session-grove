@@ -20,9 +20,9 @@ function setup(t) {
 const extra = () => codexTurn('A new question', 'A new answer').map(x => JSON.stringify(x) + '\n').join('');
 test('fork pins an exact checkpoint, deduplicates history, and does not activate', t => {
     const { store, p, cwd } = setup(t), raw = codexSample(cwd, [['Context', 'Ready'], ['Intro', 'Done']]);
-    const b = store.branch(p.id, 'main', 'codex', raw), detail = store.detail(b.id), count = store.snapshot().stats.objects;
+    const b = store.branch(p.id, 'main', 'codex', raw), detail = store.detail(b.id), count = store.db.prepare('SELECT COUNT(*) AS n FROM objects').get().n;
     const child = store.fork(b.id, { name: 'Method', end: detail.checkpoints[0].end });
-    assert.equal(store.snapshot().stats.objects, count);
+    assert.equal(store.db.prepare('SELECT COUNT(*) AS n FROM objects').get().n, count);
     assert.equal(store.detail(child.id).messages.length, 2);
     const frozen = store.raw(child.head);
     store.ingest(b.id, raw + extra(), b.head, { deviceName: 'A' });
@@ -203,4 +203,8 @@ test('sessions with unsaved auxiliary artifacts cannot be removed or fork-materi
     native.setActive(b.id, cwd, true);
     native.setActive(child.id, cwd, true);
     assert.throws(() => native.apply(), /伴随/);
+});
+
+test('completing a previously partial JSON record rebuilds line references correctly',t=>{
+ const {store,cwd}=setup(t),raw=codexSample(cwd,[['Question','Answer']]),partial=raw.slice(0,-12),b=store.branch(null,'Partial','codex',partial);store.ingest(b.id,raw,b.head,{});const current=store.get('branch',b.id);assert.equal(store.raw(current.head),raw);assert.equal(store.get('revision',current.head).refs.length,raw.trim().split('\n').length);
 });

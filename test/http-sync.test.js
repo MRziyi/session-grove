@@ -1,3 +1,4 @@
+import { INBOX_ID } from '../src/inbox.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
@@ -18,7 +19,7 @@ test('HTTP protects local API and implements project to activation lifecycle', a
     t.after(async () => { app.server.close(); await once(app.server, 'close'); fs.rmSync(root, { recursive: true, force: true }); });
     const base = `http://127.0.0.1:${app.server.address().port}`;
     const boot = await (await fetch(base + '/api/bootstrap')).json();
-    assert.equal(boot.projects.length, 0);
+    assert.deepEqual(boot.projects.map(p=>p.id), [INBOX_ID]);
     assert.equal((await fetch(base + '/api/projects', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })).status, 403);
     assert.equal((await fetch(base + '/api/bootstrap', { headers: { Origin: 'https://evil.example' } })).status, 403);
     const hostStatus = await new Promise((resolve, reject) => http.get(base + '/api/bootstrap', { headers: { Host: 'evil.example' } }, r => { r.resume(); resolve(r.statusCode); }).on('error', reject));
@@ -160,8 +161,9 @@ test('workspace HTTP actions archive atomically, restore without activation, rej
     assert.equal(remote.treeGraph(a.id).nodes[0].name, 'Local');
     const unfiled = app.store.branch(null, 'Loose archive', 'claude');
     app.store.edit(unfiled.id, { archived: true });
-    assert.equal((await request('/manage', { action: 'restore', itemIds: [unfiled.id] })).status, 400);
-    assert.equal(app.store.get('branch', unfiled.id).archived, true);
+    assert.equal((await request('/manage', { action: 'restore', itemIds: [unfiled.id] })).status, 200);
+    assert.equal(app.store.get('branch', unfiled.id).archived, false);
+    assert.equal(app.store.get('branch', unfiled.id).projectId, null);
     const count = app.store.all('project').length;
     assert.equal((await request('/manage', { action: 'restore', itemIds: [unfiled.id], projectName: 'Recovered notes' })).status, 200);
     assert.equal(app.store.all('project').length, count + 1);

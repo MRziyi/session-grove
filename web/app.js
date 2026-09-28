@@ -1,9 +1,15 @@
 import { markdown } from './markdown.js';
 import { enhanceSelect } from './select.js';
 import { t, locale, setLocale, errorText } from './i18n.js';
+const INBOX = '00000000-0000-4000-8000-000000000001';
 const $ = s => document.querySelector(s), $$ = s => [...document.querySelectorAll(s)];
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const icons = {
+    codex: '<path d="m4 6 6 6-6 6m9 0h7"/>',
+    claude: '<path d="M12 2v20M2 12h20M5 5l14 14M5 19 14-14M3 7l18 10M7 3l10 18"/>',
+    desktop: '<rect x="3" y="3" width="18" height="13" rx="2"/><path d="M12 16v5m-5 0h10"/>',
+    laptop: '<path d="M5 4h14v12H5ZM2 20l3-4h14l3 4Z"/>',
+    windows: '<path d="M3 5l8-1v8H3Zm10-1 8-1v9h-8ZM3 14h8v7l-8-1Zm10 0h8v9l-8-2Z"/>',
     website: '<circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c-6 5-6 13 0 18 6-5 6-13 0-18Z"/>',
     github: '<path d="M9 19c-4 1-4-2-5-2m10 5v-3.9a3.4 3.4 0 0 0-1-2.7c3.3-.4 6.7-1.6 6.7-7.3a5.7 5.7 0 0 0-1.5-4c.1-1 .1-2.1-.5-3.1 0 0-1.2-.4-4 1.5a13.4 13.4 0 0 0-7 0C4.9.6 3.7 1 3.7 1c-.6 1-.6 2.1-.5 3.1a5.7 5.7 0 0 0-1.5 4c0 5.7 3.4 6.9 6.7 7.3a3.4 3.4 0 0 0-1 2.7V22"/>',
     upload: '<path d="M12 16V3m-4 4 4-4 4 4M4 14v6h16v-6"/>',
@@ -24,13 +30,14 @@ const palette = {
     'pending-0': ['#576b85', '#566b852b'], 'pending-1': ['#726486', '#7161842b'], 'pending-2': ['#526f73', '#536f732b'], 'pending-3': ['#7c6979', '#7c69792b']
 };
 const style = n => { const [tone, tint] = palette[n.color]; return `--tone:${tone};--tint:${tint}`; };
-const state = { data: null, token: '', roots: {}, scope: 'active:codex', list: { items: [] }, query: '', selected: new Set(), tree: null, branchId: null, nodeId: null, compactionId: null, chats: new Set(), rangeStart: null, rangeEnd: null, expanded: new Set() };
+const state = { data: null, token: '', roots: {}, scope: 'active:codex', list: { items: [] }, query: '', selected: new Set(), tree: null, branchId: null, nodeId: null, compactionId: null, chats: new Set(), rangeStart: null, rangeEnd: null, expandedGroups: new Set(), expanded: new Set() };
+let clockTimer = null;
 let submitAction, toastTimer, searchTimer, requestId = 0, working = false, opening = false;
 const camera = { x: 0, y: 0, zoom: 1, width: 0, height: 0, rootX: 0, newView: true };
 const compactNumber = n => new Intl.NumberFormat(locale() === 'zh' ? 'zh-CN' : 'en-US', { notation: 'compact', maximumFractionDigits: 1 }).format(n);
 const tokenLabel = n => t('≈ {count} tokens', { count: compactNumber(n.tokens?.recordedEstimate ?? n.tokens?.estimate ?? 0) });
 const tokenHint = () => t('Rough estimate of recorded message and tool text. Excludes hidden instructions, encrypted content and images; not live context usage.');
-const cloudMark = item => item.projectId ? `<span class="cloud-mark ${item.cloudState || 'local'}" title="${esc(t(({ cloud: 'Stored in cloud · download on open', update: 'Cloud update available', cached: 'Cached locally · cloud synced', local: 'Local changes · not uploaded yet' })[item.cloudState || 'local']))}">${icon('cloud')}</span>` : '';
+const cloudMark = item => `<span class="cloud-mark ${item.cloudState || 'local'}" title="${esc(t(({ cloud: 'Stored in cloud · download on open', update: 'Cloud update available', cached: 'Cached locally · cloud synced', local: 'Local changes · not uploaded yet' })[item.cloudState || 'local']))}">${icon('cloud')}</span>`;
 const date = value => value ? new Date(value).toLocaleString(locale() === 'zh' ? 'zh-CN' : 'en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : t('Never');
 const currentProject = () => state.data.projects.find(p => p.id === state.scope);
 const route = () => state.tree?.paths.find(p => p.branchId === state.branchId);
@@ -44,7 +51,7 @@ async function api(path, method = 'GET', body) {
     return data;
 }
 function modal(title, html, action, label = 'Save') {
-    $('#dialog-title').textContent = t(title); $('#dialog-content').innerHTML = html; $('#dialog-error').textContent = '';
+    $('#dialog').dataset.kind = title === 'About' ? 'about' : 'normal'; $('#dialog-title').textContent = t(title); $('#dialog-content').innerHTML = html; $('#dialog-error').textContent = '';
     $('#dialog-submit').textContent = t(label); $('#dialog-submit').hidden = !action; $('#dialog-submit').disabled = false;
     $('#dialog-cancel').textContent = t(action ? 'Cancel' : 'Close'); submitAction = action;
     if (!$('#dialog').open) $('#dialog').showModal();
@@ -56,13 +63,13 @@ $('#dialog-form').onsubmit = async e => {
     working = true; $('#dialog-submit').disabled = true;
     try { const complete = await submitAction(new FormData(e.target)); if (complete === false) return; $('#dialog').close(); await refresh(); }
     catch (e) { $('#dialog-error').textContent = e.message; }
-    finally { working = false; $('#dialog-submit').disabled = false; }
+    finally { working = false; $('#dialog-submit').disabled = false; renderCloudStatus(); }
 };
-async function run(fn) {
-    if (working) return; working = true;
-    try { await fn(); await refresh(); } catch (e) { toast(e.message); } finally { working = false; }
+async function run(fn, activity = null) {
+    if (working) return; working = true; state.uiBusy = activity; renderCloudStatus();
+    try { await fn(); await refresh(); } catch (e) { toast(e.message); } finally { working = false; state.uiBusy = null; renderCloudStatus(); }
 }
-function button(id, label, fn) { const el = $(id); if (el) { el.textContent = t(label); el.onclick = fn; } }
+function button(id, label, fn) { const el = $(id); if (el) { el.textContent = t(label); el.onclick = fn; el.disabled = working || ['syncing','migrating'].includes(state.data?.cloud?.phase); } }
 function translateBanner() {
     for (const [id, glyph, label] of [['sync', 'sync', 'Sync'], ['collect', 'refresh', 'Update'], ['settings', 'settings', 'Settings']]) {
         const el = $('#' + id); el.innerHTML = `${icon(glyph)}<span class="button-label">${t(label)}</span>`; el.title = t(label); el.setAttribute('aria-label', t(label));
@@ -76,27 +83,63 @@ function translateBanner() {
 function renderNavigation() {
     const d = state.data;
     const entry = (scope, name, count, css = '') => `<button class="nav-entry ${css} ${state.scope === scope ? 'selected' : ''}" data-scope="${esc(scope)}" ${state.scope === scope ? 'aria-current="page"' : ''}><span class="nav-name">${esc(name)}${!scope.startsWith('active:') && scope !== 'archived' ? `<span class="cloud-mark" title="${t('Project sync')}">${icon('cloud')}</span>` : ''}</span><span class="count">${count}</span></button>`;
-    const projects = d.projects.filter(p => !p.archived && (d.items.some(i => i.projectId === p.id && !i.archived) || p.count > 0));
+    const projects = d.projects.filter(p => !p.archived && (p.builtin || d.items.some(i => i.projectId === p.id && !i.archived) || p.count > 0));
     const archivedProjects = d.projects.filter(p => p.archived && (d.items.some(i => i.projectId === p.id) || p.index));
     const archivedSessions = d.items.filter(i => !archivedProjects.some(p => p.id === i.projectId)).reduce((n, i) => n + i.sessions.filter(s => s.archived).length, 0);
-    $('#navigation').innerHTML = `<section class="nav-group"><h2 class="nav-label">${t('Current Active')}</h2>${entry('active:codex', 'Codex', d.activeCounts.codex, 'codex')}${entry('active:claude', 'Claude Code', d.activeCounts.claude, 'claude')}</section><section class="nav-group"><h2 class="nav-label">${t('Projects')}</h2>${projects.map(p => entry(p.id, p.name, Math.max(p.count || 0, d.items.filter(i => i.projectId === p.id && !i.archived).length))).join('') || `<p class="nav-empty">${t('No projects yet')}</p>`}</section><section class="nav-group"><h2 class="nav-label">${t('Archived')}</h2>${entry('archived', t('Archived items'), archivedProjects.length + archivedSessions)}</section>`;
+    $('#navigation').innerHTML = `<section class="nav-group"><h2 class="nav-label">${t('Current Active')}</h2>${entry('active:codex', 'Codex', d.activeCounts.codex, 'codex')}${entry('active:claude', 'Claude Code', d.activeCounts.claude, 'claude')}</section><section class="nav-group"><h2 class="nav-label">${t('Projects')}</h2>${projects.sort((a,b) => Number(!!b.builtin)-Number(!!a.builtin)).map(p => entry(p.id, p.builtin ? t('Ungrouped') : p.name, Math.max(p.count || 0, d.items.filter(i => i.projectId === p.id && !i.archived).length))).join('') || `<p class="nav-empty">${t('No projects yet')}</p>`}</section><section class="nav-group"><h2 class="nav-label">${t('Archived')}</h2>${entry('archived', t('Archived items'), archivedProjects.length + archivedSessions)}</section>`;
     $$('[data-scope]').forEach(el => el.onclick = () => navigate(el.dataset.scope));
-    const phase = d.cloud.phase, labels = { unconfigured: '', migrating: 'Updating settings…', locked: 'Sync locked', queued: 'Upload queued', syncing: 'Syncing…', synced: 'Synced', retrying: 'Retrying', local: 'Local changes' };
+    renderCloudStatus();
+}
+
+function renderCloudStatus(){const d=state.data;
+    $('#collect').title=t('Last local update: {time}',{time:date(d.update?.lastRunAt)});
+    const phase = state.uiBusy === 'sync' ? 'syncing' : d.cloud.phase, labels = { unconfigured: '', migrating: 'Updating settings…', locked: 'Sync locked', queued: 'Upload queued', syncing: 'Syncing…', synced: 'Synced', retrying: 'Retrying', local: 'Local changes' };
     $('#cloud-status').textContent = t(labels[phase] || ''); $('#cloud-status').title = d.cloud.error ? errorText(d.cloud.error) : '';
-    const cloudTime = [d.cloud.lastUpload, d.cloud.lastCheck].filter(Boolean).sort().at(-1);
-    $('#sync').querySelector('.sync-time')?.remove();
-    if (cloudTime) { const time = document.createElement('time'); time.className = 'sync-time'; time.dateTime = cloudTime; time.textContent = new Date(cloudTime).toLocaleTimeString(locale() === 'zh' ? 'zh-CN' : 'en-US', { hour: '2-digit', minute: '2-digit', hour12: false }); $('#sync').append(time); }
-    $('#sync').disabled = ['syncing','migrating'].includes(d.cloud.phase);
+    renderCountdowns();
+    const busy = working || ['syncing','migrating'].includes(d.cloud.phase);
+    $$('#sync,#collect,.actions button,button[data-compaction],#deactivate-archived').forEach(el=>el.disabled=busy);
+    $('#collect').setAttribute('aria-busy',String(state.uiBusy==='update'));
+    const updateLabel=$('#collect .button-label');if(updateLabel)updateLabel.textContent=t(state.uiBusy==='update'?'Updating…':'Update');
+    $('#sync').setAttribute('aria-busy',String(phase==='syncing'));
     $('#sync').title = t('Last upload: {time}', { time: date(d.cloud.lastUpload) }) + '\n' + t('Last cloud check: {time}', { time: date(d.cloud.lastCheck) });
+    const ticking = !document.hidden && (d.update?.nextRunAt || d.cloud?.nextRunAt);
+    if(ticking && !clockTimer) clockTimer=setInterval(renderCountdowns,1000);
+    if(!ticking && clockTimer){clearInterval(clockTimer);clockTimer=null;}
 
 }
+
+function renderCountdowns() {
+    if (!state.data || document.hidden) return;
+    for (const [id, deadline] of [['sync', state.data.cloud?.nextRunAt], ['collect', state.data.update?.nextRunAt]]) {
+        const button = $('#'+id); let counter = button.querySelector('.button-countdown');
+        if (!deadline) { counter?.remove(); continue; }
+        if (!counter) { counter=document.createElement('span');counter.className='button-countdown';counter.setAttribute('aria-hidden','true');counter.title=t(id==='sync'?'Next automatic sync check; uploads only changes.':'Next local session update.');button.append(counter); }
+        const seconds=Math.max(0,Math.ceil((deadline-Date.now())/1000)),value=seconds ? Math.floor(seconds/60)+':'+String(seconds%60).padStart(2,'0') : t('Due');
+        if(counter.textContent!==value)counter.textContent=value;
+    }
+
+}
+function toolTags(agents, compact=false, origin=null) {
+    const names=[...new Set((agents||[]).filter(a=>['codex','claude'].includes(a)))];
+    return names.map(a=>`<span class="tool-tag ${a} ${compact?'compact':''}" title="${a==='codex'?'Codex':'Claude Code'}${compact&&origin?' · '+esc(origin.model||origin.name):''}" aria-label="${a==='codex'?'Codex':'Claude Code'}">${icon(a)}${compact?'':a==='codex'?'Codex':'Claude Code'}</span>`).join('')+(names.length>1&&!compact?`<span class="mixed-tag">${t('Mixed')}</span>`:'');
+}
+function sourceTags(item) {
+    const o=item.origin, type=o?.platform==='win32'?'windows':o?.kind==='laptop'?'laptop':'desktop';
+    return `<span class="row-tags">${toolTags(item.agents || item.sessions?.map(s=>s.agent) || [item.agent])}${o?`<span class="device-tag" title="${esc(t(o.observed?'Imported on {device}':'Last conversation update on {device}',{device:o.name}))}">${icon(type)}<span>${esc(o.model||o.name)}</span></span>`:''}</span>`;
+}
+
 async function navigate(scope) {
     ++requestId; opening = false; state.scope = scope; state.tree = null; state.list = { items: [], sessionCount: 0 }; state.query = ''; state.selected.clear(); clearRange(); $('#search').value = '';
     render(); $('#list-title').textContent = title(); $('#session-list').innerHTML = `<p class="empty">${t('Loading project index…')}</p>`;
     try { await refresh({ checkCloud: true }); } catch (e) { toast(e.message); state.list = { items: [] }; render(); }
 }
-function title() { return state.scope === 'active:codex' ? t('Active Codex Sessions') : state.scope === 'active:claude' ? t('Active Claude Code Sessions') : state.scope === 'archived' ? t('Archived') : currentProject()?.name || t('Projects'); }
+function title() { if(state.scope === INBOX) return t('Ungrouped'); return state.scope === 'active:codex' ? t('Active Codex Sessions') : state.scope === 'active:claude' ? t('Active Claude Code Sessions') : state.scope === 'archived' ? t('Archived') : currentProject()?.name || t('Projects'); }
 function groups() {
+    if(state.scope === INBOX && !state.query) {
+        const buckets=[{id:'recent',name:t('Last 7 days'),items:[]},{id:'month',name:t('Last 30 days'),items:[]},{id:'older',name:t('Older'),items:[],collapsed:true}];
+        for(const item of state.list.items){const days=(Date.now()-new Date(item.updatedAt).getTime())/86400000;buckets[days<7?0:days<30?1:2].items.push(item);}
+        return buckets.filter(g=>g.items.length);
+    }
     const result = new Map();
     for (const item of state.list.items) {
         const key = item.groupId || 'ungrouped';
@@ -111,21 +154,26 @@ function itemMeta(item) {
 }
 function renderList() {
     $('#list-title').textContent = title();
+    const pending = state.list.pendingDeactivation || []; $('#active-notice').hidden = !pending.length;
+    $('#active-notice').innerHTML = pending.length ? `<span>${t('{count} archived sessions are still active on this device.',{count:pending.length})}</span><button id="deactivate-archived">${t('Deactivate archived sessions')}</button>` : '';
+    if(pending.length)$('#deactivate-archived').onclick=()=>run(()=>api('/manage','POST',{action:'deactivate',branchIds:pending.map(s=>s.id)}));
     $('#list-count').textContent = t('{count} sessions', { count: state.list.sessionCount || 0 });
     const selected = state.list.items.filter(i => state.selected.has(i.id)), ungrouped = selected.length && selected.every(i => !i.projectId);
     const mode = selected.length ? !!selected[0].projectId : null;
     $('#list-actions').innerHTML = selected.length
-        ? `<span class="selection-count">${t('{count} selected', { count: selected.length })}</span>${state.scope === 'archived' ? '' : ungrouped || currentProject() ? '<button id="move-items"></button>' : '<button id="deactivate-items"></button>'}`
+        ? `<span class="selection-count">${t('{count} selected', { count: selected.length })}</span>${state.scope === 'archived' ? '' : ungrouped || currentProject() ? '<button id="move-items"></button>'+ (state.scope === INBOX ? '<button id="archive-items"></button>' : '') : '<button id="deactivate-items"></button>'}`
         : '';
+    button('#archive-items','Archive',()=>modal('Archive selected sessions', `<p>${t('Archive {count} selected trees and sessions?',{count:selected.length})}</p>`,async()=>{await api('/manage','POST',{action:'archive',itemIds:[...state.selected]});state.selected.clear();},'Archive'));
     button('#move-items', 'Move to project', () => moveDialog([...state.selected]));
     button('#deactivate-items', 'Deactivate', () => run(() => api('/manage', 'POST', { action: 'deactivate', itemIds: [...state.selected], agent: state.scope.slice(7) })));
-    $('#session-list').innerHTML = groups().map(g => `<section class="list-group">${!currentProject() ? `<h2>${esc(g.name)}${state.scope === 'archived' && state.data.projects.find(p => p.id === g.id)?.archived ? `<button class="restore-project" data-project="${esc(g.id)}">${t('Restore project')}</button>` : ''}</h2>` : ''}${g.items.map(i => `<article class="session-row ${state.selected.has(i.id) ? 'checked' : ''}" data-item="${esc(i.id)}"><button class="row-open" data-open="${esc(i.id)}">${icon(i.kind)}<span class="row-text"><span class="row-title">${esc(i.name)} ${cloudMark(i)}</span><span class="row-meta">${itemMeta(i)}</span></span><time class="row-date" datetime="${esc(i.updatedAt)}">${date(i.updatedAt)}</time></button>${state.scope === 'archived' ? '' : `<input type="checkbox" data-select="${esc(i.id)}" aria-label="${esc(t('Select {name}', { name: i.name }))}" ${state.selected.has(i.id) ? 'checked' : ''} ${mode !== null && mode !== !!i.projectId && state.scope !== 'archived' ? 'disabled' : ''}>`}</article>`).join('')}</section>`).join('') || `<p class="empty">${t(state.query ? 'No matching sessions' : state.scope.startsWith('active:') ? 'Start a conversation in your agent, then click Update.' : 'No sessions here.')}</p>`;
+    $('#session-list').innerHTML = groups().map(g => `${state.scope===INBOX?`<details class="list-group time-group" data-time-group="${g.id}" ${!g.collapsed||state.expandedGroups.has(g.id)||g.items.some(i=>state.selected.has(i.id))?'open':''}><summary>${esc(g.name)}<span>${g.items.length}</span></summary>`:'<section class="list-group">'}${!currentProject() ? `<h2>${esc(g.name)}${state.scope === 'archived' && state.data.projects.find(p => p.id === g.id)?.archived ? `<button class="restore-project" data-project="${esc(g.id)}">${t('Restore project')}</button>` : ''}</h2>` : ''}${(state.scope===INBOX && g.collapsed && !state.expandedGroups.has(g.id) && !g.items.some(i=>state.selected.has(i.id)) ? [] : g.items).map(i => `<article class="session-row ${state.selected.has(i.id) ? 'checked' : ''}" data-item="${esc(i.id)}"><button class="row-open" data-open="${esc(i.id)}">${icon(i.kind)}<span class="row-text"><span class="row-title">${esc(i.name)} ${cloudMark(i)}</span><span class="row-meta">${itemMeta(i)} ${sourceTags(i)}</span></span><time class="row-date" datetime="${esc(i.updatedAt)}">${date(i.updatedAt)}</time></button>${state.scope === 'archived' ? '' : `<input type="checkbox" data-select="${esc(i.id)}" aria-label="${esc(t('Select {name}', { name: i.name }))}" ${state.selected.has(i.id) ? 'checked' : ''} ${mode !== null && mode !== !!i.projectId && state.scope !== 'archived' ? 'disabled' : ''}>`}</article>`).join('')}${state.scope===INBOX?'</details>':'</section>'}`).join('') || `<p class="empty">${t(state.query ? 'No matching sessions' : state.scope.startsWith('active:') ? 'Start a conversation in your agent, then click Update.' : 'No sessions here.')}</p>`;
+    $$('[data-time-group]').forEach(el=>el.ontoggle=()=>{if(el.open){state.expandedGroups.add(el.dataset.timeGroup);if(!el.querySelector('.session-row'))renderList();}else{state.expandedGroups.delete(el.dataset.timeGroup);if(el.dataset.timeGroup==='older')el.querySelectorAll('.session-row').forEach(row=>row.remove());}});
     $$('[data-open]').forEach(el => el.onclick = () => openTree(el.dataset.open));
     $$('[data-select]').forEach(el => el.onchange = () => { el.checked ? state.selected.add(el.dataset.select) : state.selected.delete(el.dataset.select); renderList(); });
     $$('.restore-project').forEach(el => el.onclick = () => run(() => api('/manage', 'POST', { action: 'restore', projectId: el.dataset.project })));
 }
 function renderRail() {
-    $('#session-rail').innerHTML = groups().map(g => `<h2 class="rail-heading">${esc(g.name)}</h2>${g.items.map(i => `<button class="rail-row ${state.tree?.id === i.id ? 'selected' : ''}" data-rail="${esc(i.id)}" ${state.tree?.id === i.id ? 'aria-current="true"' : ''}>${icon(i.kind)}<span class="row-text"><span class="row-title">${esc(i.name)} ${cloudMark(i)}</span><span class="row-meta">${itemMeta(i)}</span></span></button>`).join('')}`).join('');
+    $('#session-rail').innerHTML = groups().map(g => `<h2 class="rail-heading">${esc(g.name)}</h2>${g.items.map(i => `<button class="rail-row ${state.tree?.id === i.id ? 'selected' : ''}" data-rail="${esc(i.id)}" ${state.tree?.id === i.id ? 'aria-current="true"' : ''}>${icon(i.kind)}<span class="row-text"><span class="row-title">${esc(i.name)} ${cloudMark(i)}</span><span class="row-meta">${itemMeta(i)} ${sourceTags(i)}</span></span></button>`).join('')}`).join('');
     $$('[data-rail]').forEach(el => el.onclick = () => openTree(el.dataset.rail));
 }
 async function openTree(id) {
@@ -181,8 +229,8 @@ function renderDetailActions() {
     const archived = p.archived || state.data.projects.find(v => v.id === state.tree.projectId)?.archived;
     const editable = !archived && state.scope !== 'archived';
     const dissolve = state.tree.nodes.some(n => !n.pending && n.chatIds.some(id => state.chats.has(id)));
-    $('#detail-actions').innerHTML = state.chats.size ? `<span>${t('{count} selected', { count: state.chats.size })}</span>${editable && state.rangeEnd !== null && canCombine() ? '<button id="combine"></button>' : ''}${editable && state.rangeEnd !== null && dissolve ? '<button id="dissolve"></button>' : ''}<button id="clear-selection"></button>` : node ? `${editable ? '<button id="rename-node"></button>' : ''}${terminal ? archived ? '<button id="restore-session"></button>' : `${(p.active && state.tree.projectId) || (!p.active && p.canActivate) ? '<button id="toggle-active"></button>' : ''}<button id="archive-path"></button>` : ''}${editable && forkCheckpoint() ? '<button id="fork"></button>' : ''}` : '';
-    if (!state.chats.size && editable && p.active && p.contextPending && p.canRewriteContext) $('#detail-actions').innerHTML = '<button id="apply-context"></button>' + $('#detail-actions').innerHTML;
+    $('#detail-actions').innerHTML = state.chats.size ? `<span>${t('{count} selected', { count: state.chats.size })}</span>${editable && state.rangeEnd !== null && canCombine() ? '<button id="combine"></button>' : ''}${editable && state.rangeEnd !== null && dissolve ? '<button id="dissolve"></button>' : ''}<button id="clear-selection"></button>` : node ? `${editable ? '<button id="rename-node"></button>' : ''}${terminal ? archived ? '<button id="restore-session"></button>' : `${p.active || (!p.active && p.canActivate) ? '<button id="toggle-active"></button>' : ''}<button id="archive-path"></button>` : ''}${editable && forkCheckpoint() ? '<button id="fork"></button>' : ''}` : '';
+    if (!state.chats.size && editable && p.active && p.contextPending && p.canRewriteContext && p.canActivate) $('#detail-actions').innerHTML = '<button id="apply-context"></button>' + $('#detail-actions').innerHTML;
     button('#apply-context', 'Apply context', () => activateDialog(p, 'Apply context'));
     button('#combine', 'Combine', combineDialog);
     button('#dissolve', 'Dissolve', () => run(async () => { await saveOrganization('dissolve'); clearRange(); }));
@@ -253,11 +301,11 @@ function renderTranscript() {
     $$('[data-focus-node]').forEach(el => el.onclick = () => selectNode(el.dataset.focusNode, false));
 }
 function renderGraph() {
-    const nodes = state.tree.nodes, p = route(), positions = new Map();
+    const nodes = state.tree.nodes, p = route(), positions = new Map(), byNode = new Map(nodes.map(n=>[n.id,n]));
     let lane = 0;
     function place(n) {
         if (positions.has(n.id)) return positions.get(n.id);
-        const children = n.childIds.map(id => place(nodes.find(n => n.id === id)));
+        const children = n.childIds.map(id => place(byNode.get(id)));
         const x = children.length ? children.reduce((v, child) => v + child.x, 0) / children.length : lane++ * 174 + 12;
         const pos = { x, y: n.depth * 116 + 12 }; positions.set(n.id, pos); return pos;
     }
@@ -266,7 +314,7 @@ function renderGraph() {
     camera.width = width; camera.height = height; camera.rootX = (positions.get(nodes.find(n => !n.parentIds.length)?.id)?.x || 0) + 74;
     if (camera.newView) { camera.x = $('#graph-scroll').clientWidth / 2 - camera.rootX; camera.y = 8; camera.newView = false; }
     $('#graph').style.width = `${width}px`; $('#graph').style.height = `${height}px`;
-    $('#graph').innerHTML = `<svg class="graph-edges" width="${width}" height="${height}" aria-hidden="true">${state.tree.edges.map(e => { const a = positions.get(e.from), b = positions.get(e.to), n = nodes.find(n => n.id === e.to), color = palette[n.color][0]; return `<path d="M${a.x + 74},${a.y + 80} C${a.x + 74},${a.y + 102} ${b.x + 74},${b.y - 25} ${b.x + 74},${b.y}" fill="none" stroke="${color}" stroke-width="2" ${n.pending ? 'stroke-dasharray="4 4"' : ''}/>`; }).join('')}</svg>${nodes.map(n => { const pos = positions.get(n.id); return `<button class="graph-node ${mutedNode(n, p) ? 'context-muted' : ''} ${n.pending ? 'pending' : ''} ${n.id === state.nodeId ? 'selected' : ''} ${p.nodeIds.includes(n.id) ? '' : 'dimmed'}" data-node="${esc(n.id)}" style="${style(n)};left:${pos.x}px;top:${pos.y}px" aria-pressed="${n.id === state.nodeId}"><span class="node-title">${esc(nodeName(n))}</span><span class="node-meta">${t('{count} chats', { count: n.count })} · <span title="${esc(tokenHint())}">${tokenLabel(n)}</span></span>${n.endBranchIds.some(id => state.tree.paths.find(p => p.branchId === id)?.active) ? `<span class="end-label">${t('Active')}</span>` : ''}</button>`; }).join('')}`;
+    $('#graph').innerHTML = `<svg class="graph-edges" width="${width}" height="${height}" aria-hidden="true">${state.tree.edges.map(e => { const a = positions.get(e.from), b = positions.get(e.to), n = byNode.get(e.to), color = palette[n.color][0]; return `<path d="M${a.x + 74},${a.y + 80} C${a.x + 74},${a.y + 102} ${b.x + 74},${b.y - 25} ${b.x + 74},${b.y}" fill="none" stroke="${color}" stroke-width="2" ${n.pending ? 'stroke-dasharray="4 4"' : ''}/>`; }).join('')}</svg>${nodes.map(n => { const pos = positions.get(n.id); return `<button class="graph-node ${mutedNode(n, p) ? 'context-muted' : ''} ${n.pending ? 'pending' : ''} ${n.id === state.nodeId ? 'selected' : ''} ${p.nodeIds.includes(n.id) ? '' : 'dimmed'}" data-node="${esc(n.id)}" style="${style(n)};left:${pos.x}px;top:${pos.y}px" aria-pressed="${n.id === state.nodeId}"><span class="node-tools">${toolTags(n.agents || [p.agent],true)}</span><span class="node-title">${esc(nodeName(n))}</span><span class="node-meta">${t('{count} chats', { count: n.count })} · <span title="${esc(tokenHint())}">${tokenLabel(n)}</span></span>${n.endBranchIds.some(id => state.tree.paths.find(p => p.branchId === id)?.active) ? `<span class="end-label">${t('Active')}</span>` : ''}</button>`; }).join('')}`;
     for (const e of p.context?.compactions || []) {
         const next = p.messages.find(m => m.line > e.line), previous = [...p.messages].reverse().find(m => m.line < e.line);
         const before = nodes.find(n => n.chatIds.includes(previous?.id)), after = nodes.find(n => n.chatIds.includes(next?.id));
@@ -349,8 +397,9 @@ async function refresh({ checkCloud = false } = {}) {
     render(); $('#transcripts').scrollTop = scroll; $('#graph-scroll').scrollTop = graphTop; $('#graph-scroll').scrollLeft = graphLeft; scheduleRibbons();
 }
 function moveDialog(itemIds, restoreTarget = null) {
-    const projects = state.data.projects.filter(p => !p.archived && (p.count > 0 || state.data.items.some(i => i.projectId === p.id)));
-    modal(restoreTarget ? 'Restore to project' : 'Move to project', `<label class="field">${t('Destination project')}<select name="projectId" id="destination">${projects.map(p => `<option value="${esc(p.id)}">${esc(p.name)}</option>`).join('')}<option value="new">${t('New project…')}</option></select></label><div id="new-project-field" ${projects.length ? 'hidden' : ''}>${field('Project name', 'projectName')}</div>`, async form => {
+    const selectedItems=state.data.items.filter(i=>itemIds.includes(i.id));
+    const projects = state.data.projects.filter(p => !p.archived && (p.builtin || p.count > 0 || state.data.items.some(i => i.projectId === p.id)) && !selectedItems.every(i=>(i.projectId||INBOX)===p.id));
+    modal(restoreTarget ? 'Restore to project' : 'Move to project', `<label class="field">${t('Destination project')}<select name="projectId" id="destination">${projects.map(p => `<option value="${esc(p.id)}">${esc(p.builtin?t('Ungrouped'):p.name)}</option>`).join('')}<option value="new">${t('New project…')}</option></select></label><div id="new-project-field" ${projects.length ? 'hidden' : ''}>${field('Project name', 'projectName')}</div>`, async form => {
         const projectId = form.get('projectId');
         if (restoreTarget) await api('/manage', 'POST', { ...restoreTarget, action: 'restore', ...(projectId === 'new' ? { projectName: form.get('projectName') } : { destinationProjectId: projectId }) });
         else await api('/move', 'POST', { itemIds, ...(projectId === 'new' ? { projectName: form.get('projectName') } : { projectId }) });
@@ -359,11 +408,8 @@ function moveDialog(itemIds, restoreTarget = null) {
     $('#destination').onchange = e => $('#new-project-field').hidden = e.target.value !== 'new';
     enhanceSelect($('#destination'));
 }
-function restore(target) {
-    const ungrouped = state.data.items.some(i => !i.projectId && (target.itemIds?.includes(i.id) || i.sessionIds.some(id => target.branchIds?.includes(id))));
-    if (ungrouped) return moveDialog([], target);
-    return run(() => api('/manage', 'POST', { ...target, action: 'restore' }));
-}
+function restore(target) { return run(() => api('/manage', 'POST', { ...target, action: 'restore' })); }
+
 function clearRange() { state.chats.clear(); state.rangeStart = null; state.rangeEnd = null; }
 function renameNode() {
     const n = selectedNode(); if (!n) return;
@@ -391,6 +437,7 @@ async function activateDialog(p, actionLabel = 'Activate') {
         function showBudget(c) {
             if(c.fidelity === 'unsupported-history-mode') { $('#activation-budget').innerHTML = `<p class="warning">${t('The complete native history is unavailable. Update before changing context.')}</p>`; $('#dialog-submit').hidden = true; return; }
             $('#dialog-submit').hidden = !c.complete;
+            if(!c.complete){$('#activation-budget').innerHTML=`<p class="warning">${t(c.readiness==='unfinished-turn'?'This turn is still running. Wait for it to finish, or fork from a completed checkpoint.':'This context needs external files or an unsupported history format. Check Source before activating.')}</p>`;return;}
             $('#activation-budget').innerHTML = c.risk ? `<p class="warning">${t('Context may be near its limit: about {used} tokens, planning limit {limit}.', { used: compactNumber(c.estimated), limit: compactNumber(c.window || c.compactAt) })}<br>${esc(c.source || '')}</p>` : c.basis === 'incomplete-after-compaction' ? `<p class="dialog-copy">${t('The compacted context size is not recorded. The native agent will manage its context window.')}</p>` : c.unknown ? `<p class="dialog-copy">${t('No reliable context limit was found in the local configuration.')}</p>` : `<p class="dialog-copy">≈ ${compactNumber(c.estimated)} / ${compactNumber(c.window || c.compactAt)} tokens · ${esc(c.source || '')}</p>`;
             $('#dialog-submit').textContent = t(c.risk ? 'Activate anyway' : actionLabel);
         }
@@ -435,14 +482,14 @@ async function settings(options = {}) {
             <div id="settings-progress" role="status" hidden></div>
           </section>` : ''}
           <section class="settings-card"><h3>${t('Automatic updates')}</h3>
-            ${[['localUpdate', 'Read local sessions', p.localUpdateEnabled, p.localUpdateMinutes], ['autoUpload', 'Upload changed projects', p.autoUploadEnabled, p.autoUploadMinutes]].map(([key,label,on,minutes]) => `<div class="timer-row"><label><input type="checkbox" name="${key}Enabled" ${on ? 'checked' : ''}>${t(label)}</label><label class="timer-interval"><input type="number" name="${key}Minutes" value="${minutes}" min="1" max="1440" ${!on ? 'disabled' : ''}><span>${t('minutes')}</span></label></div>`).join('')}
+            ${[['localUpdate', 'Read local sessions', p.localUpdateEnabled, p.localUpdateMinutes], ['autoUpload', 'Periodic upload fallback', p.autoUploadEnabled, p.autoUploadMinutes]].map(([key,label,on,minutes]) => `<div class="timer-row"><label><input type="checkbox" name="${key}Enabled" ${on ? 'checked' : ''}>${t(label)}</label><label class="timer-interval"><input type="number" name="${key}Minutes" value="${minutes}" min="1" max="1440" ${!on ? 'disabled' : ''}><span>${t('minutes')}</span></label></div>`).join('')}
             <p class="dialog-copy">${t('Every upload reads local sessions first. No changes means no scheduled cloud request.')}</p><button type="button" id="save-timers" hidden>${t('Save intervals')}</button>
           </section>${c.recoverable && c.job?.state !== 'running' ? `<button type="button" id="recover-settings">${t('Recover settings change')}</button>` : ''}`, null);
         $('#dialog-cancel').textContent = t('Close');
         enhanceSelect($('#language'));
         $('#language').onchange = async e => { setLocale(e.target.value); render(); await settings(options); };
         const busy = async (button, fn) => { if (working) return; working = true; button.disabled = true; const original = button.textContent; button.textContent = t('Working…'); $('#dialog-error').textContent = '';
-            try { await fn(); } catch(e) { $('#dialog-error').textContent = e.message; } finally { working = false; if (button.isConnected) { button.disabled = false; button.textContent = original; } } };
+            try { await fn(); } catch(e) { $('#dialog-error').textContent = e.message; } finally { working = false; renderCloudStatus(); if (button.isConnected) { button.disabled = false; button.textContent = original; } } };
         for(const input of $$('input[data-stored]')) { input.onfocus = () => { if(input.dataset.stored) { input.value = ''; delete input.dataset.stored; } }; input.onblur = () => { if(!input.value && input.name === 'password' && c.hasPassword) { input.value = mask; input.dataset.stored = 'true'; } }; }
         const values = () => { const result = {}; for(const el of $$('#dialog-content input[name]')) if (!el.disabled && !el.dataset.stored) result[el.name] = el.value; return result; };
         if ($('#modify-connection')) $('#modify-connection').onclick = () => settings({editConnection:true});
@@ -459,7 +506,7 @@ async function settings(options = {}) {
             for (;;) {
                 const current = await api('/settings'), j = current.job;
                 if(!$('#dialog').open || !box.isConnected) return;
-                const phases = {preparing:'Preparing',copying:'Re-encrypting and verifying',verifying:'Checking cloud versions',cleanup:'Removing previous copies',complete:'Complete'};
+                const phases = {waiting:'Waiting for current sync',preparing:'Preparing',copying:'Re-encrypting and verifying',verifying:'Checking cloud versions',cleanup:'Removing previous copies',complete:'Complete'};
                 box.innerHTML = `<span>${t(phases[j?.phase] || 'Working…')}${j?.total ? ` · ${j.completed}/${j.total}` : ''}</span><progress ${j?.total ? `max="${j.total}" value="${j.completed}"` : ''}></progress>`;
                 if(j?.state === 'failed') { $('#dialog-error').textContent = errorText(j.error); box.innerHTML += `<button type="button" id="retry-settings">${t('Review settings')}</button>`; $('#retry-settings').onclick=()=>settings({editKey:true}); break; }
                 if(j?.state === 'complete') { await refresh(); await settings(); if(j.cleanupPending) $('#dialog-error').textContent=t('New settings are active; some previous remote copies could not be removed.'); break; }
@@ -486,15 +533,15 @@ function information() {
     $$('[data-recover]').forEach(el=>el.onclick=()=>run(async()=>{await api('/recover','POST',{id:el.dataset.recover});$('#dialog').close();}));
 }
 function about() {
-    modal('About', `<div class="about"><h3>Session Grove <small>0.7.1</small></h3><p>${t('Organize agent conversations by project. Keep the context, choose the branch, continue your work.')}</p><p>${t('Developed by')} Ziyi Zhang</p><div class="about-links"><a href="https://ziyi-zhang.vercel.app" target="_blank" rel="noopener noreferrer" aria-label="Ziyi Zhang website" title="Ziyi Zhang">${icon('website')}</a><a href="https://github.com/MRziyi/session-grove" target="_blank" rel="noopener noreferrer" aria-label="GitHub repository" title="GitHub">${icon('github')}</a></div></div>`,null);
+    modal('About', `<div class="about"><h3>Session Grove <small>${esc(state.data.appVersion || '')}</small></h3><p>${t('Organize agent conversations by project. Keep the context, choose the branch, continue your work.')}</p><p>${t('Developed by')} Ziyi Zhang</p><div class="about-links"><a href="https://ziyi-zhang.vercel.app" target="_blank" rel="noopener noreferrer" aria-label="Ziyi Zhang website" title="Ziyi Zhang">${icon('website')}</a><a href="https://github.com/MRziyi/session-grove" target="_blank" rel="noopener noreferrer" aria-label="GitHub repository" title="GitHub">${icon('github')}</a></div></div>`,null);
 }
 async function sync(direction) {
     if (!state.data.cloud.configured || !state.data.cloud.unlocked) return settings();
-    return run(async () => { await api('/sync', 'POST', { direction }); toast(t('Sync complete')); });
+    return run(async () => { await api('/sync', 'POST', { direction }); toast(t('Sync complete')); }, 'sync');
 }
 $('#about').onclick = about; $('#information').onclick = information;
 $('#sync').onclick = () => sync('both'); $('#settings').onclick = () => settings();
-$('#collect').onclick = () => run(async () => { const r = await api('/collect', 'POST', {}); if (r.errors?.length) toast(r.errors.map(e => errorText(e.message)).join('\n')); else toast(t('Refresh complete · {updates} updated · {discovered} discovered', { updates: r.updates.length, discovered: r.discovered })); });
+$('#collect').onclick = () => run(async () => { const r = await api('/collect', 'POST', {}); if (r.errors?.length) toast(r.errors.map(e => errorText(e.message)).join('\n')); else toast(t('Refresh complete · {updates} updated · {discovered} discovered', { updates: r.updates.length, discovered: r.discovered })); }, 'update');
 $('#search').oninput = e => { state.query = e.target.value; state.selected.clear(); clearTimeout(searchTimer); searchTimer = setTimeout(() => refresh().catch(e => toast(e.message)), 180); };
 $('#back').onclick = () => { state.tree = null; clearRange(); render(); };
 $('#source').onclick = showSource;
@@ -520,13 +567,14 @@ try {
     const boot = await (await fetch('/api/bootstrap')).json(); if (boot.error) throw new Error(errorText(boot.error));
     state.token = boot.token; state.data = boot; state.roots = boot.roots; $('#demo-badge').textContent = boot.demo ? 'DEMO' : '';
     setLocale(locale()); await refresh();
-    let fingerprint = JSON.stringify([state.data.branches, state.data.projects, state.data.instances, state.data.items]);
+    document.addEventListener('visibilitychange',renderCloudStatus);renderCloudStatus();
     setInterval(async () => {
-        if (document.hidden || working || opening || $('#dialog').open || state.chats.size) return;
+        if (document.hidden) return;
         try {
-            const next = await api('/state'), value = JSON.stringify([next.branches, next.projects, next.instances, next.items]);
-            if (value !== fingerprint) { fingerprint = value; await refresh(); }
-            else { state.data.cloud = next.cloud; renderNavigation(); }
+            const next = await api('/status');
+            const canRefresh = !working && !opening && !$('#dialog').open && !state.chats.size;
+            if (next.stateVersion !== state.data.stateVersion && canRefresh) await refresh();
+            else { state.data.cloud = next.cloud; state.data.update = next.update; renderCloudStatus(); }
         } catch { /* Explicit Update reports connection errors. */ }
     }, 5000);
 } catch (e) { toast(e.message); }
