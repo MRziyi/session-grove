@@ -1,6 +1,6 @@
 # Context visibility and incremental cloud sync
 
-Updated for 0.7.0. This document complements the [interaction model](interaction-model.md).
+Updated for 0.7.1. This document complements the [interaction model](interaction-model.md).
 
 ## Three different token quantities
 
@@ -108,11 +108,11 @@ Each path has a synchronized `contextPolicy` listing disabled compaction event I
 
 Apply is explicit for active paths; inactive paths use the choice on Activate. For adopted native sessions, a changed context is materialized into a new native instance and the previous instance is parked under the normal journal/rollback mechanism. Capturing subsequent native updates reattaches the new suffix to the retained original revision, so toggling does not destroy earlier history.
 
-Codex legacy materialization preserves all recorded response items, tool inputs/results, reasoning, metadata instructions, turn settings and unknown fields. Only declared session identity/path fields and explicitly disabled compaction records change. Unverified paginated rewrites are blocked instead of converted to legacy. An adopted, unchanged native paginated file can be parked and restored byte-for-byte to its original working path.
+Codex legacy materialization preserves all recorded response items, tool inputs/results, reasoning, metadata instructions, turn settings and unknown fields. Only declared session identity/path fields and explicitly disabled compaction records change. Supported paginated histories resolve their `history_base` chain by exact byte/ordinal bounds and materialize as self-contained paginated logs. Metadata identity/path references are rebound; conversation, tool, reasoning, world-state and enabled compaction payloads remain intact. Missing or inconsistent segments fail closed. Context replacement creates a fresh native identity to avoid stale projection caches. Paginated parent files stay in native archived storage when deactivated so active children retain access to their prefixes.
 
 For recognized Claude boundaries, expanding omits the boundary/summary and reconnects known parent UUIDs to the retained prefix. Real Claude-client verification is still outstanding. The UI cannot offer expansion when no recorded prefix is available.
 
-All writing devices should use 0.7.0+ to honor path context policies. A native agent may compact again during later work; the switch does not change its global auto-compaction configuration. Expanded-history token estimates can differ substantially from the previous compacted input usage and are checked again at activation.
+All writing devices should use 0.7.1+ to honor path context policies. A native agent may compact again during later work; the switch does not change its global auto-compaction configuration. Expanded-history token estimates can differ substantially from the previous compacted input usage and are checked again at activation.
 
 
 ## Optional encryption and key changes

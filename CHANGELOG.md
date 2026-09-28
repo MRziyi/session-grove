@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.7.1
+
+- Resolve Codex parent, edited-version and context-window history references before grouping or displaying sessions. Repair existing suffix-only imports on Update.
+- Preserve explicit native fork ancestry and keep referenced parent prefixes accessible after deactivation.
+- Support verified paginated materialization, correct native index modes, and restore Transcript/Graph compaction switches for complete histories.
+- Compare native New branch and Grove Fork at the same completed turn with the installed Codex executable. Replace changed contexts with fresh native projections.
+
 ## 0.7.0
 
 - Progressive WebDAV verification, fixed application folder, masked saved secrets, optional encryption and verified key migration with progress.

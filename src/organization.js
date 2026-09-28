@@ -160,6 +160,14 @@ export function detectFamilies(store) {
             const common = x.boundaries.filter(c => c.count >= (nativeLink ? 2 : 4)).map(c => ({ a: c, b: y.boundaries.find(d => d.key === c.key && d.count === c.count) })).filter(c => c.b).at(-1);
             if (!common)
                 continue;
+            if (nativeLink) {
+                const leftIsChild = [x.p.meta?.forked_from_id, x.p.meta?.forkedFromId].includes(y.p.nativeId);
+                const child = leftIsChild ? left : right, parent = leftIsChild ? right : left;
+                store.put('branch', metadata(child, { parentId: parent.id, forkRevision: parent.head,
+                    forkEnd: leftIsChild ? common.a.end : common.b.end,
+                    forkParentEnd: leftIsChild ? common.b.end : common.a.end, inferred: true }));
+                grouped++; continue;
+            }
             // A shared root may accept another child without creating an extra hierarchy level.
             const existingRoot = left.synthetic && common.a.end === store.get('revision', left.head).refs.length ? left : right.synthetic && common.b.end === store.get('revision', right.head).refs.length ? right : null;
             if (existingRoot) {

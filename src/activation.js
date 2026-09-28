@@ -1,3 +1,4 @@
+import { supportedHistory } from './codex-history.js';
 import fs from 'node:fs';
 import path from 'node:path';
 import { estimateTokens, toolText } from './context.js';
@@ -56,7 +57,7 @@ export function activationInfo(store, native, branchId, cwd, env = process.env) 
     const threshold = Math.min(window ? window * .8 : Infinity, compactAt || Infinity);
     const risk = Number.isFinite(threshold) && estimated >= threshold;
     const original = store.instances().some(i => i.branchId === branchId && i.adopted && i.baseRevision === branch.head && i.cwd === target && !(branch.contextPolicy?.disabled || []).length);
-    const formatSupported = !parsed.meta?.history_mode || parsed.meta.history_mode === 'legacy' || original;
+    const formatSupported = supportedHistory(parsed) || original;
     const complete = formatSupported && parsed.complete && !parsed.errors.length && !parsed.warnings.some(w => w.includes('历史格式') || w.includes('外部附件'));
     const fingerprint = hash(JSON.stringify([branch.head, branch.contextPolicy, target, model, window, compactAt, estimated, basis]));
     return { fidelity: formatSupported ? 'record-preserving' : 'unsupported-history-mode', model, window, compactAt, source, estimated, basis, risk, unknown: !window && !compactAt, complete, fingerprint, cwd: target || '', observedAt: usage?.at || null };

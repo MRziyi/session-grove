@@ -155,11 +155,12 @@ await wait('document.querySelector(".record-detail")');assert.ok(await evaluate(
 await evaluate('document.querySelector(".compaction-edge button").click()');
 await wait('document.querySelector(".compaction-edge button")?.getAttribute("aria-pressed") === "false"');
 assert.equal(await evaluate('document.querySelectorAll(".graph-node.context-muted").length'), 0);
+assert.equal(await evaluate('document.querySelector("#transcripts [data-compaction]").getAttribute("aria-pressed")'), 'false');
 await evaluate('[...document.querySelectorAll(".graph-node:not(.dimmed)")].at(-1).click();document.querySelector("#toggle-active").click()');
 await wait('document.querySelector("#activation-budget")?.textContent.length > 0');
 await evaluate('document.querySelector("#dialog-form").requestSubmit()');
 await wait('!document.querySelector("#dialog").open && document.querySelector("#toggle-active")?.textContent === "Deactivate"');
-await evaluate('document.querySelector(".compaction-edge button").click()');
+await evaluate('document.querySelector("#transcripts [data-compaction]").click()');
 await wait('document.querySelector("#apply-context")');
 assert.ok(await evaluate('document.querySelectorAll(".graph-node.context-muted").length > 0'));
 await screenshot('v7-compaction');

@@ -1,3 +1,4 @@
+import { supportedHistory } from './codex-history.js';
 import { contextProjection } from './context-policy.js';
 import { contextInfo } from './context.js';
 import { assert, hash, id, now } from './util.js';
@@ -17,7 +18,7 @@ export function parse(raw, agent) {
             records.push({ raw: line, value: null });
         }
     }
-    const meta = records.find(r => r.value?.type === 'session_meta')?.value?.payload;
+    const meta = records.findLast(r => r.value?.type === 'session_meta')?.value?.payload;
     const first = records.find(r => r.value?.sessionId)?.value;
     const nativeId = agent === 'codex' ? meta?.id : first?.sessionId;
     const cwd = agent === 'codex' ? meta?.cwd : first?.cwd;
@@ -70,7 +71,7 @@ export function parse(raw, agent) {
     const warnings = [...errors];
     if (!nativeId && records.length)
         warnings.push('无法识别原生会话身份');
-    if (agent === 'codex' && meta?.history_mode === 'paginated') warnings.push('Paginated history is preserved. Only the unchanged original native session can be reactivated; context rewriting is not verified.');
+    if (agent === 'codex' && meta?.history_mode === 'paginated' && !supportedHistory({ meta, records })) warnings.push('Native history prefix is missing. Keep the earlier rollout segments available.');
     if (agent === 'codex' && meta?.history_mode && !['legacy', 'paginated'].includes(meta.history_mode))
         warnings.push(`暂不支持 ${meta.history_mode} 历史格式的原生写回`);
     if (turnOpen || pendingTools.size)
@@ -85,15 +86,18 @@ export function renderNative(raw, agent, nativeId, cwd, title, contextPolicy = n
     assert(!parsed.errors.length, '损坏或尚未写完的记录不能激活');
     assert(!raw || parsed.nativeId, '未知会话格式，不能写回');
     assert(parsed.complete, '请等待原生轮次结束，或从已完成检查点创建分支');
-    assert(!parsed.meta?.history_mode || parsed.meta.history_mode === 'legacy', parsed.warnings.join('；'));
+    assert(supportedHistory(parsed), parsed.warnings.join('；') || 'Unsupported native history format.');
     const old = parsed.nativeId;
     const records = contextPolicy ? contextProjection(parsed, agent, contextPolicy, nativeId, cwd) : parsed.records;
-    const rows = records.map(({ raw: line, value }) => {
+    const rows = records.map(({ raw: line, value }, index) => {
         if (!value)
             return line;
         const v = structuredClone(value);
+        if (agent === 'codex' && parsed.meta?.history_mode === 'paginated' && index === 0) v.payload = structuredClone(parsed.meta);
         if (agent === 'codex') {
             if (v.type === 'session_meta') {
+                delete v.payload.history_base;
+                if (nativeId !== old) { v.payload.forked_from_id = old; if (parsed.meta?.history_mode === 'paginated') v.payload.forked_from_ordinal_exclusive = parsed.records.filter(r => r.value).at(-1).value.ordinal + 1; }
                 v.payload.id = nativeId;
                 if (v.payload.session_id === old)
                     v.payload.session_id = nativeId;

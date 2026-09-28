@@ -1,3 +1,4 @@
+import { supportedHistory } from './codex-history.js';
 import { assert, hash } from './util.js';
 export const policyHash = policy => hash(JSON.stringify([...(policy?.disabled || [])].sort()));
 export const validPolicy = policy => !policy || Array.isArray(policy.disabled) && policy.disabled.every(id => typeof id === 'string' && /^[a-f0-9]{64}$/.test(id));
@@ -8,7 +9,7 @@ export function contextProjection(parsed, agent, policy, nativeId, cwd) {
         remove.add(event.line); if (event.summaryLine) remove.add(event.summaryLine);
     }
     if (agent === 'codex') {
-        assert(!parsed.meta?.history_mode || parsed.meta.history_mode === 'legacy', 'Paginated history cannot be rebuilt with verified context fidelity. Resume the original native session.');
+        assert(supportedHistory(parsed), 'Native history prefix is missing. Keep the earlier rollout segments available.');
         // Preserve every original record and unknown field. Only an explicitly
         // disabled compaction boundary is removed; never synthesize new instructions.
         return parsed.records.filter((r, i) => !remove.has(i + 1));

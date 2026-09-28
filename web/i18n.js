@@ -1,5 +1,9 @@
 let language = localStorage.getItem('grove-language') === 'zh' ? 'zh' : 'en';
 const dictionary = {
+    'Some native history is missing or unsupported. Update to read the referenced segments before changing context.': '部分原生历史缺失或格式暂不支持。请先更新并读取引用的历史段，再修改上下文。',
+    'The complete native history is unavailable. Update before changing context.': '尚未取得完整原生历史，请先更新再修改上下文。',
+    'Native history prefix is missing. Keep the earlier rollout segments available.': '缺少原生历史前缀，请保留早期历史段文件并重新更新。',
+
     "Use at least 12 characters, or leave empty for no content encryption. Other devices need the same passphrase.": "请输入至少 12 个字符，或留空不加密内容。其他设备需使用相同口令。",
     'Updating settings…': '正在更新设置…',
     "About": "关于",

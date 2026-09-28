@@ -30,6 +30,6 @@ export class Diagnostics {
     report() {
         let events = []; try { events = fs.readFileSync(this.file, 'utf8').trim().split('\n').filter(Boolean).slice(-200).map(v => JSON.parse(v)); } catch {}
         const memory = process.memoryUsage();
-        return { version: '0.7.0', startedAt: this.startedAt, memoryMB: Math.round(memory.rss / 1048576), memory: Object.fromEntries(Object.entries(memory).map(([key, value]) => [key + 'MB', Math.round(value / 1048576)])), cpuMs: Object.fromEntries(Object.entries(process.cpuUsage()).map(([key, value]) => [key, Math.round(value / 1000)])), metrics: [...this.metrics].map(([route, values]) => { const sorted = [...values].sort((a, b) => a - b); return { route, samples: values.length, averageMs: Math.round(values.reduce((a, b) => a + b, 0) / values.length), p95Ms: Math.round(sorted[Math.floor((sorted.length - 1) * .95)]) }; }), events };
+        return { version: '0.7.1', startedAt: this.startedAt, memoryMB: Math.round(memory.rss / 1048576), memory: Object.fromEntries(Object.entries(memory).map(([key, value]) => [key + 'MB', Math.round(value / 1048576)])), cpuMs: Object.fromEntries(Object.entries(process.cpuUsage()).map(([key, value]) => [key, Math.round(value / 1000)])), metrics: [...this.metrics].map(([route, values]) => { const sorted = [...values].sort((a, b) => a - b); return { route, samples: values.length, averageMs: Math.round(values.reduce((a, b) => a + b, 0) / values.length), p95Ms: Math.round(sorted[Math.floor((sorted.length - 1) * .95)]) }; }), events };
     }
 }

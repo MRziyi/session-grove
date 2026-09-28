@@ -1,4 +1,4 @@
-# Requirements and context-fidelity audit — 0.7.0
+# Requirements and context-fidelity audit — 0.7.1
 
 | Requirement | Status / evidence |
 | --- | --- |
@@ -16,7 +16,7 @@
 | Full raw history survives Node organization and WebDAV | Verified by exact record/round-trip comparisons |
 | Supported Codex legacy materialization retains tools/reasoning/instructions | Verified by structured record comparison and native read/resume smoke; no model turn submitted |
 | Original paginated file restored unchanged on its original machine/path | Byte-for-byte adapter test |
-| Arbitrary paginated history rewritten/migrated with identical native semantics | **Not verified; blocked.** Prior 0.6 format conversion has been removed |
+| Supported paginated fork materialization | Verified against native `thread/fork` at the same completed turn: projected items, response items, world-state and base instructions match. Referenced byte prefixes are resolved without converting to legacy; missing/unknown formats still fail closed |
 | Real Claude client continuation | File adapters tested; actual client validation remains outstanding |
 | Every token in the live model request visible in Grove | **Not possible from available logs alone.** Opaque reasoning/compaction, images, dynamic instructions and truncation limit observability |
 | Identical model responses after resume | Not promised; preserving recorded input is distinct from runtime prompt construction and generation |
@@ -34,3 +34,9 @@ The native client may inject current instruction files, tools, model settings an
 Markdown is display-only. Tool activity stays associated with the preceding visible chat and can be expanded. Structured file arguments show their recorded paths. Tool output is the captured result—not a fresh read of today's file. Shell commands may access files that are not individually identified in the log; Grove does not invent a complete file list. Readable reasoning and instructions are inspectable; opaque or non-text entries are labeled unknown. The latest native token count and historical text estimates remain separate measurements.
 
 External attachments/companion directories still block unsupported materialization. This audit supersedes older design documents and any broad claim that all native sessions are interchangeable across clients.
+
+## Native comparison in 0.7.1
+
+The installed VS Code Codex executable (`0.155.0-alpha.16.3`) supports experimental paginated read/resume/fork. Blanket disabling based on older public documentation was too broad. `scripts/codex-fork-smoke.js` compares native `thread/fork(lastTurnId)` with Grove Fork → Activate using private, isolated copies, no authentication and no model turns. One comparison matched 46 projected items and 88 complete response-item payloads. Another matched 79 items and 134 payloads while explicitly disabling compaction, then re-enabling it and resuming a fresh native projection. World-state and base instructions matched; source file hashes remained unchanged. No personal fixture or transcript is committed.
+
+`history_base` may reference a parent thread, an earlier segment of the same thread, or a context-window segment UUID. Its byte offset and exclusive ordinal bound the inherited prefix. The complete chain is resolved before inference, display, export or materialization. Earlier unselected suffixes are not appended to the selected path. Referenced parent segments remain discoverable when a parent is deactivated.

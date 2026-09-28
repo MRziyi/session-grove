@@ -33,7 +33,7 @@ Interrupted native writes can be recovered from Information when a recovery jour
 
 ## Compatibility
 
-- Codex legacy JSONL and `state_5.sqlite` are supported. Paginated histories are not converted to legacy: only unchanged adopted files can be restored at their original working path. Unknown required index fields and unsupported history modes fail closed.
+- Codex legacy JSONL and `state_5.sqlite` are supported. Supported paginated reference chains are resolved and materialized without converting to legacy; required historical segments must be available. Unknown required index fields and unsupported history modes fail closed.
 - Codex 0.155.0-alpha.16.3 has been tested with real App Server list/read/resume/deactivate/reactivate calls, without sending model turns.
 - Claude project JSONL, encoded paths and legacy indexes are covered by file-adapter tests; a real Claude client still needs validation.
 - Native activation writes require the agent processes to be closed. Opening and organizing Grove history does not.
@@ -111,3 +111,12 @@ Use `pnpm dev` (or `npm run dev`) for the real local library; stop it with Ctrl+
 WebDAV setup lives in Settings. Grove appends `/Session-Grove/`, verifies a disposable write/read/delete, then offers optional content encryption. `sync-key.txt` is an owner-only local key file managed by Settings; `webdav.json` records verified connection settings. The key is never sent back to the browser. A saved key automatically unlocks on startup unless an unfinished `sync-settings-pending.json` journal requires recovery. Do not delete that private journal until the change is resolved; it contains the destination recovery key.
 
 Changing encryption requires strong ETags or WebDAV locking; Teracloud uses the locking path. Other devices should pause sync during migration and reconnect afterward. Source objects are verified before a conditional vault-pointer switch; old-generation cleanup occurs afterward. When moving to a new provider the previous provider is retained. A nonempty destination vault is rejected rather than overwritten.
+
+## Native branch equivalence check
+
+```sh
+pnpm run test:codex-fork -- /path/to/codex-home THREAD_UUID
+pnpm run test:codex-fork -- /path/to/codex-home THREAD_UUID --expand
+```
+
+This explicitly reads the chosen thread and its required prefix files into a private temporary home. It invokes native New branch at the same completed turn as Grove Fork, compares all paginated items, response-item payloads, world-state and base instructions, and removes the copies. `--expand` also checks compaction off/on and fresh native projections. It sends no model turn. The anonymous report is saved under ignored `test-results/`.

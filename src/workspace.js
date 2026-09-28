@@ -1,3 +1,4 @@
+import { supportedHistory } from './codex-history.js';
 import { ledger } from './context-ledger.js';
 import { assert, hash, id as newId, now } from './util.js';
 import { estimateTokens, toolText } from './context.js';
@@ -90,7 +91,7 @@ export function buildGraph(store, branchId) {
         return path;
     }
     const paths = members.filter(b => visibleSession(store, b)).map(b => ({ branchId: b.id, name: b.name, agent: b.agent, archived: !!b.archived,
-        head: b.head, canRewriteContext: !store.parsed(b.head, b.agent).meta?.history_mode || store.parsed(b.head, b.agent).meta.history_mode === 'legacy', canActivate: !store.parsed(b.head, b.agent).meta?.history_mode || store.parsed(b.head, b.agent).meta.history_mode === 'legacy' || store.instances().some(i => i.branchId === b.id && i.adopted && i.baseRevision === b.head && (i.contextPolicyHash || policyHash(null)) === policyHash(b.contextPolicy)), active: store.instances().some(i => i.branchId === b.id && isActive(i)),
+        head: b.head, canRewriteContext: supportedHistory(store.parsed(b.head, b.agent)), canActivate: supportedHistory(store.parsed(b.head, b.agent)) || store.instances().some(i => i.branchId === b.id && i.adopted && i.baseRevision === b.head && (i.contextPolicyHash || policyHash(null)) === policyHash(b.contextPolicy)), active: store.instances().some(i => i.branchId === b.id && isActive(i)),
         context: { ...store.parsed(b.head, b.agent).context, ledger: (() => { const l = ledger(store.parsed(b.head, b.agent), b.agent); return { ...l, entries: l.entries.filter(e => e.chatLine === null) }; })(), compactions: store.parsed(b.head, b.agent).context.compactions.map(e => ({ ...e, enabled: !(b.contextPolicy?.disabled || []).includes(e.id) })) }, contextPolicy: b.contextPolicy || null, contextPending: store.instances().some(i => i.branchId === b.id && isActive(i) && ((i.contextPolicyHash || policyHash(null)) !== policyHash(b.contextPolicy) || i.baseRevision !== b.head)), messages: pathFor(b), checkpoints: store.parsed(b.head, b.agent).checkpoints }));
     const assignments = {};
     // Read legacy append-only nodes as initial annotations without changing history.

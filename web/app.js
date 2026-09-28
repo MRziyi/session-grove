@@ -205,7 +205,7 @@ function activityHtml(entries, p) {
 }
 function contextBreakdown(p) {
     const ledger=p.context?.ledger;if(!ledger)return '';
-    const fidelity = !p.canRewriteContext ? `<p class="fidelity-note">${t('This native history format can be organized and synced. Only the unchanged original session can be reactivated; context rewriting is not verified.')}</p>` : '';
+    const fidelity = !p.canRewriteContext ? `<p class="fidelity-note">${t('Some native history is missing or unsupported. Update to read the referenced segments before changing context.')}</p>` : '';
     const labels={'tool-call':'Tool inputs','tool-result':'Tool results',reasoning:'Readable reasoning',instructions:'Recorded instructions'};
     return fidelity + `<details class="context-breakdown"><summary>${t('Recorded context')} · ${t('Tool activity')}: ≈ ${compactNumber((ledger.totals['tool-call']||0)+(ledger.totals['tool-result']||0))} tokens${p.context.lastUsage?` · ${t('Last native input')}: ${compactNumber(p.context.lastUsage.input)}`:''}</summary><div class="token-breakdown">${Object.entries(ledger.totals).filter(([,n])=>n).map(([k,n])=>`<span>${t(labels[k])}<b>≈ ${compactNumber(n)}</b></span>`).join('')}</div><p>${t('Recorded history is not the live model request. Hidden instructions, encrypted reasoning, images and compaction can prevent a complete token breakdown.')}</p>${activityHtml(ledger.entries.filter(e=>e.chatLine===null),p)}</details>`;
 }
@@ -219,7 +219,7 @@ function mutedNode(n, p) {
 function compactionButton(e, compact = false) {
     if(!route()?.canRewriteContext || state.scope === 'archived' || !e.canDisable && e.enabled) return `<span class="context-switch">${t('Compact')} · ${t(e.enabled ? 'On' : 'Off')}</span>`;
     const locked = !route()?.canRewriteContext || state.scope === 'archived' || !e.canDisable && e.enabled;
-    return `<button type="button" class="context-switch ${e.enabled ? 'enabled' : ''}" data-compaction="${esc(e.id)}" aria-pressed="${!!e.enabled}" title="${esc(t(!route()?.canRewriteContext ? 'This native history format cannot be rewritten with verified fidelity.' : e.canDisable ? 'Choose compacted context or recorded history for this path.' : 'Original pre-compaction history is unavailable.'))}" ${locked ? 'disabled' : ''}>${compact ? t('Compact') : t('Use compaction')}<span>${t(e.enabled ? 'On' : 'Off')}</span></button>`;
+    return `<button type="button" class="context-switch ${e.enabled ? 'enabled' : ''}" data-compaction="${esc(e.id)}" aria-pressed="${!!e.enabled}" title="${esc(t(!route()?.canRewriteContext ? 'The complete native history is unavailable. Update before changing context.' : e.canDisable ? 'Choose compacted context or recorded history for this path.' : 'Original pre-compaction history is unavailable.'))}" ${locked ? 'disabled' : ''}>${compact ? t('Compact') : t('Use compaction')}<span>${t(e.enabled ? 'On' : 'Off')}</span></button>`;
 }
 function bindCompactions(root) { root.querySelectorAll('[data-compaction]').forEach(el => el.onclick = () => {
     const p = route(), event = p.context.compactions.find(e => e.id === el.dataset.compaction);
@@ -389,7 +389,7 @@ async function activateDialog(p, actionLabel = 'Activate') {
             toast(t('Open the active continuation from your agent’s session list.'));
         }, actionLabel);
         function showBudget(c) {
-            if(c.fidelity === 'unsupported-history-mode') { $('#activation-budget').innerHTML = `<p class="warning">${t('This native history format cannot be rewritten with verified fidelity.')}</p>`; $('#dialog-submit').hidden = true; return; }
+            if(c.fidelity === 'unsupported-history-mode') { $('#activation-budget').innerHTML = `<p class="warning">${t('The complete native history is unavailable. Update before changing context.')}</p>`; $('#dialog-submit').hidden = true; return; }
             $('#dialog-submit').hidden = !c.complete;
             $('#activation-budget').innerHTML = c.risk ? `<p class="warning">${t('Context may be near its limit: about {used} tokens, planning limit {limit}.', { used: compactNumber(c.estimated), limit: compactNumber(c.window || c.compactAt) })}<br>${esc(c.source || '')}</p>` : c.basis === 'incomplete-after-compaction' ? `<p class="dialog-copy">${t('The compacted context size is not recorded. The native agent will manage its context window.')}</p>` : c.unknown ? `<p class="dialog-copy">${t('No reliable context limit was found in the local configuration.')}</p>` : `<p class="dialog-copy">≈ ${compactNumber(c.estimated)} / ${compactNumber(c.window || c.compactAt)} tokens · ${esc(c.source || '')}</p>`;
             $('#dialog-submit').textContent = t(c.risk ? 'Activate anyway' : actionLabel);
@@ -486,7 +486,7 @@ function information() {
     $$('[data-recover]').forEach(el=>el.onclick=()=>run(async()=>{await api('/recover','POST',{id:el.dataset.recover});$('#dialog').close();}));
 }
 function about() {
-    modal('About', `<div class="about"><h3>Session Grove <small>0.7.0</small></h3><p>${t('Organize agent conversations by project. Keep the context, choose the branch, continue your work.')}</p><p>${t('Developed by')} Ziyi Zhang</p><div class="about-links"><a href="https://ziyi-zhang.vercel.app" target="_blank" rel="noopener noreferrer" aria-label="Ziyi Zhang website" title="Ziyi Zhang">${icon('website')}</a><a href="https://github.com/MRziyi/session-grove" target="_blank" rel="noopener noreferrer" aria-label="GitHub repository" title="GitHub">${icon('github')}</a></div></div>`,null);
+    modal('About', `<div class="about"><h3>Session Grove <small>0.7.1</small></h3><p>${t('Organize agent conversations by project. Keep the context, choose the branch, continue your work.')}</p><p>${t('Developed by')} Ziyi Zhang</p><div class="about-links"><a href="https://ziyi-zhang.vercel.app" target="_blank" rel="noopener noreferrer" aria-label="Ziyi Zhang website" title="Ziyi Zhang">${icon('website')}</a><a href="https://github.com/MRziyi/session-grove" target="_blank" rel="noopener noreferrer" aria-label="GitHub repository" title="GitHub">${icon('github')}</a></div></div>`,null);
 }
 async function sync(direction) {
     if (!state.data.cloud.configured || !state.data.cloud.unlocked) return settings();
