@@ -1,5 +1,20 @@
 let language = localStorage.getItem('grove-language') === 'zh' ? 'zh' : 'en';
 const dictionary = {
+    'Restore to project': '恢复到项目', 'Restored to project': '已恢复到项目', 'Choose a project to restore ungrouped sessions.': '请选择一个项目来恢复未归类会话。',
+    'Current Active': '当前激活', 'Active Codex Sessions': '已激活的 Codex 会话', 'Active Claude Code Sessions': '已激活的 Claude Code 会话',
+    'Upload': '上传', 'Sync': '同步', 'Update': '更新', 'Sync locked': '同步已锁定', 'No projects yet': '尚无项目',
+    'Search title or content…': '搜索标题或对话内容…', 'Back to list': '返回列表', 'Transcripts': '对话记录', 'Graph': '逻辑图',
+    '{count} sessions': '{count} 条会话', '{count} branches': '{count} 条分支', '{count} chats': '{count} 条对话', '{count} pending': '{count} 条待整理', '{count} selected': '已选择 {count} 项',
+    'Select {name}': '选择 {name}', 'Select chat {number}': '选择第 {number} 条对话', 'Deactivate': '停用', 'Archive project': '归档项目', 'Restore project': '恢复项目',
+    'Start a conversation in your agent, then click Update.': '在 Agent 中开始对话，然后点击更新。', 'No sessions here.': '这里暂无会话。', 'No chats yet.': '尚无对话。',
+    'Combine': '合并', 'Dissolve': '解散', 'Clear': '取消选择', 'Collapse': '收起', 'Expand': '展开', 'New project…': '新建项目…', 'Project name': '项目名称', 'Node title': '节点标题', 'Source': '来源',
+    'Keep the history in Archived and deactivate these sessions on this device. Restore does not automatically activate them.': '保留历史到归档，并停用本机的这些会话。恢复后不会自动激活。',
+    'Combine requires consecutive chats.': '请选择同一路径上连续的对话进行合并。', 'Cannot combine across a fork point.': '不能跨分叉点合并节点。',
+    'Fork at a node ending with a completed turn.': '请选择以完整轮次结束的节点进行分叉。',
+    'Conversation changed. Refresh before organizing.': '对话已发生变化，请更新后重新整理。', 'Select chats to organize.': '请选择要整理的对话。',
+    'Enter a node title (1–200 characters).': '请输入节点标题（1–200 个字符）。', 'Select sessions first.': '请先选择会话。',
+    'All selected chats must belong to one path.': '选择的对话必须属于同一条路径。', 'Restore the project first.': '请先恢复项目。',
+    'Restore the destination project first.': '请先恢复目标项目。', 'Select sessions to move.': '请选择要移动的会话。',
     'Local Active': '本机 Active', 'Cloud projects': '云端项目', 'All local sessions': '本机会话总览', 'Language': '语言', 'items': '项', 'segments': '个片段',
     'Projects': '项目', 'New project': '新建项目', 'New session': '新会话', 'Refresh': '更新',
     'Active set': 'Active 清单', 'Sync & settings': '同步与设置', 'Local first. Yours to keep.': '本地优先，由你掌握。',
@@ -8,7 +23,7 @@ const dictionary = {
     'A place for every line of thought.': '让每条思路都有归处。', 'Your active sessions will appear here automatically.': '本机正在使用的会话会自动出现在这里。',
     'Create a session or move local work into this project.': '创建会话，或将本机的工作移入这个项目。',
     'No matching sessions': '没有匹配的会话', 'Try another search or show archived items.': '试试其他搜索词，或显示归档内容。',
-    'Ungrouped': '未分组', 'Unfiled': '未归类', 'Session': '单条会话', 'Branch tree': '分支树', 'branches': '条分支',
+    'Ungrouped': '未归类', 'Unfiled': '未归类', 'Session': '单条会话', 'Branch tree': '分支树', 'branches': '条分支',
     'messages': '条消息', 'Pending': '待整理', 'Committed': '已提交', 'New direction': '新的工作方向', 'Shared context': '共同上下文',
     'Open tree': '进入分支图', 'Open session': '打开会话', 'Move to project': '移入项目', 'Move / group': '移动 / 分组',
     'Back to collection': '返回项目列表', 'Tree': '分支图', 'Timeline': '逻辑节点', 'Fit': '适应', 'Context inheritance': '上下文继承',
@@ -60,6 +75,7 @@ const dictionary = {
 };
 export function t(key, values = {}) {
     let result = language === 'zh' ? dictionary[key] || key : key;
+    if (language === 'en' && values.count === 1) result = result.replace(/\bchats\b/g, 'chat').replace(/\bbranches\b/g, 'branch').replace(/\bsessions\b/g, 'session');
     for (const [name, value] of Object.entries(values))
         result = result.replaceAll(`{${name}}`, String(value));
     return result;

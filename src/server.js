@@ -6,8 +6,9 @@ import { randomBytes, timingSafeEqual } from 'node:crypto';
 import { Store } from './store.js';
 import { Native } from './native.js';
 import { AutoSync } from './auto-sync.js';
-import { metadata } from './organization.js';
-import { assert, atomic, json, text, now } from './util.js';
+import { metadata, treeMembers } from './organization.js';
+import { isActive } from './workspace.js';
+import { assert, atomic, json, text, now, id } from './util.js';
 const webRoot = fileURLToPath(new URL('../web/', import.meta.url));
 export function createApp({ root, roots, guard, demo = false }) {
     const store = new Store(root), native = new Native(store, { roots, guard }), token = randomBytes(32).toString('hex');
@@ -62,11 +63,65 @@ export function createApp({ root, roots, guard, demo = false }) {
                 const c = json(configFile, {});
                 return send(200, { url: c.url || '', username: c.username || '', hasPassword: !!c.password });
             }
+            if (req.method === 'GET' && route === '/api/list')
+                return send(200, store.listing(url.searchParams.get('scope') || 'active:codex', url.searchParams.get('q') || ''));
+            const tree = route.match(/^\/api\/trees\/([^/]+)$/);
+            if (req.method === 'GET' && tree) return send(200, store.treeGraph(tree[1]));
+            if (req.method === 'POST' && tree) return send(200, store.organize(tree[1], body));
+            if (req.method === 'POST' && route === '/api/move') return send(200, store.moveItems(body));
+            if (req.method === 'POST' && route === '/api/manage') {
+                assert(['activate', 'deactivate', 'archive', 'restore'].includes(body.action), 'Unknown session action.');
+                let members;
+                if (body.projectId) members = store.all('branch').filter(b => b.projectId === store.get('project', body.projectId).id);
+                else if (body.itemIds?.length) members = [...new Map(body.itemIds.flatMap(id => treeMembers(store, id)).map(b => [b.id, b])).values()];
+                else members = (body.branchIds || []).map(id => store.get('branch', id));
+                assert(members.length, 'Select sessions first.');
+                if (body.action === 'deactivate' && body.agent) members = members.filter(b => b.agent === body.agent && store.instances().some(i => i.branchId === b.id && isActive(i)));
+                if (body.action === 'activate') {
+                    assert(members.length === 1 && !members[0].synthetic, 'Select one native session to activate.');
+                    assert(!members[0].projectId || !store.get('project', members[0].projectId).archived, 'Restore the project first.');
+                }
+                // Metadata changes follow successful native changes. A busy client leaves
+                // both membership and Archive state untouched; the user can retry safely.
+                const before = store.instances();
+                if (body.action !== 'restore') {
+                    try {
+                        for (const b of members.filter(b => !b.synthetic)) native.setActive(b.id, body.cwd, body.action === 'activate');
+                        if (native.plan().operations.some(op => members.some(b => b.id === op.branchId))) native.apply(members.map(b => b.id));
+                    } catch (e) {
+                        const after = store.instances();
+                        for (const i of after) { const old = before.find(v => v.id === i.id); i.desired = old ? old.desired : false; }
+                        store.local('instances', after);
+                        throw e;
+                    }
+                }
+                if (['archive', 'restore'].includes(body.action)) store.transaction(() => {
+                    if (body.action === 'restore' && members.some(b => !b.projectId)) {
+                        assert(body.destinationProjectId || body.projectName, 'Choose a project to restore ungrouped sessions.');
+                        const destination = body.destinationProjectId ? store.get('project', body.destinationProjectId) : store.project(body.projectName);
+                        assert(!destination.archived, 'Restore the destination project first.');
+                        const unfiled = [...new Map(members.filter(b => !b.projectId).flatMap(b => treeMembers(store, b.id)).map(b => [b.id, b])).values()];
+                        for (const b of unfiled) store.put('branch', metadata(b, { projectId: destination.id, group: '' }));
+                        members = members.map(b => store.get('branch', b.id));
+                    }
+                    for (const b of members) store.edit(b.id, { archived: body.action === 'archive' });
+                    if (body.projectId) {
+                        const p = store.get('project', body.projectId);
+                        store.put('project', metadata(p, { archived: body.action === 'archive' }));
+                    } else if (body.action === 'restore') {
+                        for (const id of new Set(members.map(b => b.projectId).filter(Boolean))) {
+                            const p = store.get('project', id);
+                            if (p.archived) store.put('project', metadata(p, { archived: false }));
+                        }
+                    }
+                });
+                return send(200, { changed: members.filter(b => !b.synthetic).length });
+            }
             const detail = route.match(/^\/api\/branches\/([^/]+)$/);
             if (req.method === 'GET' && detail)
                 return send(200, store.detail(detail[1]));
             if (req.method === 'POST' && route === '/api/projects')
-                return send(201, store.project(body.name, body.description));
+                return send(201, store.moveItems({ itemIds: body.itemIds, projectName: body.name }));
             const project = route.match(/^\/api\/projects\/([^/]+)$/);
             if (req.method === 'PATCH' && project) {
                 const p = store.get('project', project[1]), previous = structuredClone(p);
@@ -78,7 +133,7 @@ export function createApp({ root, roots, guard, demo = false }) {
                 return send(200, store.put('project', metadata(previous, p)));
             }
             if (req.method === 'POST' && route === '/api/branches')
-                return send(201, store.branch(body.projectId, body.name, body.agent));
+                return send(400, { error: 'Start new sessions in Codex or Claude Code.' });
             if (req.method === 'PATCH' && detail) {
                 const b = store.edit(detail[1], body);
                 if (body.archived)
@@ -120,7 +175,15 @@ export function createApp({ root, roots, guard, demo = false }) {
             if (req.method === 'POST' && route === '/api/conflicts/resolve') {
                 const conflicts = store.local('conflicts') || [], c = conflicts[body.index];
                 assert(c, '冲突不存在');
-                if (body.choice === 'remote') {
+                if (c.kind === 'layout') {
+                    assert(['local', 'remote'].includes(body.choice), 'Unknown conflict choice.');
+                    const b = store.get('branch', c.local.id);
+                    const chosen = store.get('layout', body.choice === 'remote' ? c.remote.layoutHead : b.layoutHead);
+                    const layout = { ...chosen, id: id(), parent: b.layoutHead, mergeParents: [c.remote.layoutHead], createdAt: now() };
+                    store.put('layout', layout);
+                    store.put('branch', { ...b, layoutHead: layout.id });
+                }
+                else if (body.choice === 'remote') {
                     if (c.kind === 'organization') {
                         const b = store.get('branch', c.local.id);
                         store.put('branch', { ...b, nodeHead: c.remote.nodeHead, updatedAt: now() });
@@ -132,7 +195,7 @@ export function createApp({ root, roots, guard, demo = false }) {
                     }
                     else {
                         const p = store.get('project', c.local.id);
-                        store.put('project', metadata(p, { name: c.remote.name, description: c.remote.description }));
+                        store.put('project', metadata(p, { name: c.remote.name, description: c.remote.description, archived: c.remote.archived }));
                     }
                 }
                 else

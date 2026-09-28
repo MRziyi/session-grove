@@ -78,6 +78,8 @@ export class Native {
             const sidecarDir = item.agent === 'claude' ? path.join(path.dirname(item.file), item.nativeId) : null;
             const requiresAuxiliary = !!(sidecarDir && fs.existsSync(sidecarDir) && fs.readdirSync(sidecarDir).length);
             const b = this.store.branch(projectId, name || item.title, item.agent, raw, { cwd: item.cwd, agent: item.agent, nativeId: item.nativeId, client: 'unknown', operation: 'import', requiresAuxiliary });
+            b.contentUpdatedAt = item.updatedAt;
+            this.store.put('branch', b);
             const instances = this.store.instances();
             instances.push({ id: id(), branchId: b.id, agent: b.agent, root: this.roots[b.agent], nativeId: item.nativeId, file: item.file, cwd: item.cwd, desired: observe && !item.archived, applied: !item.archived, baseRevision: b.head, baseline: raw, observedHash: hash(raw), adopted: true, title: item.title, requiresAuxiliary });
             this.store.local('instances', instances);
@@ -193,11 +195,12 @@ export class Native {
         assert(files[0] === 'state_5.sqlite', '暂不支持此 Codex 状态库版本');
         return safePath(root, path.join(root, files[0]));
     }
-    apply() {
+    apply(branchIds = null) {
         this.guard();
         assert(!this.plan().pendingRecovery.length, '存在未完成操作，请先恢复备份', 409);
         this.collect();
         const instances = this.store.instances(), plan = this.plan();
+        if (branchIds) plan.operations = plan.operations.filter(op => branchIds.includes(op.branchId));
         if (!plan.operations.length)
             return { applied: 0 };
         const job = { id: id(), createdAt: now(), status: 'prepared', files: [], instancesBefore: instances, operations: plan.operations };
@@ -273,7 +276,8 @@ export class Native {
                 if (!changed)
                     continue;
                 const root = this.roots[agent], file = safePath(root, path.join(root, agent === 'codex' ? 'session_index.jsonl' : 'history.jsonl'));
-                const managed = new Set(after.filter(i => i.agent === agent).map(i => i.nativeId));
+                const changedIds = new Set(plan.operations.map(op => op.instanceId));
+                const managed = new Set(after.filter(i => i.agent === agent && changedIds.has(i.id)).map(i => i.nativeId));
                 const existing = fs.existsSync(file) ? this.read(file).split('\n').filter(Boolean) : [];
                 const kept = existing.filter(line => {
                     try {
@@ -284,14 +288,14 @@ export class Native {
                         return true;
                     }
                 });
-                for (const i of after.filter(i => i.agent === agent && i.applied)) {
+                for (const i of after.filter(i => i.agent === agent && i.applied && changedIds.has(i.id))) {
                     const b = this.store.get('branch', i.branchId);
                     kept.push(JSON.stringify(agent === 'codex' ? { id: i.nativeId, thread_name: b.name, updated_at: now() } : { display: b.name, pastedContents: {}, timestamp: Date.now(), project: i.cwd, sessionId: i.nativeId }));
                 }
                 backup(file);
                 writes.set(file, kept.length ? kept.join('\n') + '\n' : '');
                 if (agent === 'claude') {
-                    const dirs = new Set([...instances, ...after].filter(i => i.agent === 'claude' && i.file && inside(path.join(root, 'projects'), i.file)).map(i => path.dirname(i.file)));
+                    const dirs = new Set([...instances, ...after].filter(i => i.agent === 'claude' && changedIds.has(i.id) && i.file && inside(path.join(root, 'projects'), i.file)).map(i => path.dirname(i.file)));
                     for (const dir of dirs) {
                         const indexFile = safePath(root, path.join(dir, 'sessions-index.json'));
                         if (!fs.existsSync(indexFile))
@@ -299,7 +303,7 @@ export class Native {
                         const index = json(indexFile);
                         assert(index.version === 1 && Array.isArray(index.entries), '不支持的 Claude sessions-index 格式');
                         const entries = index.entries.filter(e => !managed.has(e.sessionId));
-                        for (const i of after.filter(i => i.agent === 'claude' && i.applied && path.dirname(i.file) === dir)) {
+                        for (const i of after.filter(i => i.agent === 'claude' && i.applied && changedIds.has(i.id) && path.dirname(i.file) === dir)) {
                             const b = this.store.get('branch', i.branchId), p = parse(i.baseline, 'claude');
                             const previous = index.entries.find(e => e.sessionId === i.nativeId) || {};
                             entries.push({ ...previous, sessionId: i.nativeId, fullPath: i.file, fileMtime: Date.now(), firstPrompt: p.messages.find(m => m.role === 'user')?.text || b.name, summary: b.name, messageCount: p.messages.length, created: previous.created || b.createdAt, modified: now(), projectPath: i.cwd, isSidechain: false });

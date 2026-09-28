@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import { collections, listing, treeGraph, organize, moveItems } from './workspace.js';
 import path from 'node:path';
 import os from 'node:os';
 import { DatabaseSync } from 'node:sqlite';
@@ -71,7 +72,7 @@ export class Store {
         end = Number(end);
         assert(parsed.checkpoints.some(c => c.end === end), '只能从已完成的轮次创建分支');
         const revision = this.revision(this.raw(rev.id, end), rev.id, { agent: parent.agent, operation: 'fork' });
-        return this.put('branch', { ...parent, id: id(), name: text(name), head: revision.id, nodeHead: null, parentId: parent.id, forkRevision: rev.id, forkEnd: end, forkParentEnd: end, archived: false, synthetic: false, createdAt: now(), updatedAt: now(), metaVersion: id(), metaAncestors: [] });
+        return this.put('branch', { ...parent, id: id(), name: text(name), head: revision.id, nodeHead: null, layoutHead: null, chatIdentity: null, parentId: parent.id, forkRevision: rev.id, forkEnd: end, forkParentEnd: end, archived: false, synthetic: false, contentUpdatedAt: now(), createdAt: now(), updatedAt: now(), metaVersion: id(), metaAncestors: [] });
     }
     edit(branchId, patch) {
         const b = this.get('branch', branchId), previous = structuredClone(b);
@@ -111,6 +112,7 @@ export class Store {
         const rev = this.revision(raw, b.head, { ...source, rewritten: !raw.startsWith(current) });
         b.head = rev.id;
         b.updatedAt = now();
+        b.contentUpdatedAt = b.updatedAt;
         return this.put('branch', b);
     }
     detail(branchId) {
@@ -131,12 +133,17 @@ export class Store {
     moveTree(branchId, projectId, group) { return moveTree(this, branchId, projectId, group); }
     forest(scope) { return forest(this, scope); }
     detectFamilies() { return detectFamilies(this); }
+    collections() { return collections(this); }
+    listing(scope, query) { return listing(this, scope, query); }
+    treeGraph(id) { return treeGraph(this, id); }
+    organize(id, options) { return organize(this, id, options); }
+    moveItems(options) { return moveItems(this, options); }
     snapshot() {
         const summaries = Object.fromEntries(this.all('branch').map(b => {
             const { pending, nodes } = pendingDetail(this, b, parse(this.raw(b.head), b.agent));
             return [b.id, { pendingCount: pending.count, pendingStart: pending.start, pendingEnd: pending.end, nodeIds: nodes.map(n => n.id) }];
         }));
-        return { device: this.device, projects: this.all('project'), branches: this.all('branch'), nodes: this.all('node'), summaries, localItems: this.forest('local'), projectItems: Object.fromEntries(this.all('project').map(p => [p.id, this.forest(p.id)])), instances: this.instances(), stats: this.db.prepare('SELECT COUNT(*) AS objects, COALESCE(SUM(length(body)),0) AS bytes FROM objects').get(), conflicts: this.local('conflicts') || [] };
+        return { ...this.collections(), device: this.device, projects: this.all('project'), branches: this.all('branch'), nodes: this.all('node'), summaries, localItems: this.forest('local'), projectItems: Object.fromEntries(this.all('project').map(p => [p.id, this.forest(p.id)])), instances: this.instances(), stats: this.db.prepare('SELECT COUNT(*) AS objects, COALESCE(SUM(length(body)),0) AS bytes FROM objects').get(), conflicts: this.local('conflicts') || [] };
     }
     exportGraph() {
         const branches = this.all('branch').filter(b => b.projectId), branchIds = new Set(branches.map(b => b.id));
@@ -149,10 +156,10 @@ export class Store {
         }
         for (const n of nodes)
             visit(n.revisionId);
-        return { schema: 2, projects: this.all('project'), branches, nodes, revisions: [...revisions.values()] };
+        return { schema: 3, layouts: this.all('layout').filter(l => branchIds.has(l.rootId)), projects: this.all('project'), branches, nodes, revisions: [...revisions.values()] };
     }
     merge(graph, objects) {
-        assert([1, 2].includes(graph?.schema) && Array.isArray(graph.projects) && Array.isArray(graph.branches) && Array.isArray(graph.revisions), '不兼容的同步格式');
+        assert([1, 2, 3].includes(graph?.schema) && Array.isArray(graph.projects) && Array.isArray(graph.branches) && Array.isArray(graph.revisions), '不兼容的同步格式');
         assert(graph.revisions.length < 100000 && graph.branches.length < 100000, '远端资料库过大');
         return this.transaction(() => {
             for (const [h, body] of Object.entries(objects)) {
@@ -185,7 +192,7 @@ export class Store {
                 const old = this.all('project').find(x => x.id === p.id);
                 if (!old)
                     this.put('project', p);
-                else if (old.name !== p.name || old.description !== p.description) {
+                else if (old.name !== p.name || old.description !== p.description || !!old.archived !== !!p.archived) {
                     if (p.metaAncestors?.includes(old.metaVersion))
                         this.put('project', p);
                     else if (!old.metaAncestors?.includes(p.metaVersion))
@@ -207,11 +214,11 @@ export class Store {
                 assert(old.agent === b.agent, '分支身份冲突');
                 if (old.head !== b.head) {
                     if (this.ancestor(old.head, b.head))
-                        this.put('branch', { ...old, head: b.head, updatedAt: b.updatedAt });
+                        this.put('branch', { ...old, head: b.head, updatedAt: b.updatedAt, contentUpdatedAt: b.contentUpdatedAt || b.updatedAt });
                     else if (!this.ancestor(b.head, old.head)) {
                         const forkId = `conflict-${hash(b.id + ':' + b.head).slice(0, 32)}`;
                         if (!this.all('branch').some(x => x.id === forkId)) {
-                            this.put('branch', { ...b, id: forkId, parentId: old.id, name: `${b.name} · 远端分歧`, conflict: true });
+                            this.put('branch', { ...b, id: forkId, chatIdentity: b.chatIdentity || b.id, parentId: old.id, name: `${b.name} · 远端分歧`, conflict: true });
                             forks++;
                         }
                         remapped.set(b.id, forkId);
@@ -236,6 +243,50 @@ export class Store {
                     assert(JSON.stringify(existing) === JSON.stringify(n), 'Immutable node conflict');
                 else
                     this.put('node', n);
+            }
+            for (const l of graph.layouts || []) {
+                assert(typeof l.id === 'string' && l.assignments && typeof l.assignments === 'object' && !Array.isArray(l.assignments), 'Invalid organization layout.');
+                this.get('branch', l.rootId);
+                for (const [key, value] of Object.entries(l.assignments)) {
+                    assert(typeof key === 'string' && key.length < 200, 'Invalid chat reference.');
+                    if (value !== null) { assert(typeof value.id === 'string', 'Invalid node identity.'); text(value.name, 'Node name'); }
+                }
+                const existing = this.all('layout').find(x => x.id === l.id);
+                if (existing) assert(JSON.stringify(existing) === JSON.stringify(l), 'Immutable layout conflict.');
+                else this.put('layout', l);
+            }
+            const layoutAncestor = (older, newer) => {
+                if (!older) return true;
+                const seen = new Set(), pending = [newer];
+                while (pending.length) {
+                    const id = pending.pop();
+                    if (!id || seen.has(id)) continue;
+                    if (id === older) return true;
+                    seen.add(id);
+                    const layout = this.get('layout', id);
+                    pending.push(layout.parent, ...(layout.mergeParents || []));
+                }
+                return false;
+            };
+            const checkedLayouts = new Set();
+            const checkLayout = (l, visiting = new Set()) => {
+                if (checkedLayouts.has(l.id)) return;
+                assert(!visiting.has(l.id), 'Organization history contains a cycle.');
+                visiting.add(l.id);
+                for (const id of [l.parent, ...(l.mergeParents || [])].filter(Boolean)) {
+                    const parent = this.get('layout', id);
+                    assert(parent.rootId === l.rootId, 'Invalid organization history.');
+                    checkLayout(parent, visiting);
+                }
+                visiting.delete(l.id); checkedLayouts.add(l.id);
+            };
+            for (const l of graph.layouts || []) checkLayout(l);
+            for (const b of graph.branches) {
+                if (!b.layoutHead) continue;
+                assert(this.get('layout', b.layoutHead).rootId === b.id, 'Layout belongs to another tree.');
+                const current = this.get('branch', b.id);
+                if (layoutAncestor(current.layoutHead, b.layoutHead)) this.put('branch', { ...current, layoutHead: b.layoutHead });
+                else if (!layoutAncestor(b.layoutHead, current.layoutHead)) conflicts.push({ kind: 'layout', local: { id: b.id, name: b.name, layoutHead: current.layoutHead }, remote: { id: b.id, name: b.name, layoutHead: b.layoutHead } });
             }
             const nodeAncestor = (older, newer) => {
                 if (!older)

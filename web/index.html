@@ -5,33 +5,14 @@
   <title>Session Grove</title><link rel="stylesheet" href="/style.css">
 </head>
 <body>
-  <aside class="sidebar">
-    <a class="brand" href="/" aria-label="Session Grove"><span class="brand-mark">⑂</span><span>Session<br><strong>Grove</strong></span></a>
-    <div class="workspace-label"><span id="device-name"></span><span id="mode"></span></div>
-    <div class="section-label"><span data-t="Local Active"></span><span id="active-count">0</span></div>
-    <button class="side-action" id="local-home"><span>◉</span><span data-t="All local sessions"></span></button>
-    <nav id="active-list" class="active-list" aria-label="Local active sessions"></nav>
-    <div class="section-label cloud-section"><span data-t="Cloud projects"></span><button id="add-project" aria-label="New project">＋</button></div>
-    <div id="cloud-state" class="cloud-status"></div>
-    <nav id="projects" aria-label="Projects"></nav>
-    <div class="sidebar-bottom">
-      <button id="sync-settings">⇅ <span data-t="Sync & settings"></span></button>
-      <div class="language-control"><label for="language" data-t="Language">Language</label><select id="language"><option value="en">English</option><option value="zh">中文</option></select></div>
-      <small data-t="Local first. Yours to keep."></small>
-    </div>
-  </aside>
-  <main>
-    <header><div class="breadcrumb"><button id="breadcrumb-home"></button><span id="breadcrumb-tail"></span></div><div class="header-actions"><span id="capture-state" data-t="Saved locally"></span><button id="collect" class="quiet">↻ <span data-t="Refresh"></span></button><button id="review-active" class="button small-button"><span data-t="Active set"></span><span id="pending-count">0</span></button></div></header>
-    <div class="project-heading"><div><div class="eyebrow" id="scope-label"></div><h1 id="project-name"></h1><p id="project-description"></p></div><div class="heading-actions"><button id="move-item" class="button" hidden data-t="Move / group"></button><button id="new-branch" class="button primary">＋ <span data-t="New session"></span></button></div></div>
-    <div class="workspace-toolbar"><div class="view-tabs"><button id="collection-back" hidden data-t="Back to collection"></button><span id="view-label"></span></div><div class="filters"><label class="search"><span>⌕</span><input id="search" data-placeholder="Search sessions…" aria-label="Search sessions"></label><label class="archive-filter"><input id="show-archived" type="checkbox"><span data-t="Show archived"></span></label></div></div>
-    <div class="workspace">
-      <section id="graph-panel" aria-label="Project collection"><div id="graph-viewport"><div id="graph-world"></div></div><div class="graph-footer" id="graph-footer" hidden><span><i class="legend-dot"></i> <span data-t="Active"></span><span class="legend-line"></span><span data-t="Context inheritance"></span></span><div><button id="zoom-out" aria-label="Zoom out">−</button><span id="zoom-label">100%</span><button id="zoom-in" aria-label="Zoom in">＋</button><button id="zoom-reset" data-t="Fit"></button></div></div></section>
-      <aside id="inspector" aria-label="Logical node details" hidden></aside>
-    </div>
-    <footer><span id="project-stats"></span><span>SESSION GROVE <span class="version">0.2.0</span></span></footer>
-  </main>
-  <dialog id="dialog"><form id="dialog-form"><div class="dialog-heading"><h2 id="dialog-title"></h2><button type="button" id="dialog-close" aria-label="Close">×</button></div><div id="dialog-content"></div><p id="dialog-error" role="alert"></p><div id="dialog-actions"><button type="button" id="dialog-cancel" class="button" data-t="Cancel"></button><button type="submit" id="dialog-submit" class="button primary" data-t="Save"></button></div></form></dialog>
-  <div id="toast" role="status" aria-live="polite"></div>
-  <script type="module" src="/app.js"></script>
+  <header class="banner"><a class="brand" href="/">Session Grove</a><span id="demo-badge"></span><div class="banner-actions"><span id="cloud-status" role="status"></span><button id="upload"></button><button id="sync"></button><button id="collect"></button><button id="language" aria-label="Switch language"></button><button id="settings"></button></div></header>
+  <div id="layout" class="layout">
+    <aside class="navigation"><nav id="navigation" aria-label="Navigation"></nav></aside>
+    <aside id="session-rail" class="session-rail" hidden></aside>
+    <main id="main"><section id="list-page"><h1 id="list-title"></h1><div class="toolbar"><span id="list-count"></span><label class="search"><span id="search-icon"></span><input id="search" type="search"></label><div id="list-actions" class="actions"></div></div><div id="session-list"></div></section>
+    <section id="detail-page" hidden><div class="detail-heading"><button id="back"></button><h1 id="session-title"></h1><button id="source"></button></div><div class="toolbar"><span id="detail-count"></span><div id="detail-actions" class="actions"></div></div><div id="editor" class="editor"><section class="transcript-panel"><div class="panel-heading"><h2 id="transcripts-title"></h2><select id="branch-picker" aria-label="Session branch"></select></div><div id="transcripts" tabindex="0"></div></section><div id="ribbon-lane" aria-hidden="true"><svg id="ribbons"></svg></div><section class="graph-panel"><div class="panel-heading"><h2 id="graph-title"></h2><span id="graph-hint"></span></div><div id="graph-scroll"><div id="graph"></div></div></section></div></section></main>
+  </div>
+  <dialog id="dialog"><form id="dialog-form"><div class="dialog-heading"><h2 id="dialog-title"></h2><button type="button" id="dialog-close" aria-label="Close">×</button></div><div id="dialog-content"></div><p id="dialog-error" role="alert"></p><div class="dialog-actions"><button type="button" id="dialog-cancel"></button><button type="submit" id="dialog-submit" class="primary"></button></div></form></dialog>
+  <div id="toast" role="status" aria-live="polite"></div><script type="module" src="/app.js"></script>
 </body>
 </html>

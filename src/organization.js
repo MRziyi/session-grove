@@ -124,6 +124,27 @@ export function detectFamilies(store) {
     const signaturesById = new Map();
     const get = b => { if (!signaturesById.has(b.id))
         signaturesById.set(b.id, signatures(store.raw(b.head), b.agent)); return signaturesById.get(b.id); };
+    // Native forks can arrive after their parent was filed or organized. Keep
+    // the existing family root and its annotations when adopting such a fork.
+    for (const fresh of [...roots]) {
+        if (fresh.synthetic || fresh.layoutHead || fresh.nodeHead) continue;
+        const x = get(fresh);
+        const candidates = store.all('branch').filter(b => b.id !== fresh.id && b.agent === fresh.agent && !b.archived && (b.projectId || b.parentId || b.synthetic || b.layoutHead || b.nodeHead));
+        let best = null;
+        for (const candidate of candidates) {
+            if (rootOf(store, candidate.id).id === fresh.id) continue;
+            const y = get(candidate);
+            if (!x.p.cwd || x.p.cwd !== y.p.cwd) continue;
+            const linked = x.p.meta?.forked_from_id === y.p.nativeId || x.p.meta?.forkedFromId === y.p.nativeId;
+            const common = x.boundaries.filter(c => c.count >= (linked ? 2 : 4)).map(c => ({ a: c, b: y.boundaries.find(d => d.key === c.key && d.count === c.count) })).filter(c => c.b).at(-1);
+            if (common && (!best || common.a.count > best.common.a.count)) best = { candidate, common };
+        }
+        if (best) {
+            const { candidate, common } = best;
+            store.put('branch', metadata(fresh, { parentId: candidate.id, projectId: candidate.projectId, forkRevision: candidate.head, forkEnd: common.a.end, forkParentEnd: common.b.end, inferred: true }));
+            grouped++;
+        }
+    }
     for (let a = 0; a < roots.length; a++)
         for (let j = a + 1; j < roots.length; j++) {
             const left = store.get('branch', roots[a].id), right = store.get('branch', roots[j].id);
