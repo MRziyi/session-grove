@@ -74,7 +74,7 @@ export class Cloud {
             const response = await dav.request('GET', 'heads/' + name, undefined, c.heads[name]?.etag ? { 'If-None-Match': c.heads[name].etag } : {});
             if (response.status === 304) continue;
             assert(response.ok, `Cloud directory read failed (${response.status}).`);
-            const bytes = Buffer.from(await response.arrayBuffer()); assert(bytes.length < 16 * 1024 * 1024, 'Cloud directory too large.');
+            const bytes = await dav.readResponse(response, 16 * 1024 * 1024); assert(bytes.length < 16 * 1024 * 1024, 'Cloud directory too large.');
             const value = unseal(bytes, key);
             assert(value.schema === 4 && Array.isArray(value.projects), 'Unsupported cloud directory.');
             for (const p of value.projects) assert(typeof p.id === 'string' && typeof p.name === 'string' && /^[a-f0-9]{64}$/.test(p.index), 'Invalid cloud project.');
@@ -89,7 +89,7 @@ export class Cloud {
         const r = await dav.request('PROPFIND', 'commits/', undefined, { Depth: '1' });
         if (r.status === 404) return;
         assert(r.ok, 'Could not check legacy cloud history.');
-        const xml = await r.text(), names = [...xml.matchAll(/<(?:[\w-]+:)?href[^>]*>([^<]+)<\/(?:[\w-]+:)?href>/g)].map(m => decodeURIComponent(m[1].split('/').at(-1))).filter(n => /^[0-9T-]+-[a-f0-9-]+\.bin$/.test(n)).sort();
+        const xml = (await dav.readResponse(r, 16 * 1024 * 1024)).toString(), names = [...xml.matchAll(/<(?:[\w-]+:)?href[^>]*>([^<]+)<\/(?:[\w-]+:)?href>/g)].map(m => decodeURIComponent(m[1].split('/').at(-1))).filter(n => /^[0-9T-]+-[a-f0-9-]+\.bin$/.test(n)).sort();
         for (const name of names) {
             if (c.heads['legacy-' + name]) continue;
             const bytes = await dav.get('commits/' + name); assert(bytes, 'Missing legacy manifest.');
@@ -142,7 +142,9 @@ export class Cloud {
     async hydrate(treeId, passphrase) {
         const { dav, key } = await this.connect(passphrase), item = this.items().find(i => i.id === treeId);
         if (!item) return;
-        let c = this.cache(); const loaded = c.loaded[treeId] || [], wasDirty = this.dirtyIds().includes(treeId);
+        let c = this.cache();
+        if (item.versions.every(v => (c.loaded[treeId] || []).includes(v.ref))) return;
+        const loaded = c.loaded[treeId] || [], wasDirty = this.dirtyIds().includes(treeId);
         for (const version of item.versions) {
             if (loaded.includes(version.ref)) continue;
             const bytes = c.legacyGraphs[version.ref] ? null : await dav.get('trees/' + version.ref + '.bin');
@@ -161,8 +163,9 @@ export class Cloud {
         if (!wasDirty && !(this.store.local('conflicts') || []).length) c.ack[treeId] = digest(treeSnapshot(this.store, treeId));
         this.save(c);
     }
-    async publish(treeIds, passphrase) {
-        await this.catalog(passphrase);
+    async publish(treeIds, passphrase, { catalogFresh = false } = {}) {
+        if (!catalogFresh) await this.catalog(passphrase);
+        else await this.connect(passphrase);
         const { dav, key } = this.connection;
         const projectIds = new Set(treeIds.map(id => this.store.get('branch', id).projectId).filter(Boolean));
         const before = this.cache();

@@ -120,7 +120,7 @@ function signatures(raw, agent) {
 export function detectFamilies(store) {
     let grouped = 0;
     // Only automatically organize the unfiled inbox; user project structure is authoritative.
-    let roots = store.all('branch').filter(b => !b.projectId && !b.parentId && !b.archived);
+    let roots = store.all('branch').filter(b => !b.projectId && !b.parentId && !b.archived && !b.excluded);
     const signaturesById = new Map();
     const get = b => { if (!signaturesById.has(b.id))
         signaturesById.set(b.id, signatures(store.raw(b.head), b.agent)); return signaturesById.get(b.id); };
@@ -129,7 +129,7 @@ export function detectFamilies(store) {
     for (const fresh of [...roots]) {
         if (fresh.synthetic || fresh.layoutHead || fresh.nodeHead) continue;
         const x = get(fresh);
-        const candidates = store.all('branch').filter(b => b.id !== fresh.id && b.agent === fresh.agent && !b.archived && (b.projectId || b.parentId || b.synthetic || b.layoutHead || b.nodeHead));
+        const candidates = store.all('branch').filter(b => b.id !== fresh.id && b.agent === fresh.agent && !b.archived && !b.excluded && (b.projectId || b.parentId || b.synthetic || b.layoutHead || b.nodeHead));
         let best = null;
         for (const candidate of candidates) {
             if (rootOf(store, candidate.id).id === fresh.id) continue;

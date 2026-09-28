@@ -1,11 +1,11 @@
 # Session Grove interaction model
 
-Implemented in 0.5.0. This document supersedes earlier interface proposals. The product workflow is in the README; runtime and diagnosis details are in [operations.md](operations.md).
+Implemented in 0.6.0. This document supersedes earlier interface proposals. The product workflow is in the README; runtime and diagnosis details are in [operations.md](operations.md).
 
 ## Terms
 
 - **Session**: one native conversation that can be resumed.
-- **Project**: the single membership container. A tree belongs to one Project or is Ungrouped. Source devices and working paths are provenance, not hierarchy.
+- **Project**: the single membership container. A tree belongs to one Project or is Ungrouped. Source devices and working paths are provenance, not hierarchy. Native `name` is preferred over internal preview `title`. Agent-owned/guardian and zero-chat records are not managed as independent sessions.
 - **Tree**: related sessions with a shared prefix, folded into one list entry.
 - **Node**: a named consecutive stretch of chats. It can contain one or many messages.
 - **Pending**: recorded chats not yet assigned to a named Node; may appear in the middle or at a path's tail.
@@ -92,3 +92,16 @@ Historical whole-project archives are still readable/restorable. The normal UI d
 New completed native work extends Pending locally. Organizing, filing, renaming, Grove forks and archive/restore changes queue the affected filed tree for upload after a short debounce. Manual Sync can publish unfinished Pending. Automatic directory checks and lazy loading remain independent of native Active choices.
 
 All graph edits carry a version to reject stale selections. Native compatibility and cold-write guards remain in force. A failed action keeps its error visible with a reference code; Settings offers diagnostic export without conversation text or credentials.
+
+
+## Compaction choices and graph navigation
+
+Compaction switches are stored per path. The Transcript boundary and its graph-edge badge control the same choice. Enabling a boundary grays earlier Nodes superseded by that path's latest enabled compaction. Disabling it restores their normal appearance. This is a preview until Activate or Apply context succeeds; another path's choice is unchanged. Source history is retained in both cases. A later native auto-compaction is a new boundary, enabled by default.
+
+For a changed active path, Apply context uses the cold-write guard and backup journal. Adopted native data is preserved while a compatible local continuation is rebuilt. Unknown formats or unavailable pre-compaction history are rejected rather than guessed. See [context details](context-and-sync.md).
+
+The graph has a dotted canvas. Drag its background to pan, use the controls or Ctrl/Command-wheel to zoom, and Reset to return to the root. Only fully visible graph cards connect to visible Transcript spans. Compact path/language/project selectors share one keyboard-accessible popover style.
+
+Scope changes immediately clear the prior detail view. Request tickets reject late responses from a previously selected view, so an in-use path picker cannot reappear under Archived. Empty projections also clear all stale controls.
+
+Local Active requires an available working directory. A historical session whose directory no longer exists remains in the library; a filed path can still be activated into a different directory. No native file is deleted by discovery filtering.

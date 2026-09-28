@@ -1,6 +1,6 @@
 # Context visibility and incremental cloud sync
 
-Updated for 0.5.0. This document complements the [interaction model](interaction-model.md).
+Updated for 0.6.0. This document complements the [interaction model](interaction-model.md).
 
 ## Three different token quantities
 
@@ -55,7 +55,7 @@ References checked for this change:
 
 Management changes debounce for two seconds. Only affected trees are queued, so organizing one project does not automatically publish unrelated Pending in another. An uploaded tree is a coherent snapshot including any remaining Pending; the trigger policy controls **when**, not whether the transcript is complete. New native changes arriving later remain local until another organization action or manual Sync.
 
-The queue survives a service restart, retries after failures and remains pending while locked. Background checks run every 15 seconds while configured and unlocked, avoiding overlapping periodic requests. Opening a browser also requests a directory check when the service is unlocked.
+The queue survives a service restart, retries after failures and remains pending while locked. Background fallback checks run every 30 minutes while configured and unlocked; normal UI refreshes do not check the cloud. Explicit opens use freshness windows, and failed automatic operations back off. See [sync policy](sync-policy.md). Opening a browser also requests a directory check when the service is unlocked.
 
 Sync has a single explicit role: publish unsent filed changes (including Pending) and refresh the cloud directory. Its tooltip shows last publication/check times. It remains useful without local changes because the directory may have changed remotely. Cloud glyphs show cached, cloud-only, updated and local-unsent states. Language and connection settings are in Settings.
 
@@ -100,3 +100,16 @@ WebDAV interoperability is tested against an isolated protocol server and a live
 
 
 For local context configuration, warning acknowledgement and diagnostic logging, see [Operations](operations.md).
+
+
+## Selecting original or compacted context
+
+Each path has a synchronized `contextPolicy` listing disabled compaction event IDs. These IDs refer to immutable recorded events. The newest enabled event determines which earlier graph Nodes are superseded in the preview. Raw history and organization remain unchanged.
+
+Apply is explicit for active paths; inactive paths use the choice on Activate. For adopted native sessions, a changed context is materialized into a new native instance and the previous instance is parked under the normal journal/rollback mechanism. Capturing subsequent native updates reattaches the new suffix to the retained original revision, so toggling does not destroy earlier history.
+
+Recognized Codex paginated records are rebuilt as a fresh compatible legacy conversation containing message/tool/reasoning items and selected compaction records. Old world-state permission/environment settings are not replayed. Unknown rollout types fail closed. Enabled opaque payloads are preserved; they are not decoded. Both enabled and expanded variants passed real Codex read/resume checks in an isolated home without model requests. That validates native loading, not a generated answer's quality.
+
+For recognized Claude boundaries, expanding omits the boundary/summary and reconnects known parent UUIDs to the retained prefix. Real Claude-client verification is still outstanding. The UI cannot offer expansion when no recorded prefix is available.
+
+All writing devices should use 0.6.0+ to honor path context policies. A native agent may compact again during later work; the switch does not change its global auto-compaction configuration. Expanded-history token estimates can differ substantially from the previous compacted input usage and are checked again at activation.

@@ -1,3 +1,4 @@
+import { hash } from './util.js';
 // A local, deliberately approximate text metric. This is not a model tokenizer,
 // billing usage, or the size of the live post-compaction context window.
 export function estimateTokens(text) {
@@ -35,9 +36,13 @@ export function contextInfo(records, agent) {
             if (v.isCompactSummary && v.message) {
                 let event = compactions.at(-1);
                 if (!event) { event = { line, at: v.timestamp, retained: [], opaque: false, before: null }; compactions.push(event); }
-                event.summary = plain(v.message.content) || null;
+                event.summary = plain(v.message.content) || null; event.summaryLine = line;
             }
         }
+    }
+    for (const event of compactions) {
+        event.id = hash(JSON.stringify(records[event.line - 1].value));
+        event.canDisable = records.slice(0, event.line - 1).some(r => agent === 'codex' ? r.value?.type === 'response_item' && r.value.payload?.type === 'message' && r.value.payload.role === 'user' : r.value?.type === 'user' && !r.value.isCompactSummary && r.value.uuid);
     }
     for (const [i, event] of compactions.entries()) event.after = usage.find(u => u.line > event.line && (!compactions[i + 1] || u.line < compactions[i + 1].line))?.input ?? null;
     const last = usage.at(-1) || null, compact = compactions.at(-1);

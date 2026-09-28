@@ -22,12 +22,20 @@ export class WebDAV {
         const url = new URL(config.url);
         assert(url.protocol === 'https:' || (url.protocol === 'http:' && ['localhost', '127.0.0.1', '[::1]'].includes(url.hostname)), 'WebDAV 需要 HTTPS（本地测试可用 HTTP）');
         assert(!url.username && !url.password && !url.search && !url.hash, 'URL 不应包含凭据、查询或片段');
+        this.metrics = { requests: 0, methods: {}, bytesSent: 0, bytesReceived: 0, requestMs: 0 };
         this.base = url.href.replace(/\/$/, '') + '/session-grove-v1/';
         this.authorization = 'Basic ' + Buffer.from(`${config.username || ''}:${config.password || ''}`).toString('base64');
     }
     async request(method, key = '', body, extra = {}) {
         assert(!key.split('/').some(p => p === '..' || p === '.'), '无效远程路径');
+        const started = performance.now(); this.metrics.requests++; this.metrics.methods[method] = (this.metrics.methods[method] || 0) + 1; this.metrics.bytesSent += body ? Buffer.byteLength(body) : 0;
         const response = await fetch(this.base + key.split('/').map(encodeURIComponent).join('/'), { method, body, headers: { Authorization: this.authorization, ...extra }, redirect: 'error', signal: AbortSignal.timeout(30000) });
+        this.metrics.requestMs += performance.now() - started;
+        if ([429, 503].includes(response.status)) {
+            const retry = response.headers.get('retry-after'), seconds = retry && /^\d+$/.test(retry) ? Number(retry) : retry ? Math.max(0, (Date.parse(retry) - Date.now()) / 1000) : 60;
+            await response.body?.cancel();
+            throw Object.assign(new Error(`WebDAV temporarily unavailable (${response.status}).`), { code: 'WEBDAV_BACKOFF', retryAfterMs: Math.max(60000, Number.isFinite(seconds) ? seconds * 1000 : 60000) });
+        }
         return response;
     }
     async get(key) {
@@ -35,11 +43,14 @@ export class WebDAV {
         if (r.status === 404)
             return null;
         assert(r.ok, `WebDAV GET 失败 (${r.status})`);
+        return this.readResponse(r);
+    }
+    async readResponse(r, limit = 128 * 1024 * 1024) {
         const chunks = [];
         let size = 0;
         for await (const chunk of r.body) {
-            size += chunk.length;
-            assert(size <= 128 * 1024 * 1024, '远端对象超过大小限制');
+            size += chunk.length; this.metrics.bytesReceived += chunk.length;
+            assert(size <= limit, '远端对象超过大小限制');
             chunks.push(chunk);
         }
         return Buffer.concat(chunks);
@@ -58,7 +69,7 @@ export class WebDAV {
     async list(directory = 'commits/', pattern = /^[0-9T-]+-[a-f0-9-]+\.bin$/) {
         const r = await this.request('PROPFIND', directory, undefined, { Depth: '1' });
         assert(r.ok, `WebDAV 列出版本失败 (${r.status})`);
-        const xml = await r.text();
+        const xml = (await this.readResponse(r, 16 * 1024 * 1024)).toString();
         assert(xml.length < 16 * 1024 * 1024, '远端目录过大');
         const result = [];
         for (const m of xml.matchAll(/<(?:[\w-]+:)?href(?:\s[^>]*)?>([\s\S]*?)<\/(?:[\w-]+:)?href>/g)) {

@@ -14,9 +14,10 @@ Session Grove 是面向 **Claude Code 和 Codex** 的项目式会话管理工具
 
 Grove 给这些工作一个清楚的结构：
 
-- **按项目放在一起。** 一篇论文、一个代码仓库或一项研究，都可以有自己的 Project。共享前缀的会话折叠为一棵树。
+- **按项目放在一起。** 一篇论文、一个代码仓库或一项研究，都可以有自己的 Project。共享前缀的会话折叠为一棵树。内部子 agent 与空会话不会混入列表。
 - **为工作片段命名。** “建立背景”“完成引言”“测试另一种方法”，都可以成为逻辑 Node。新对话留在 Pending，等你有空再整理。
 - **对照阅读正文与分支图。** Transcript 与 Graph 并排展示，颜色与色带对应实际对话和逻辑节点。
+- **决定从哪种上下文继续。** 可以使用已记录的压缩结果，也可以恢复压缩前的记录。图会弱化被压缩替代的历史；选择在激活或显式应用上下文时生效。
 - **让原生列表只保留正在用的内容。** 激活需要的路径；归档完成的路径。公共前缀不会丢，仍在用的分支不会一起被隐藏。
 - **换一台 Mac 继续。** 项目通过你的 WebDAV 同步。先加载目录，打开具体树时再按需下载上下文。
 
@@ -30,6 +31,8 @@ Grove 管理会话资料库，**Codex 和 Claude Code 仍负责实际对话**。
 4. 选中图节点可直接 **Rename**。给 Pending 命名后，它就成为正式节点。节点结束于完整轮次时才出现 **Fork**。
 5. 选中 session 的末端，才能激活、停用或归档这条路径。归档区会保留它的完整前缀；在用图里只保留还在用的路径。
 6. 继续在原生客户端对话，新增内容会进入 Pending。整理节点后自动上传；暂时不想整理，也可以点 **Sync** 把剩余 Pending 一起同步。
+
+大图支持拖拽平移、缩放和复位，Sankey 色带只连接视口内的内容。
 
 按钮只在当前选择适用时出现。语言切换、WebDAV 配置、操作帮助和诊断记录统一放在 **Settings**。
 
@@ -57,13 +60,13 @@ pnpm start
 
 WebDAV 可选，不配置也能在本机整理。配置并解锁后，归入项目、命名节点等整理操作自动触发上传；原生新增对话只先收纳到本机，不会每条回复都上传。
 
-**Sync** 会上传未同步的项目变更（包括未整理的 Pending），并检查云端目录。悬停可查看最近上传和检查时间。不同设备的 Active 选择彼此独立。
+**Sync** 会上传未同步的项目变更（包括未整理的 Pending），并检查云端目录。悬停可查看最近上传和检查时间。不同设备的 Active 选择彼此独立。云端检查主要跟随操作，空闲时每 30 分钟兜底；普通页面刷新不请求 WebDAV。
 
 原始会话记录会保留。节点编辑只调整整理关系，不改写对话内容。云端数据在上传前加密；默认只在内存中保留加密口令，重启后重新输入；如需无人值守启动，可明确指定本机私有口令文件，详见部署说明。
 
 ## 当前范围
 
-**0.5.0，实验性版本，优先 macOS。** 支持同一种 Agent 内分叉和跨设备续接，暂不进行 Claude 与 Codex 之间的上下文转换。
+**0.6.0，实验性版本，优先 macOS。** 支持同一种 Agent 内分叉和跨设备续接，暂不进行 Claude 与 Codex 之间的上下文转换。
 
 修改原生激活状态目前需要先关闭运行中的 Agent。Codex 已用真实可执行程序验证读取与恢复；Claude 文件适配已有测试，真实客户端验证仍待完成。WebDAV 已通过隔离协议测试与真实 Teracloud 往返测试；其他供应商可能存在差异。
 
@@ -77,7 +80,7 @@ Token 数是估算值。激活前会参考原生统计和本机可读取的上�
 pnpm test
 ```
 
-[部署、数据位置和排错](docs/operations.md) · [交互规则](docs/interaction-model.md) · [上下文与同步细节](docs/context-and-sync.md) · [技术选择](docs/technology.md)
+[部署、数据位置和排错](docs/operations.md) · [交互规则](docs/interaction-model.md) · [上下文与同步细节](docs/context-and-sync.md) · [同步触发与开销实测](docs/sync-policy.md) · [技术选择](docs/technology.md)
 
 设计参考：[codex-session-sync](https://github.com/shonngithub/codex-session-sync)、[claude-sync](https://github.com/tawanorg/claude-sync)、[Chronicle](https://github.com/geekmuse/chronicle)。
 

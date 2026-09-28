@@ -33,7 +33,7 @@ Interrupted native writes can be recovered from Settings when a recovery journal
 
 ## Compatibility
 
-- Codex legacy JSONL and `state_5.sqlite` are supported; unknown required schema fields fail closed.
+- Codex legacy JSONL and `state_5.sqlite` are supported. Known paginated histories are rebuilt into fresh local conversation logs on activation; old machine-specific world/turn settings are not replayed. Unknown required schema fields and history records fail closed.
 - Codex 0.155.0-alpha.16.3 has been tested with real App Server list/read/resume/deactivate/reactivate calls, without sending model turns.
 - Claude project JSONL, encoded paths and legacy indexes are covered by file-adapter tests; a real Claude client still needs validation.
 - Native activation writes require the agent processes to be closed. Opening and organizing Grove history does not.
@@ -98,4 +98,7 @@ The setup can use an additional dedicated directory below the provider's DAV roo
 
 The 0.5.0 live Teracloud check passed all these stages. No personal transcripts were uploaded as test fixtures. Raw-object transfers use up to four concurrent requests and drain in-flight requests before reporting a failure.
 
-Native discovery prefers the Codex database's current rollout path and title: duplicate historical files with the same native identity do not become extra active instances. Very long auto-titles are shortened only for Grove's display label; their source records are unchanged. Native archive flags are read even when a file is not in an archive-named folder.
+Native discovery prefers the Codex database's current rollout path and title: duplicate historical files with the same native identity do not become extra active instances. User-facing `name` takes precedence over internal preview `title`; source metadata excludes subagents/guardians and zero-chat records. Previously imported helpers are hidden and excluded from native operations without deleting source data. Native archive flags are read even when a file is not in an archive-named folder.
+
+
+0.6.0 adds per-path compaction policy, live-provider request/CPU measurements, a thirty-minute fallback and throttling backoff. See [sync-policy.md](sync-policy.md). Diagnostics report successful body-transfer byte counts and HTTP request counts without remote URLs or credentials.

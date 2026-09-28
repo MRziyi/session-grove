@@ -8,7 +8,7 @@ import assert from 'node:assert/strict';
 import { once } from 'node:events';
 import { Store } from '../src/store.js';
 import { Native } from '../src/native.js';
-import { codexSample } from '../src/demo.js';
+import { codexSample, codexTurn } from '../src/demo.js';
 const executable = process.argv[2] || 'codex';
 const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'grove-codex-smoke-')));
 const nativeHome = path.join(root, 'native'), cwd = path.join(root, 'project');
@@ -85,7 +85,25 @@ try {
     const restored = await client.request('thread/read', { threadId: instance.nativeId, includeTurns: true });
     assert.ok(JSON.stringify(restored).includes('grove-42'));
     await client.close();
-    const report = { version: execFileSync(executable, ['--version'], { encoding: 'utf8' }).trim(), list: true, read: true, resume: true, deactivate: true, reactivate: true, modelTurnsSubmitted: 0 };
+    const payload = codexSample(cwd, [['Original context marker', 'Original answer']]).trim().split('\n').map(JSON.parse);
+    payload[0].payload.history_mode = 'paginated';
+    payload.push({ type: 'world_state', payload: { full: true, state: { permissions: {} } } }, { type: 'compacted', payload: { message: 'Summary marker', replacement_history: [{ type: 'message', role: 'user', content: [{ type: 'input_text', text: 'Summary marker' }] }] } }, ...codexTurn('After compaction marker', 'Done'));
+    const compact = store.branch(p.id, 'Compaction verification', 'codex', payload.map(v => JSON.stringify(v) + '\n').join(''));
+    for (const enabled of [true, false, true]) {
+        const current = store.get('branch', compact.id), event = store.parsed(current.head, 'codex').context.compactions[0];
+        store.setCompaction(compact.id, { eventId: event.id, enabled, head: current.head });
+        native.setActive(compact.id, cwd, true); native.apply([compact.id]);
+        const live = store.instances().find(i => i.branchId === compact.id && i.applied);
+        const output = fs.readFileSync(live.file, 'utf8');
+        assert.equal(output.includes('"type":"compacted"'), enabled);
+        assert.ok(output.includes('Original context marker')); assert.ok(!output.includes('"type":"world_state"'));
+        client = connect(); await client.init();
+        const readContext = await client.request('thread/read', { threadId: live.nativeId, includeTurns: true });
+        assert.ok(JSON.stringify(readContext).includes('After compaction marker'));
+        const resumedContext = await client.request('thread/resume', { threadId: live.nativeId, cwd, approvalPolicy: 'on-request', sandbox: 'read-only' });
+        assert.equal(resumedContext.thread.id, live.nativeId); await client.close(); native.collect();
+    }
+    const report = { version: execFileSync(executable, ['--version'], { encoding: 'utf8' }).trim(), list: true, read: true, resume: true, deactivate: true, reactivate: true, compactionEnabledReadResume: true, compactionDisabledReadResume: true, modelTurnsSubmitted: 0 };
     fs.mkdirSync('test-results', { recursive: true });
     fs.writeFileSync('test-results/codex-compatibility.json', JSON.stringify(report, null, 2));
     console.log(JSON.stringify(report));

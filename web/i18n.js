@@ -1,5 +1,14 @@
 let language = localStorage.getItem('grove-language') === 'zh' ? 'zh' : 'en';
 const dictionary = {
+    'Open the active continuation from your agent’s session list.': '请从原生 Agent 的会话列表打开已激活的续接记录。',
+    'The native agent may compact again during later work.': '后续对话中，原生 Agent 仍可能再次自动压缩。',
+    'Reset view': '复位', 'Zoom in': '放大', 'Zoom out': '缩小', 'Compact': '压缩', 'Use compaction': '使用压缩', 'On': '开', 'Off': '关', 'Apply context': '应用上下文',
+    'Choose compacted context or recorded history for this path.': '为当前路径选择压缩上下文或完整记录。', 'Original pre-compaction history is unavailable.': '没有可恢复的压缩前历史。',
+    'The view changed. Please open the session again.': '当前视图已改变，请重新打开会话。',
+    'Cloud sync follows organization changes and explicit opens. Idle directory checks run every 30 minutes; Pending alone stays local.': '整理操作和主动打开内容触发云端更新。空闲时每 30 分钟检查目录；仅新增 Pending 不上传。',
+    'Compaction switches belong to the selected path. Changes apply on Activate or Apply context; original history is kept.': '压缩开关按当前路径保存，通过激活或“应用上下文”生效；原始历史一直保留。',
+    'Paginated history is resumed through a rebuilt local copy.': '分页历史将通过重建的本机续接副本恢复。',
+
     'The compacted context size is not recorded. The native agent will manage its context window.': '记录中没有压缩后的可靠容量；原生 Agent 会继续管理上下文。',
     'Rename': '重命名', 'Rename node': '命名节点', 'Save node': '保存节点', 'Cloud sync': '云端同步', 'Connect': '连接', 'Check & activate': '检查并激活', 'Activate anyway': '仍然激活',
     '{count} compactions': '{count} 次压缩', 'Select a start, then an end.': '点击起点，再点击终点；中间对话自动选中。', 'Start: {number} · select the end': '起点：第 {number} 条 · 请选择终点', 'Selected chats {start}–{end}': '已选择第 {start}–{end} 条对话',
@@ -105,7 +114,7 @@ const dictionary = {
 };
 export function t(key, values = {}) {
     let result = language === 'zh' ? dictionary[key] || key : key;
-    if (language === 'en' && values.count === 1) result = result.replace(/\bchats\b/g, 'chat').replace(/\bbranches\b/g, 'branch').replace(/\bsessions\b/g, 'session');
+    if (language === 'en' && values.count === 1) result = result.replace(/\bchats\b/g, 'chat').replace(/\bbranches\b/g, 'branch').replace(/\bsessions\b/g, 'session').replace(/\bcompactions\b/g, 'compaction');
     for (const [name, value] of Object.entries(values))
         result = result.replaceAll(`{${name}}`, String(value));
     return result;

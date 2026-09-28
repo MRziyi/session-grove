@@ -1,4 +1,7 @@
 import fs from 'node:fs';
+import { policyHash } from './context-policy.js';
+import { metadata } from './organization.js';
+import { sessionExclusion } from './session-kind.js';
 import path from 'node:path';
 import os from 'node:os';
 import { execFileSync } from 'node:child_process';
@@ -37,17 +40,23 @@ export class Native {
     discover() {
         const found = [], errors = [];
         const instances = this.store.instances();
-        this.catalog.clear();
+        this.catalog.clear(); this.observations = new Map();
         for (const agent of ['codex', 'claude']) {
             const root = this.roots[agent];
-            const titles = new Map(), archivedIds = new Set(), canonicalPaths = new Map();
+            const titles = new Map(), archivedIds = new Set(), canonicalPaths = new Map(), provenance = new Map(), indexedFiles = new Map();
             if (agent === 'codex' && fs.existsSync(path.join(root, 'state_5.sqlite'))) {
                 let db;
                 try {
                     db = new DatabaseSync(path.join(root, 'state_5.sqlite'), { readOnly: true });
                     const columns = db.prepare('PRAGMA table_info(threads)').all().map(c => c.name);
                     if (columns.includes('id') && columns.includes('title') && columns.includes('archived')) {
-                        for (const row of db.prepare('SELECT id,title,archived' + (columns.includes('rollout_path') ? ',rollout_path' : '') + ' FROM threads').all()) { if (row.title) titles.set(row.id, row.title); if (row.archived) archivedIds.add(row.id); if (row.rollout_path && path.isAbsolute(row.rollout_path)) canonicalPaths.set(row.id, path.resolve(row.rollout_path)); }
+                        const optional = ['rollout_path', 'name', 'source', 'thread_source', 'cwd'].filter(c => columns.includes(c));
+                        for (const row of db.prepare('SELECT id,title,archived' + optional.map(c => ',' + c).join('') + ' FROM threads').all()) {
+                            if (row.name || row.title) titles.set(row.id, row.name || row.title);
+                            provenance.set(row.id, { source: row.source, threadSource: row.thread_source });
+                            if (row.archived) archivedIds.add(row.id);
+                            if (row.rollout_path && path.isAbsolute(row.rollout_path)) { canonicalPaths.set(row.id, path.resolve(row.rollout_path)); indexedFiles.set(path.resolve(row.rollout_path), row); }
+                        }
                     }
                 } catch { errors.push({ message: 'Could not read the native Codex index.' }); }
                 finally { db?.close(); }
@@ -68,14 +77,21 @@ export class Native {
                     if (agent === 'claude' && (file.includes('/subagents/') || path.basename(file).startsWith('agent-')))
                         continue;
                     try {
+                        const indexed = indexedFiles.get(path.resolve(file));
+                        const internal = indexed && sessionExclusion({ agent, source: indexed.source, threadSource: indexed.thread_source });
+                        if (internal) { this.observations.set(file, { nativeId: indexed.id, excluded: internal }); continue; }
                         const stat = fs.statSync(file), stamp = `${stat.ino}:${stat.size}:${stat.mtimeMs}:${stat.ctimeMs}`;
                         let p = this.scanCache.get(file)?.stamp === stamp ? this.scanCache.get(file).summary : null;
-                        if (!p) { const full = parse(this.read(file), agent); p = { nativeId: full.nativeId, cwd: full.cwd, title: full.records.filter(r => r.value?.type === 'custom-title').at(-1)?.value?.customTitle, firstUser: full.messages.find(m => m.role === 'user')?.text.slice(0, 100), count: full.messages.length, warnings: full.warnings }; this.scanCache.set(file, { stamp, summary: p }); }
+                        if (!p) { const full = parse(this.read(file), agent); p = { nativeId: full.nativeId, cwd: full.cwd, title: full.records.filter(r => r.value?.type === 'custom-title').at(-1)?.value?.customTitle, firstUser: full.messages.find(m => m.role === 'user')?.text.slice(0, 100), count: full.messages.filter(m => m.role !== 'tool').length, source: full.meta?.source, sidechain: full.records.find(r => ['user', 'assistant'].includes(r.value?.type))?.value?.isSidechain === true, warnings: full.warnings }; this.scanCache.set(file, { stamp, summary: p }); }
                         if (!p.nativeId)
                             continue;
                         if (canonicalPaths.has(p.nativeId) && canonicalPaths.get(p.nativeId) !== path.resolve(file)) continue;
+                        const info = provenance.get(p.nativeId) || {};
+                        const excluded = sessionExclusion({ agent, source: info.source, threadSource: info.threadSource }) || sessionExclusion({ agent, source: p.source, sidechain: p.sidechain, chats: p.count });
                         const nativeTitle = titles.get(p.nativeId) || p.title;
-                        const item = { key: hash(file), agent, nativeId: p.nativeId, cwd: p.cwd || '', title: nativeTitle || p.firstUser || 'Untitled session', messages: p.count, updatedAt: stat.mtime.toISOString(), managed: instances.some(i => i.file === file), warnings: p.warnings, archived: dir === 'archived_sessions' || archivedIds.has(p.nativeId) };
+                        const item = { key: hash(file), agent, nativeId: p.nativeId, cwd: indexed?.cwd || p.cwd || '', cwdAvailable: !(indexed?.cwd || p.cwd) || fs.existsSync(indexed?.cwd || p.cwd), title: nativeTitle || p.firstUser || 'Untitled session', messages: p.count, updatedAt: stat.mtime.toISOString(), managed: instances.some(i => i.file === file), warnings: p.warnings, excluded, source: info.source ?? p.source, archived: dir === 'archived_sessions' || archivedIds.has(p.nativeId) };
+                        this.observations.set(file, item);
+                        if (excluded) continue;
                         this.catalog.set(item.key, { ...item, file });
                         found.push(item);
                     }
@@ -96,19 +112,36 @@ export class Native {
         return this.store.transaction(() => {
             const sidecarDir = item.agent === 'claude' ? path.join(path.dirname(item.file), item.nativeId) : null;
             const requiresAuxiliary = !!(sidecarDir && fs.existsSync(sidecarDir) && fs.readdirSync(sidecarDir).length);
-            const displayTitle = String(name || item.title).trim().slice(0, 200) || 'Untitled session';
+            const displayTitle = String(name || item.title).trim() || 'Untitled session';
             const b = this.store.branch(projectId, displayTitle, item.agent, raw, { cwd: item.cwd, agent: item.agent, nativeId: item.nativeId, client: 'unknown', operation: 'import', requiresAuxiliary });
             b.contentUpdatedAt = item.updatedAt;
             b.archived = !!item.archived;
             this.store.put('branch', b);
             const instances = this.store.instances();
-            instances.push({ id: id(), branchId: b.id, agent: b.agent, root: this.roots[b.agent], nativeId: item.nativeId, file: item.file, cwd: item.cwd, desired: observe && !item.archived, applied: !item.archived, baseRevision: b.head, baseline: null, observedHash: hash(raw), adopted: true, title: b.name, requiresAuxiliary });
+            instances.push({ id: id(), branchId: b.id, agent: b.agent, root: this.roots[b.agent], nativeId: item.nativeId, file: item.file, cwd: item.cwd, cwdAvailable: item.cwdAvailable, desired: observe && !item.archived, applied: !item.archived, baseRevision: b.head, baseline: null, observedHash: hash(raw), adopted: true, title: b.name, excluded: false, requiresAuxiliary });
             this.store.local('instances', instances);
             return b;
         });
     }
     refreshLocal() {
         const collected = this.collect(), found = this.discover();
+        // Reconcile previously imported rows without deleting history, rebuilding
+        // the user's library, or changing any native availability.
+        const instances = this.store.instances();
+        let metadataChanged = false;
+        for (const instance of instances) {
+            const observed = this.observations.get(instance.file); if (!observed) continue;
+            const branch = this.store.get('branch', instance.branchId), patch = {};
+            if ((branch.excluded || null) !== observed.excluded) { patch.excluded = observed.excluded; metadataChanged = true; }
+            if (observed.cwdAvailable !== undefined && instance.cwdAvailable !== observed.cwdAvailable) { instance.cwdAvailable = observed.cwdAvailable; metadataChanged = true; }
+            if (instance.excluded !== !!observed.excluded) { instance.excluded = !!observed.excluded; metadataChanged = true; }
+            if (!observed.excluded && observed.title && branch.name !== observed.title && (branch.name === instance.title || branch.nativeObservedTitle === branch.name)) {
+                patch.name = observed.title; patch.nativeObservedTitle = observed.title;
+                instance.title = observed.title; metadataChanged = true;
+            }
+            if (Object.keys(patch).length) this.store.put('branch', metadata(branch, patch));
+        }
+        this.store.local('instances', instances);
         let discovered = 0;
         for (const candidate of found.sessions) {
             if (candidate.managed)
@@ -121,11 +154,12 @@ export class Native {
                 collected.errors.push({ message: e.message });
             }
         }
-        const families = discovered || collected.updates.length ? this.store.detectFamilies() : { grouped: 0 };
+        const families = discovered || collected.updates.length || metadataChanged ? this.store.detectFamilies() : { grouped: 0 };
         return { ...collected, discovered, grouped: families.grouped, errors: [...collected.errors, ...found.errors] };
     }
     setActive(branchId, cwd, desired) {
         const b = this.store.get('branch', branchId);
+        assert(!b.excluded, 'Agent-owned or empty records are not managed as sessions.');
         assert(!desired || !b.archived, '请先恢复归档分支');
         if (desired) {
             assert(typeof cwd === 'string' && path.isAbsolute(cwd) && fs.existsSync(cwd) && fs.statSync(cwd).isDirectory(), '目标必须是本机存在的绝对工程目录');
@@ -137,7 +171,8 @@ export class Native {
                 i.desired = false;
         }
         else {
-            let instance = instances.find(i => i.branchId === branchId && i.cwd === cwd && i.root === this.roots[b.agent]);
+            let instance = [...instances].reverse().find(i => i.branchId === branchId && i.cwd === cwd && i.root === this.roots[b.agent]);
+            if (instance?.adopted && (this.store.parsed(b.head, b.agent).meta?.history_mode === 'paginated' || b.contextPolicy && (instance.contextPolicyHash || policyHash(null)) !== policyHash(b.contextPolicy))) { instance.desired = false; instance = null; }
             if (!instance) {
                 instance = { id: id(), branchId, agent: b.agent, root: this.roots[b.agent], nativeId: id(), cwd, desired: true, applied: false, file: null, baseRevision: b.head, baseline: '', adopted: false };
                 instances.push(instance);
@@ -151,6 +186,7 @@ export class Native {
         const instances = this.store.instances();
         const results = [], errors = [];
         for (const i of instances) {
+            if (i.excluded && this.store.get('branch', i.branchId).excluded !== 'empty') continue;
             if (!i.file || !fs.existsSync(i.file)) {
                 if (i.applied)
                     i.missing = true;
@@ -201,8 +237,9 @@ export class Native {
     }
     plan() {
         const operations = this.store.instances().flatMap(i => {
+            if (i.excluded) return [];
             const b = this.store.get('branch', i.branchId);
-            if (i.desired && (!i.applied || i.baseRevision !== b.head || i.missing || i.title !== b.name))
+            if (i.desired && (!i.applied || i.baseRevision !== b.head || i.missing || i.title !== b.name || (i.contextPolicyHash || policyHash(null)) !== policyHash(b.contextPolicy)))
                 return [{ instanceId: i.id, branchId: b.id, name: b.name, agent: i.agent, action: 'activate', cwd: i.cwd, file: this.destination(i) }];
             if (!i.desired && i.applied)
                 return [{ instanceId: i.id, branchId: b.id, name: b.name, agent: i.agent, action: 'deactivate', cwd: i.cwd, file: i.file }];
@@ -260,7 +297,7 @@ export class Native {
                     const raw = this.store.raw(b.head), parsed = parse(raw, b.agent);
                     assert(!this.store.detail(b.id).lineage.some(r => r.source.requiresAuxiliary), '此分支继承了含伴随目录的会话，当前版本尚不支持完整物化');
                     assert(!parsed.warnings.some(w => w.includes('外部附件')), '此会话包含外部附件引用。当前版本可浏览和分支，完整附件迁移尚未支持。');
-                    const output = renderNative(raw, b.agent, i.nativeId, i.cwd, b.name);
+                    const output = renderNative(raw, b.agent, i.nativeId, i.cwd, b.name, b.contextPolicy || (b.agent === 'codex' && parsed.meta?.history_mode === 'paginated' ? { disabled: [] } : null));
                     const dest = safePath(root, op.file);
                     assert(!fs.existsSync(dest) || dest === i.file, '目标记录已存在，拒绝覆盖');
                     backup(dest);
@@ -275,7 +312,7 @@ export class Native {
                     i.baseline = output;
                     i.observedHash = hash(output);
                     i.missing = false;
-                    i.title = b.name;
+                    i.title = b.name; i.contextPolicyHash = policyHash(b.contextPolicy);
                     if (i.agent === 'codex')
                         this.updateCodexDb(dbs.get(root), i, b, parsed);
                 }

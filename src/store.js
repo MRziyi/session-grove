@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import { validPolicy } from './context-policy.js';
 import { collections, listing, treeGraph, organize, moveItems } from './workspace.js';
 import path from 'node:path';
 import os from 'node:os';
@@ -93,18 +94,20 @@ export class Store {
         if (projectId)
             this.get('project', projectId);
         assert(['codex', 'claude'].includes(agent), '未知 Agent');
-        const branchName = text(name);
+        const branchName = text(name, 'Session name', source.operation === 'import' ? 10000 : 200);
         const rev = this.revision(raw ?? blank(agent, source.cwd || ''), null, { agent, ...source });
         return this.put('branch', { id: id(), projectId: projectId || null, name: branchName, agent, head: rev.id, nodeHead: null, parentId: null, forkRevision: null, forkEnd: 0, archived: false, group: '', createdAt: now(), updatedAt: now(), contentUpdatedAt: now(), logicalVersion: 1, metaVersion: id(), metaAncestors: [] });
     }
     fork(branchId, { name, end, revisionId }) {
         const parent = this.get('branch', branchId), rev = this.get('revision', revisionId || parent.head);
+        assert(!parent.excluded && !parent.archived && !(parent.projectId && this.get('project', parent.projectId).archived), 'Restore this session before organizing.');
         assert(this.ancestor(rev.id, parent.head), '检查点不属于该分支历史');
         const parsed = parse(this.raw(rev.id), parent.agent);
         end = Number(end);
         assert(parsed.checkpoints.some(c => c.end === end), '只能从已完成的轮次创建分支');
+        const contextPolicy = parent.contextPolicy ? { disabled: parent.contextPolicy.disabled.filter(id => parsed.context.compactions.some(e => e.id === id && e.line <= end)) } : undefined;
         const revision = this.revision(this.raw(rev.id, end), rev.id, { agent: parent.agent, operation: 'fork' });
-        return this.put('branch', { ...parent, id: id(), name: text(name), head: revision.id, nodeHead: null, layoutHead: null, chatIdentity: null, parentId: parent.id, forkRevision: rev.id, forkEnd: end, forkParentEnd: end, archived: false, synthetic: false, contentUpdatedAt: now(), createdAt: now(), updatedAt: now(), metaVersion: id(), metaAncestors: [] });
+        return this.put('branch', { ...parent, contextPolicy, id: id(), name: text(name), head: revision.id, nodeHead: null, layoutHead: null, chatIdentity: null, parentId: parent.id, forkRevision: rev.id, forkEnd: end, forkParentEnd: end, archived: false, synthetic: false, contentUpdatedAt: now(), createdAt: now(), updatedAt: now(), metaVersion: id(), metaAncestors: [] });
     }
     edit(branchId, patch) {
         const b = this.get('branch', branchId), previous = structuredClone(b);
@@ -112,6 +115,7 @@ export class Store {
             b.name = text(patch.name);
         if ('group' in patch)
             b.group = String(patch.group).slice(0, 100);
+        if ('contextPolicy' in patch) { assert(validPolicy(patch.contextPolicy), 'Invalid context policy.'); b.contextPolicy = patch.contextPolicy; }
         if ('archived' in patch)
             b.archived = !!patch.archived;
         b.updatedAt = now();
@@ -161,6 +165,17 @@ export class Store {
             p.warnings.push('来源含尚未收纳的伴随目录；当前版本禁止激活或移除原生实例');
         return { ...b, ...pendingDetail(this, b, p), messages: p.messages, checkpoints: p.checkpoints, warnings: p.warnings, cwd: p.cwd, records: p.records.length, lineage, instances: this.instances().filter(i => i.branchId === b.id).map(({ baseline, observedHash, ...i }) => i) };
     }
+    setCompaction(branchId, { eventId, enabled, head }) {
+        const b = this.get('branch', branchId); assert(!b.archived && !b.excluded && !(b.projectId && this.get('project', b.projectId).archived), 'Restore this session before organizing.');
+        assert(b.head === head, 'Conversation changed. Refresh before organizing.', 409);
+        assert(typeof enabled === 'boolean', 'Choose whether compaction is enabled.');
+        const event = this.parsed(b.head, b.agent).context.compactions.find(e => e.id === eventId);
+        assert(event && (enabled || event.canDisable), 'Original pre-compaction history is unavailable.');
+        const disabled = new Set(b.contextPolicy?.disabled || []); enabled ? disabled.delete(eventId) : disabled.add(eventId);
+        const contextPolicy = { disabled: [...disabled].sort() };
+        if (JSON.stringify(b.contextPolicy || { disabled: [] }) !== JSON.stringify(contextPolicy)) this.edit(b.id, { contextPolicy });
+        return contextPolicy;
+    }
     commitPending(branchId, options) { return commitPending(this, branchId, options); }
     moveTree(branchId, projectId, group) { return moveTree(this, branchId, projectId, group); }
     forest(scope) { return forest(this, scope); }
@@ -172,15 +187,18 @@ export class Store {
     moveItems(options) { return moveItems(this, options); }
     snapshot() { return this.memo('snapshot', () => this.buildSnapshot()); }
     buildSnapshot() {
-        const summaries = Object.fromEntries(this.all('branch').map(b => {
+        const summaries = Object.fromEntries(this.all('branch').filter(b => !b.excluded).map(b => {
             const { pending, nodes } = pendingDetail(this, b, this.parsed(b.head, b.agent));
             return [b.id, { pendingCount: pending.count, pendingStart: pending.start, pendingEnd: pending.end, nodeIds: nodes.map(n => n.id) }];
         }));
-        return { ...this.collections(), device: this.device, projects: this.all('project'), branches: this.all('branch'), nodes: this.all('node'), summaries, localItems: this.forest('local'), projectItems: Object.fromEntries(this.all('project').map(p => [p.id, this.forest(p.id)])), instances: this.instances().map(({ baseline, observedHash, ...i }) => i), stats: this.db.prepare('SELECT COUNT(*) AS objects, COALESCE(SUM(length(body)),0) AS bytes FROM objects').get(), conflicts: this.local('conflicts') || [] };
+        return { ...this.collections(), device: this.device, projects: this.all('project'), branches: this.all('branch').filter(b => !b.excluded), nodes: this.all('node'), summaries, localItems: this.forest('local'), projectItems: Object.fromEntries(this.all('project').map(p => [p.id, this.forest(p.id)])), instances: this.instances().filter(i => !i.excluded).map(({ baseline, observedHash, ...i }) => i), stats: this.db.prepare('SELECT COUNT(*) AS objects, COALESCE(SUM(length(body)),0) AS bytes FROM objects').get(), conflicts: this.local('conflicts') || [] };
     }
     exportGraph() { return this.memo('exportGraph', () => this.buildExportGraph()); }
     buildExportGraph() {
-        const branches = this.all('branch').filter(b => b.projectId), branchIds = new Set(branches.map(b => b.id));
+        const all = this.all('branch'), wanted = new Set(all.filter(b => b.projectId && !b.excluded).map(b => b.id));
+        // Preserve frozen ancestry dependencies, while excluding unrelated helpers.
+        for (const id of [...wanted]) { let b = this.get('branch', id); while (b.parentId) { wanted.add(b.parentId); b = this.get('branch', b.parentId); } }
+        const branches = all.filter(b => wanted.has(b.id)), branchIds = new Set(branches.map(b => b.id));
         const nodes = this.all('node').filter(n => branchIds.has(n.branchId)), revisions = new Map();
         const visit = revisionId => { if (!revisionId || revisions.has(revisionId))
             return; const r = this.get('revision', revisionId); revisions.set(r.id, r); visit(r.parent); };
@@ -236,7 +254,7 @@ export class Store {
             let forks = 0;
             const remapped = new Map();
             for (const b of graph.branches) {
-                text(b.name);
+                text(b.name, 'Session name', 10000); assert(validPolicy(b.contextPolicy), 'Invalid context policy.');
                 assert(['codex', 'claude'].includes(b.agent), '无效 Agent');
                 this.get('project', b.projectId);
                 this.get('revision', b.head);
@@ -258,9 +276,9 @@ export class Store {
                         remapped.set(b.id, forkId);
                     }
                 }
-                if (old.name !== b.name || old.archived !== b.archived || old.group !== b.group || old.projectId !== b.projectId) {
+                if (old.name !== b.name || old.archived !== b.archived || old.group !== b.group || old.projectId !== b.projectId || JSON.stringify(old.contextPolicy || {}) !== JSON.stringify(b.contextPolicy || {})) {
                     if (b.metaAncestors?.includes(old.metaVersion))
-                        this.put('branch', { ...this.get('branch', b.id), name: b.name, archived: b.archived, group: b.group, projectId: b.projectId, metaVersion: b.metaVersion, metaAncestors: b.metaAncestors });
+                        this.put('branch', { ...this.get('branch', b.id), name: b.name, archived: b.archived, group: b.group, projectId: b.projectId, contextPolicy: b.contextPolicy, metaVersion: b.metaVersion, metaAncestors: b.metaAncestors });
                     else if (!old.metaAncestors?.includes(b.metaVersion))
                         conflicts.push({ kind: 'branch', local: old, remote: b });
                 }

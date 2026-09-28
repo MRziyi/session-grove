@@ -60,6 +60,9 @@ export function seedDemo(store, roots) {
         if (d.pending.checkpoints.length)
             store.commitPending(b.id, { name: b.name, end: d.pending.checkpoints.at(-1).end, revisionId: d.head, expectedStart: d.pending.start });
     }
+    const compactTarget = store.get('branch', method.id);
+    const compactMarker = { timestamp: now(), type: 'compacted', payload: { message: 'Keep the Chrono research goals and use explicit temporal representations.', replacement_history: [{ type: 'message', role: 'user', content: [{ type: 'input_text', text: 'Continue the Chrono temporal representation study.' }] }] } };
+    store.ingest(method.id, store.raw(compactTarget.head) + JSON.stringify(compactMarker) + '\n' + codexTurn('Continue after compacting the context.', 'Compare event time with observation time in a controlled experiment.').map(r => JSON.stringify(r) + '\n').join(''), compactTarget.head, { agent: 'codex', cwd, operation: 'demo-compaction' });
     const sessionsDir = path.join(roots.codex, 'sessions');
     fs.mkdirSync(sessionsDir, { recursive: true });
     const common = [['Establish the Chrono research context.', 'We are studying temporal information in long-running reasoning.'], ['Keep the evaluation budget fixed.', 'Agreed. All experiments should use the same context and data budget.']];

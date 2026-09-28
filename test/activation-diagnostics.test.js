@@ -49,7 +49,7 @@ test('native Codex index titles and archive flags are observed without writing n
     assert.equal(store.listing('archived').sessionCount, 1);
     assert.equal(fs.readFileSync(file, 'utf8'), raw);
 });
-test('long native auto-titles import as bounded display labels without rewriting the source', async t => {
+test('native display names are preserved without rewriting their source', async t => {
     const { root, store, native: options } = fixture(t);
     const { Native } = await import('../src/native.js');
     const { parse } = await import('../src/transcript.js');
@@ -58,7 +58,7 @@ test('long native auto-titles import as bounded display labels without rewriting
     fs.writeFileSync(path.join(options.roots.codex, 'session_index.jsonl'), JSON.stringify({ id, thread_name: 'Native title '.repeat(100) }) + '\n');
     const native = new Native(store, { roots: options.roots, guard: () => {} }), result = native.refreshLocal();
     assert.equal(result.discovered, 1); assert.equal(result.errors.length, 0);
-    assert.equal(store.all('branch')[0].name.length, 200); assert.equal(native.plan().operations.length, 0);
+    assert.equal(store.all('branch')[0].name, 'Native title '.repeat(100).trim()); assert.equal(native.plan().operations.length, 0);
     assert.equal(fs.readFileSync(file, 'utf8'), raw);
 });
 test('bounded transfer workers drain pending requests before reporting a failure', async () => {

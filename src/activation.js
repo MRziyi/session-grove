@@ -42,10 +42,13 @@ export function activationInfo(store, native, branchId, cwd, env = process.env) 
         if (budget) { compactAt = budget * (pct && pct <= 100 ? pct / 100 : 1); source = 'Claude compaction configuration'; }
     }
     if (!window && context.lastUsage?.window && (!model || !context.model || model === context.model)) { window = context.lastUsage.window; source ||= 'Native context-window record'; }
-    const usage = context.lastUsage, compact = context.compactions.at(-1);
+    const disabled = new Set(branch.contextPolicy?.disabled || []);
+    const usage = context.lastUsage, compact = context.compactions.filter(e => !disabled.has(e.id)).at(-1);
+    const expanded = context.compactions.some(e => disabled.has(e.id) && (!compact || e.line > compact.line));
     let estimated = 0, basis = 'recorded-text';
     const estimateAfter = line => parsed.messages.filter(m => m.line > line).reduce((n, m) => n + estimateTokens(m.text), 0) + parsed.records.slice(line).reduce((n, r) => n + estimateTokens(toolText(r.value, branch.agent)), 0);
-    if (usage && context.usageAfterCompaction && Number.isFinite(usage.input)) { estimated = usage.input + (usage.output || 0) + estimateAfter(usage.line); basis = 'last-native-request-plus-new-text'; }
+    if (expanded) { estimated = (compact ? estimateTokens(compact.summary || '') + compact.retained.reduce((n, m) => n + estimateTokens(m.text), 0) : 0) + estimateAfter(compact?.line || 0); basis = 'expanded-history-estimate'; }
+    else if (usage && context.usageAfterCompaction && Number.isFinite(usage.input)) { estimated = usage.input + (usage.output || 0) + estimateAfter(usage.line); basis = 'last-native-request-plus-new-text'; }
     else if (compact) {
         estimated = estimateTokens(compact.summary || '') + compact.retained.reduce((n, m) => n + estimateTokens(m.text), 0) + estimateAfter(compact.line);
         basis = compact.opaque ? 'incomplete-after-compaction' : 'readable-compaction-plus-new-text';
@@ -53,6 +56,6 @@ export function activationInfo(store, native, branchId, cwd, env = process.env) 
     const threshold = Math.min(window ? window * .8 : Infinity, compactAt || Infinity);
     const risk = Number.isFinite(threshold) && estimated >= threshold;
     const complete = parsed.complete && !parsed.errors.length && !parsed.warnings.some(w => w.includes('历史格式') || w.includes('外部附件'));
-    const fingerprint = hash(JSON.stringify([branch.head, target, model, window, compactAt, estimated, basis]));
+    const fingerprint = hash(JSON.stringify([branch.head, branch.contextPolicy, target, model, window, compactAt, estimated, basis]));
     return { model, window, compactAt, source, estimated, basis, risk, unknown: !window && !compactAt, complete, fingerprint, cwd: target || '', observedAt: usage?.at || null };
 }

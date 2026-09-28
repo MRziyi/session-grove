@@ -14,9 +14,10 @@ You build a useful context, branch to try another idea, then branch again to wri
 
 Session Grove gives that work a structure:
 
-- **One Project for one piece of work.** Keep a paper, repository or research topic together across sessions and devices. Shared-prefix conversations appear as one tree.
+- **One Project for one piece of work.** Keep a paper, repository or research topic together across sessions and devices. Shared-prefix conversations appear as one tree. Internal agent workers and empty sessions stay out of your list.
 - **Name the work, not every message.** Turn a stretch of conversation into “Set up context”, “Draft the introduction” or “Test the alternative”. New conversation stays in Pending until you organize it.
 - **See the branch and read its context together.** The Transcript and Graph stay side by side, with color bands connecting the actual chats to your logical Nodes.
+- **Choose which context to continue with.** Use a recorded compaction result or restore the recorded history before it. The graph shows which earlier Nodes are superseded; choices apply when you activate or explicitly apply the context.
 - **Keep only useful sessions active.** Activate the path you want in your agent. Archive a finished path without losing its shared prefix or cluttering the tree you are still using.
 - **Pick up on another Mac.** Filed projects sync through your WebDAV storage. Open a project to get its list; open a tree to download its context when needed.
 
@@ -30,6 +31,8 @@ Grove manages the session library. **Codex and Claude Code remain where you actu
 4. Select any graph Node to **Rename** it. Naming a Pending segment turns it into a saved Node. **Fork** appears when that Node ends at a complete agent turn.
 5. Select a session's endpoint to **Activate**, **Deactivate**, or **Archive** that path. Archived paths disappear from the in-use graph and remain complete in Archived. Other branches stay visible.
 6. Continue chatting in the agent. New chats extend Pending automatically. Organizing Nodes triggers cloud publication; **Sync** can also publish the Pending you have not organized yet.
+
+Large graphs support background dragging, zoom and reset; Sankey bands connect only visible content.
 
 Actions appear only when they apply to the current selection. **Settings** contains language selection, WebDAV configuration, a short action guide and downloadable diagnostics.
 
@@ -57,13 +60,13 @@ npm works too: `npm run demo`, `npm start`, and `npm test`. The interface defaul
 
 WebDAV is optional. Local organization works without it. After configuring and unlocking sync in Settings, filing work, naming Nodes and other organization changes upload automatically. New native messages are captured locally without uploading after every reply.
 
-**Sync** sends outstanding project changes—including unfinished Pending—and checks the cloud directory. The hover text shows the last upload and directory-check times. Native Active choices stay local to each device.
+**Sync** sends outstanding project changes—including unfinished Pending—and checks the cloud directory. The hover text shows the last upload and directory-check times. Native Active choices stay local to each device. Cloud checks follow your actions with a 30-minute idle fallback; ordinary page refreshes do not poll WebDAV.
 
 The library retains original session records. Node edits organize those records rather than rewriting the conversation. Cloud content is encrypted before upload. By default, the encryption passphrase stays in memory and is entered again after a restart. Unattended startup can explicitly use an owner-only key file; see the setup guide.
 
 ## Current scope
 
-**0.5.0 · experimental · macOS first.** Same-agent branching and cross-device continuation are supported; Claude-to-Codex conversion is not.
+**0.6.0 · experimental · macOS first.** Same-agent branching and cross-device continuation are supported; Claude-to-Codex conversion is not.
 
 Native activation changes currently require closing running agent processes first. The UI explains this in Settings. Codex native read/resume has been exercised with a real executable; Claude file adapters are tested, but real Claude-client verification is still pending. WebDAV has passed isolated protocol tests and a live Teracloud round trip; other providers can differ.
 
@@ -77,7 +80,7 @@ If something fails, note what you selected, what you clicked, and the error refe
 pnpm test
 ```
 
-[Setup, data locations and troubleshooting](docs/operations.md) · [Interaction rules](docs/interaction-model.md) · [Context and sync details](docs/context-and-sync.md) · [Technical choices](docs/technology.md)
+[Setup, data locations and troubleshooting](docs/operations.md) · [Interaction rules](docs/interaction-model.md) · [Context and sync details](docs/context-and-sync.md) · [Sync triggers and measured overhead](docs/sync-policy.md) · [Technical choices](docs/technology.md)
 
 <details>
 <summary>中文简介</summary>

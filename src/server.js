@@ -15,6 +15,7 @@ import { assert, atomic, json, text, now, id, hash } from './util.js';
 const webRoot = fileURLToPath(new URL('../web/', import.meta.url));
 export function createApp({ root, roots, guard, demo = false }) {
     const store = new Store(root), native = new Native(store, { roots, guard }), token = randomBytes(32).toString('hex');
+    const webAssets = new Map(['index.html', 'app.js', 'select.js', 'i18n.js', 'style.css'].map(file => [file, fs.readFileSync(path.join(webRoot, file))]));
     const configFile = path.join(root, 'webdav.json');
     const diagnostics = new Diagnostics(root);
     const autoSync = new AutoSync(store, () => json(configFile, {}));
@@ -28,7 +29,7 @@ export function createApp({ root, roots, guard, demo = false }) {
         store.local('discoveryError', e.message);
     }
     const management = () => new Map(store.collections().items.filter(i => i.projectId).map(i => [i.id, hash(JSON.stringify([
-        store.get('project', i.projectId), i.sessionIds.map(id => { const b = store.get('branch', id); return [b.id, b.name, b.projectId, b.archived, b.parentId, b.forkEnd, b.nodeHead, b.layoutHead]; }),
+        store.get('project', i.projectId), i.sessionIds.map(id => { const b = store.get('branch', id); return [b.id, b.name, b.projectId, b.archived, b.parentId, b.forkEnd, b.nodeHead, b.layoutHead, b.contextPolicy]; }),
         store.get('branch', i.id).layoutHead
     ]))]));
     const snapshot = () => autoSync.decorate(store.snapshot());
@@ -45,12 +46,12 @@ export function createApp({ root, roots, guard, demo = false }) {
             assert(!req.headers.origin || req.headers.origin === `http://${expected}`, '不允许跨站请求', 403);
             assert(!req.headers['sec-fetch-site'] || ['same-origin', 'none'].includes(req.headers['sec-fetch-site']), '不允许跨站请求', 403);
             const url = new URL(req.url, `http://${expected}`), route = url.pathname;
-            if (req.method === 'GET' && ['/', '/app.js', '/i18n.js', '/style.css'].includes(route)) {
+            if (req.method === 'GET' && ['/', '/app.js', '/i18n.js', '/select.js', '/style.css'].includes(route)) {
                 const file = route === '/' ? 'index.html' : route.slice(1);
-                return send(200, fs.readFileSync(path.join(webRoot, file)), file.endsWith('.css') ? 'text/css' : file.endsWith('.js') ? 'text/javascript' : 'text/html; charset=utf-8');
+                return send(200, webAssets.get(file), file.endsWith('.css') ? 'text/css' : file.endsWith('.js') ? 'text/javascript' : 'text/html; charset=utf-8');
             }
             if (req.method === 'GET' && route === '/api/bootstrap') {
-                if (autoSync.passphrase) autoSync.flush('pull').catch(() => {});
+                if (autoSync.passphrase) autoSync.checkCatalog(5 * 60 * 1000).catch(() => {});
                 return send(200, { token, demo, ...snapshot(), roots: native.roots, cloud: autoSync.status(), lastSync: store.local('lastSync'), plan: native.plan() });
             }
             const supplied = Buffer.from(req.headers['x-grove-token'] || '');
@@ -75,7 +76,7 @@ export function createApp({ root, roots, guard, demo = false }) {
             }
             if (req.method === 'GET' && route === '/api/state')
                 return send(200, { ...snapshot(), cloud: autoSync.status(), discoveryError: store.local('discoveryError'), lastSync: store.local('lastSync'), plan: native.plan() });
-            if (req.method === 'GET' && route === '/api/diagnostics') return send(200, diagnostics.report());
+            if (req.method === 'GET' && route === '/api/diagnostics') return send(200, { ...diagnostics.report(), webdav: autoSync.cloud.connection?.dav.metrics || null, fallbackMinutes: 30 });
             if (req.method === 'GET' && route === '/api/discover')
                 return send(200, native.discover());
             if (req.method === 'GET' && route === '/api/webdav') {
@@ -83,16 +84,17 @@ export function createApp({ root, roots, guard, demo = false }) {
                 return send(200, { url: c.url || '', username: c.username || '', hasPassword: !!c.password });
             }
             if (req.method === 'GET' && route === '/api/list') {
+                const check = url.searchParams.get('check') === '1';
                 const scope = url.searchParams.get('scope') || 'active:codex', query = url.searchParams.get('q') || '';
-                if (scope === 'archived') for (const p of autoSync.cloud.summaries()) await autoSync.openProject(p.id, query);
-                else if (!scope.startsWith('active:')) await autoSync.openProject(scope, query);
+                if (scope === 'archived') for (const p of autoSync.cloud.summaries()) await autoSync.openProject(p.id, query, { check });
+                else if (!scope.startsWith('active:')) await autoSync.openProject(scope, query, { check });
                 return send(200, autoSync.listing(scope, query));
             }
             const tree = route.match(/^\/api\/trees\/([^/]+)$/);
-            if (req.method === 'GET' && tree) { await autoSync.openTree(tree[1]); return send(200, store.treeGraph(tree[1], url.searchParams.get('view') || 'in-use')); }
+            if (req.method === 'GET' && tree) { await autoSync.openTree(tree[1], { check: url.searchParams.get('check') === '1' }); return send(200, store.treeGraph(tree[1], url.searchParams.get('view') || 'in-use')); }
             if (req.method === 'POST' && tree) return send(200, store.organize(tree[1], body));
             if (req.method === 'POST' && route === '/api/move') {
-                for (const id of body.itemIds || []) await autoSync.openTree(id);
+                for (const id of body.itemIds || []) await autoSync.openTree(id, { check: true });
                 if (body.projectId && !store.all('project').some(p => p.id === body.projectId)) {
                     const p = autoSync.cloud.summaries().find(p => p.id === body.projectId); assert(p, 'Project not found.');
                     const { index, treeIds, indexAncestors, count, ...project } = p; store.put('project', project);
@@ -106,7 +108,7 @@ export function createApp({ root, roots, guard, demo = false }) {
                     await autoSync.openProject(body.projectId);
                     for (const i of autoSync.cloud.items().filter(i => i.projectId === body.projectId)) await autoSync.openTree(i.id);
                 }
-                for (const id of body.itemIds || []) await autoSync.openTree(id);
+                for (const id of body.itemIds || []) await autoSync.openTree(id, { check: true });
                 if (body.destinationProjectId && !store.all('project').some(p => p.id === body.destinationProjectId)) {
                     const p = autoSync.cloud.summaries().find(p => p.id === body.destinationProjectId); assert(p, 'Project not found.');
                     const { index, treeIds, indexAncestors, count, ...project } = p; store.put('project', project);
@@ -115,7 +117,9 @@ export function createApp({ root, roots, guard, demo = false }) {
                 if (body.projectId) members = store.all('branch').filter(b => b.projectId === store.get('project', body.projectId).id);
                 else if (body.itemIds?.length) members = [...new Map(body.itemIds.flatMap(id => treeMembers(store, id)).map(b => [b.id, b])).values()];
                 else members = (body.branchIds || []).map(id => store.get('branch', id));
+                if (body.projectId || body.itemIds) members = members.filter(b => !b.excluded);
                 assert(members.length, 'Select sessions first.');
+                assert(members.every(b => !b.excluded), 'Agent-owned or empty records are not managed as sessions.');
                 if (body.action === 'deactivate' && body.agent) members = members.filter(b => b.agent === body.agent && store.instances().some(i => i.branchId === b.id && isActive(i)));
                 if (body.action === 'activate') {
                     assert(members.length === 1 && !members[0].synthetic, 'Select one native session to activate.');
@@ -166,6 +170,8 @@ export function createApp({ root, roots, guard, demo = false }) {
                 });
                 return send(200, { changed: members.filter(b => !b.synthetic).length });
             }
+            const compaction = route.match(/^\/api\/branches\/([^/]+)\/compaction$/);
+            if (req.method === 'POST' && compaction) return send(200, store.setCompaction(compaction[1], body));
             const detail = route.match(/^\/api\/branches\/([^/]+)$/);
             if (req.method === 'GET' && detail)
                 return send(200, store.detail(detail[1]));
@@ -210,6 +216,7 @@ export function createApp({ root, roots, guard, demo = false }) {
                 atomic(configFile, JSON.stringify({ url: body.url, username: String(body.username || ''), password: body.password || old.password || '' }));
                 return send(200, { saved: true });
             }
+            if (req.method === 'POST' && route === '/api/cloud/check') { await autoSync.checkCatalog(5 * 60 * 1000); return send(200, autoSync.status()); }
             if (req.method === 'POST' && route === '/api/sync/lock') {
                 autoSync.lock();
                 return send(200, autoSync.status());
@@ -237,7 +244,7 @@ export function createApp({ root, roots, guard, demo = false }) {
                         store.put('branch', { ...b, nodeHead: c.remote.nodeHead, updatedAt: now() });
                     }
                     else if (c.kind === 'branch') {
-                        store.edit(c.local.id, { name: c.remote.name, group: c.remote.group, archived: c.remote.archived });
+                        store.edit(c.local.id, { name: c.remote.name, group: c.remote.group, archived: c.remote.archived, contextPolicy: c.remote.contextPolicy });
                         if (c.remote.archived)
                             native.setActive(c.local.id, null, false);
                     }

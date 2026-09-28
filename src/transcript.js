@@ -1,3 +1,4 @@
+import { contextProjection } from './context-policy.js';
 import { contextInfo } from './context.js';
 import { assert, hash, id, now } from './util.js';
 export function parse(raw, agent) {
@@ -68,7 +69,8 @@ export function parse(raw, agent) {
     const warnings = [...errors];
     if (!nativeId && records.length)
         warnings.push('无法识别原生会话身份');
-    if (agent === 'codex' && meta?.history_mode && meta.history_mode !== 'legacy')
+    if (agent === 'codex' && meta?.history_mode === 'paginated') warnings.push('Paginated history is resumed through a rebuilt local copy.');
+    if (agent === 'codex' && meta?.history_mode && !['legacy', 'paginated'].includes(meta.history_mode))
         warnings.push(`暂不支持 ${meta.history_mode} 历史格式的原生写回`);
     if (turnOpen || pendingTools.size)
         warnings.push('存在未完成轮次或工具调用；可从较早的检查点分支');
@@ -77,14 +79,15 @@ export function parse(raw, agent) {
         warnings.push('包含外部附件引用；当前版本需在目标环境保留这些资源');
     return { context: contextInfo(records, agent), records, nativeId, cwd, messages, checkpoints, warnings, errors, hasUser, complete: !turnOpen && !pendingTools.size, meta };
 }
-export function renderNative(raw, agent, nativeId, cwd, title) {
+export function renderNative(raw, agent, nativeId, cwd, title, contextPolicy = null) {
     const parsed = parse(raw, agent);
     assert(!parsed.errors.length, '损坏或尚未写完的记录不能激活');
     assert(!raw || parsed.nativeId, '未知会话格式，不能写回');
     assert(parsed.complete, '请等待原生轮次结束，或从已完成检查点创建分支');
-    assert(!parsed.warnings.some(w => w.includes('历史格式')), parsed.warnings.join('；'));
+    assert(!parsed.meta?.history_mode || parsed.meta.history_mode === 'legacy' || contextPolicy && agent === 'codex' && parsed.meta.history_mode === 'paginated', parsed.warnings.join('；'));
     const old = parsed.nativeId;
-    const rows = parsed.records.map(({ raw: line, value }) => {
+    const records = contextPolicy ? contextProjection(parsed, agent, contextPolicy, nativeId, cwd) : parsed.records;
+    const rows = records.map(({ raw: line, value }) => {
         if (!value)
             return line;
         const v = structuredClone(value);

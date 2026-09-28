@@ -44,10 +44,11 @@ assert.equal(await evaluate('document.querySelectorAll(".banner-actions button")
 assert.equal(await evaluate('!!document.querySelector("#upload") || !!document.querySelector(".banner #language")'), false);
 fs.mkdirSync('test-results', { recursive: true });
 const screenshot = async name => { const result = await call('Page.captureScreenshot', { format: 'png' }); fs.writeFileSync('test-results/' + name + '.png', Buffer.from(result.data, 'base64')); };
-await screenshot('v5-active-list');
+await screenshot('v6-active-list');
 const language = async value => {
     await evaluate('document.querySelector("#settings").click()'); await wait('document.querySelector("#language")');
-    await evaluate(`document.querySelector("#language").value=${JSON.stringify(value)};document.querySelector("#language").dispatchEvent(new Event("change"))`);
+    await evaluate('document.querySelector("#language").closest(".select-control").querySelector(".select-trigger").click()');
+    await evaluate(`[...document.querySelector("#language").closest(".select-control").querySelectorAll(".select-option")].find(e=>e.textContent===${JSON.stringify(value === 'zh' ? '中文' : 'English')}).click()`);
     await wait(`document.documentElement.lang === ${JSON.stringify(value === 'zh' ? 'zh-CN' : 'en')} && !!document.querySelector("#download-diagnostics")`);
     await new Promise(r => setTimeout(r, 100));
     await evaluate('document.querySelector("#dialog-close").click()');
@@ -57,6 +58,22 @@ assert.equal(await evaluate('document.documentElement.lang'), 'zh-CN'); await la
 await evaluate('document.querySelector("[data-open]").click()'); await wait('document.querySelectorAll(".graph-node").length === 3');
 assert.equal(await evaluate('document.querySelector("#detail-actions").children.length'), 0);
 assert.equal(await evaluate('!!document.querySelector("#context-info")'), false);
+assert.ok(await evaluate('document.querySelector(".graph-node").getBoundingClientRect().height <= 81'));
+assert.ok(await evaluate('document.querySelector("#branch-picker").closest(".select-control").getBoundingClientRect().width <= 215'));
+await evaluate('document.querySelector("#zoom-in").click()');
+assert.equal(await evaluate('document.querySelector("#zoom-label").textContent'), '115%');
+await evaluate('document.querySelector("#graph-scroll").dispatchEvent(new WheelEvent("wheel",{deltaX:5000,cancelable:true}))');
+await wait('document.querySelector("#ribbons").childElementCount === 0');
+await evaluate('document.querySelector("#graph-reset").click()');
+assert.equal(await evaluate('document.querySelector("#zoom-label").textContent'), '100%');
+const box = await evaluate('(()=>{const r=document.querySelector("#graph-scroll").getBoundingClientRect();return{x:r.right-10,y:r.bottom-20}})()');
+const originalTransform = await evaluate('document.querySelector("#graph").style.transform');
+await call('Input.dispatchMouseEvent',{type:'mousePressed',x:box.x,y:box.y,button:'left',clickCount:1});
+await call('Input.dispatchMouseEvent',{type:'mouseMoved',x:box.x-70,y:box.y-40,button:'left',buttons:1});
+await call('Input.dispatchMouseEvent',{type:'mouseReleased',x:box.x-70,y:box.y-40,button:'left',clickCount:1});
+assert.notEqual(await evaluate('document.querySelector("#graph").style.transform'), originalTransform);
+await evaluate('document.querySelector("#graph-reset").click()');
+
 await evaluate('{ const picker=document.querySelector("#branch-picker");picker.value=[...picker.options].find(o=>o.text.includes("Introduction")).value;picker.dispatchEvent(new Event("change")); }');
 const selectRange = async (start, end) => {
     await evaluate(`document.querySelectorAll("[data-chat]")[${start}].click()`);
@@ -73,7 +90,7 @@ assert.equal(await evaluate('!!document.querySelector("#archive-path")'), false)
 await evaluate('document.querySelector("#rename-node").click()'); await wait('document.querySelector("[name=name]")');
 await evaluate('document.querySelector("[name=name]").value="Set up research context";document.querySelector("#dialog-form").requestSubmit()');
 await wait('!document.querySelector("#dialog").open && [...document.querySelectorAll(".node-title")].some(e=>e.textContent==="Set up research context")');
-await screenshot('v5-workspace');
+await screenshot('v6-workspace');
 await evaluate('[...document.querySelectorAll(".graph-node:not(.dimmed)")].at(-1).click()');
 await wait('document.querySelector("#archive-path")');
 await evaluate('document.querySelector("#archive-path").click()'); await wait('document.querySelector("#dialog").open');
@@ -81,7 +98,15 @@ await evaluate('document.querySelector("#dialog-form").requestSubmit()');
 await wait('!document.querySelector("#dialog").open && document.querySelector("#branch-picker").options.length === 1');
 assert.ok(await evaluate('document.querySelector("#transcripts").textContent.includes("Method question")'));
 assert.ok(await evaluate('!document.querySelector("#transcripts").textContent.includes("Intro question")'));
-await screenshot('v5-in-use');
+await screenshot('v6-in-use');
+// Keep a slow in-use response in flight, then navigate to Archived. It must never
+// restore the previous path picker under the new navigation category.
+await evaluate('document.querySelector("#back").click();window.originalFetch=window.fetch;window.fetch=async (...args)=>{const r=await window.originalFetch(...args);if(String(args[0]).includes("/trees/")&&String(args[0]).includes("view=in-use"))await new Promise(done=>setTimeout(done,700));return r;};document.querySelector("[data-open]").click();document.querySelector("[data-scope=archived]").click()');
+assert.equal(await evaluate('document.querySelector("#detail-page").hidden'), true);
+await new Promise(r=>setTimeout(r,1000));
+assert.equal(await evaluate('document.querySelector("#detail-page").hidden'), true);
+await evaluate('window.fetch=window.originalFetch');
+
 await evaluate('document.querySelector("[data-scope=archived]").click()');
 await wait('[...document.querySelectorAll("[data-open]")].some(e=>e.textContent.includes("Introduction"))');
 await evaluate('[...document.querySelectorAll("[data-open]")].find(e=>e.textContent.includes("Introduction")).click()');
@@ -90,7 +115,7 @@ assert.equal(await evaluate('document.querySelector("#branch-picker").options.le
 assert.ok(await evaluate('document.querySelector("#transcripts").textContent.includes("Establish the Chrono")'));
 assert.ok(await evaluate('!document.querySelector("#transcripts").textContent.includes("Method question")'));
 assert.equal(await evaluate('document.querySelectorAll("[data-chat]").length'), 0);
-await screenshot('v5-archived-path');
+await screenshot('v6-archived-path');
 await evaluate('[...document.querySelectorAll(".graph-node")].at(-1).click()');
 assert.equal(await evaluate('!!document.querySelector("#rename-node") || !!document.querySelector("#fork")'), false);
 await evaluate('document.querySelector("#restore-session").click()'); await wait('document.querySelector("#destination")');
@@ -106,10 +131,31 @@ assert.equal(await evaluate('document.querySelector("#toggle-active").textConten
 await evaluate('document.querySelector("#toggle-active").click()'); await wait('document.querySelector("#activation-budget")?.textContent.length > 0');
 await evaluate('document.querySelector("#dialog-form").requestSubmit()');
 await wait('!document.querySelector("#dialog").open && document.querySelector("#toggle-active")?.textContent === "Deactivate"');
+await evaluate('document.querySelector("#back").click()');
+await evaluate('[...document.querySelectorAll("[data-open]")].find(e=>e.textContent.includes("Research context")).click()');
+await wait('!document.querySelector("#detail-page").hidden');
+await evaluate('{const p=document.querySelector("#branch-picker");p.value=[...p.options].find(o=>o.text.includes("Temporal representation")).value;p.dispatchEvent(new Event("change"));}');
+await wait('document.querySelector(".compaction-edge button")');
+assert.ok(await evaluate('document.querySelectorAll(".graph-node.context-muted").length > 0'));
+await evaluate('document.querySelector(".compaction-edge button").click()');
+await wait('document.querySelector(".compaction-edge button")?.getAttribute("aria-pressed") === "false"');
+assert.equal(await evaluate('document.querySelectorAll(".graph-node.context-muted").length'), 0);
+await evaluate('[...document.querySelectorAll(".graph-node:not(.dimmed)")].at(-1).click();document.querySelector("#toggle-active").click()');
+await wait('document.querySelector("#activation-budget")?.textContent.length > 0');
+await evaluate('document.querySelector("#dialog-form").requestSubmit()');
+await wait('!document.querySelector("#dialog").open && document.querySelector("#toggle-active")?.textContent === "Deactivate"');
+await evaluate('document.querySelector(".compaction-edge button").click()');
+await wait('document.querySelector("#apply-context")');
+assert.ok(await evaluate('document.querySelectorAll(".graph-node.context-muted").length > 0'));
+await screenshot('v6-compaction');
+await evaluate('document.querySelector("#apply-context").click()');
+await wait('document.querySelector("#activation-budget")?.textContent.length > 0');
+await evaluate('document.querySelector("#dialog-form").requestSubmit()');
+await wait('!document.querySelector("#dialog").open && !document.querySelector("#apply-context")');
 await evaluate('document.querySelector("#settings").click()'); await wait('document.querySelector("#download-diagnostics")');
-await screenshot('v5-settings'); await evaluate('document.querySelector("#dialog-close").click()');
+await screenshot('v6-settings'); await evaluate('document.querySelector("#dialog-close").click()');
 await call('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 1, mobile: true });
 assert.ok(await evaluate('document.body.scrollWidth <= 390'));
-await screenshot('v5-mobile'); assert.deepEqual(errors, []);
-console.log('Browser smoke passed: compact controls, Settings language, contiguous ranges, Pending rename, endpoint archive, isolated archived paths, restore, activation preflight, diagnostics entry, narrow layout.');
+await screenshot('v6-mobile'); assert.deepEqual(errors, []);
+console.log('Browser smoke passed: styled selectors, zoom/pan/reset, clipped ribbons, stale-view rejection, compaction toggle/apply, contiguous ranges, Pending rename, endpoint archive, isolated archived paths, restore, activation preflight, diagnostics entry, narrow layout.');
 await call('Page.close'); ws.close();

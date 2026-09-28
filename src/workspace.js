@@ -1,10 +1,17 @@
 import { assert, hash, id as newId, now } from './util.js';
 import { estimateTokens, toolText } from './context.js';
+import { policyHash } from './context-policy.js';
+import { sessionExclusion } from './session-kind.js';
 import { parse } from './transcript.js';
 import { rootOf, treeMembers } from './organization.js';
 
 // Native threads, collection rows, and logical nodes are distinct projections.
-export const isActive = i => i.applied && !i.missing;
+export const isActive = i => i.applied && !i.missing && !i.excluded && i.cwdAvailable !== false;
+export function visibleSession(store, b) {
+    if (b.synthetic || b.excluded) return false;
+    const p = store.parsed(b.head, b.agent);
+    return !sessionExclusion({ agent: b.agent, source: p.meta?.source, sidechain: b.agent === 'claude' && p.records.find(r => ['user', 'assistant'].includes(r.value?.type))?.value?.isSidechain === true, chats: p.messages.filter(m => m.role !== 'tool').length });
+}
 const modified = b => b.contentUpdatedAt || b.updatedAt;
 export function collections(store) {
     const branches = store.all('branch'), instances = store.instances(), buckets = new Map();
@@ -14,7 +21,7 @@ export function collections(store) {
         buckets.get(root.id).members.push(b);
     }
     const items = [...buckets.values()].flatMap(({ root, members }) => {
-        const sessions = members.filter(b => !b.synthetic);
+        const sessions = members.filter(b => visibleSession(store, b));
         if (!sessions.length) return [];
         const representative = root.synthetic ? [...sessions].sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id))[0] : root;
         const count = b => store.parsed(b.head, b.agent).messages.filter(m => m.role !== 'tool').length;
@@ -24,7 +31,7 @@ export function collections(store) {
                 active: instances.some(i => i.branchId === b.id && isActive(i)), chats: count(b), updatedAt: modified(b) })),
             archived: sessions.every(b => b.archived), updatedAt: sessions.map(modified).sort().at(-1) }];
     });
-    return { items, activeCounts: Object.fromEntries(['codex', 'claude'].map(agent => [agent, branches.filter(b => !b.synthetic && b.agent === agent && instances.some(i => i.branchId === b.id && isActive(i))).length])) };
+    return { items, activeCounts: Object.fromEntries(['codex', 'claude'].map(agent => [agent, branches.filter(b => visibleSession(store, b) && b.agent === agent && instances.some(i => i.branchId === b.id && isActive(i))).length])) };
 }
 export function listing(store, scope = 'active:codex', query = '') {
     const { items } = store.collections(), projects = store.all('project');
@@ -86,13 +93,13 @@ export function buildGraph(store, branchId) {
         cache.set(key, path);
         return path;
     }
-    const paths = members.filter(b => !b.synthetic).map(b => ({ branchId: b.id, name: b.name, agent: b.agent, archived: !!b.archived,
+    const paths = members.filter(b => visibleSession(store, b)).map(b => ({ branchId: b.id, name: b.name, agent: b.agent, archived: !!b.archived,
         head: b.head, active: store.instances().some(i => i.branchId === b.id && isActive(i)),
-        context: store.parsed(b.head, b.agent).context, messages: pathFor(b), checkpoints: store.parsed(b.head, b.agent).checkpoints }));
+        context: { ...store.parsed(b.head, b.agent).context, compactions: store.parsed(b.head, b.agent).context.compactions.map(e => ({ ...e, enabled: !(b.contextPolicy?.disabled || []).includes(e.id) })) }, contextPolicy: b.contextPolicy || null, contextPending: store.instances().some(i => i.branchId === b.id && isActive(i) && ((i.contextPolicyHash || policyHash(null)) !== policyHash(b.contextPolicy) || i.baseRevision !== b.head)), messages: pathFor(b), checkpoints: store.parsed(b.head, b.agent).checkpoints }));
     const assignments = {};
     // Read legacy append-only nodes as initial annotations without changing history.
     for (const b of members) {
-        if (b.synthetic) continue;
+        if (b.synthetic || b.excluded) continue;
         const detail = store.detail(b.id);
         for (const node of detail.nodes) for (const m of pathFor(b, node.revisionId)) {
             if (m.line > node.start && m.line <= node.end) assignments[m.id] = { id: node.id, name: node.name };
@@ -167,7 +174,7 @@ export function buildGraph(store, branchId) {
         }
     }
     return { id: root.id, projectId: root.projectId, layoutHead: root.layoutHead || null,
-        version: hash(JSON.stringify([members.map(b => [b.id, b.head, b.nodeHead, b.parentId, b.archived]), root.layoutHead || null])),
+        version: hash(JSON.stringify([members.map(b => [b.id, b.head, b.nodeHead, b.parentId, b.archived, b.contextPolicy]), root.layoutHead || null])),
         name: store.collections().items.find(i => i.id === root.id)?.name || root.name,
         nodes: ordered, edges: [...edges.values()], paths, assignments,
         chatCount: new Set(paths.flatMap(p => p.messages.map(m => m.id))).size,
@@ -182,7 +189,7 @@ export function treeGraph(store, branchId, view = 'all') {
     const paths = graph.paths.filter(p => view === 'archived' ? p.archived || projectArchived : !p.archived && !projectArchived);
     const pathIds = new Set(paths.map(p => p.branchId)), nodeIds = new Set(paths.flatMap(p => p.nodeIds)), chats = new Set(paths.flatMap(p => p.messages.map(m => m.id)));
     const nodes = graph.nodes.filter(n => nodeIds.has(n.id)).map(n => ({ ...n, branchIds: n.branchIds.filter(id => pathIds.has(id)), endBranchIds: n.endBranchIds.filter(id => pathIds.has(id)), parentIds: n.parentIds.filter(id => nodeIds.has(id)), childIds: n.childIds.filter(id => nodeIds.has(id)) }));
-    return { ...graph, view, paths, nodes, edges: graph.edges.filter(e => nodeIds.has(e.from) && nodeIds.has(e.to)), assignments: Object.fromEntries(Object.entries(graph.assignments).filter(([id]) => chats.has(id))), name: paths.find(p => p.branchId === root.id)?.name || paths[0]?.name || graph.name, chatCount: chats.size, pendingCount: nodes.filter(n => n.pending).reduce((sum, n) => sum + n.count, 0) };
+    return { ...graph, view, projectArchived: !!projectArchived, paths, nodes, edges: graph.edges.filter(e => nodeIds.has(e.from) && nodeIds.has(e.to)), assignments: Object.fromEntries(Object.entries(graph.assignments).filter(([id]) => chats.has(id))), name: paths.find(p => p.branchId === root.id)?.name || paths[0]?.name || graph.name, chatCount: chats.size, pendingCount: nodes.filter(n => n.pending).reduce((sum, n) => sum + n.count, 0) };
 }
 
 export function organize(store, branchId, { version, pathId, chatIds, action, name, nodeId }) {
