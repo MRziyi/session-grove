@@ -1,12 +1,12 @@
 import { randomBytes, scryptSync, createCipheriv, createDecipheriv } from 'node:crypto';
 import { gzipSync, gunzipSync } from 'node:zlib';
 import { assert, hash, id, now } from './util.js';
-function seal(value, key) {
+export function seal(value, key) {
     const iv = randomBytes(12), cipher = createCipheriv('aes-256-gcm', key, iv);
     const body = Buffer.concat([cipher.update(gzipSync(Buffer.from(JSON.stringify(value)))), cipher.final()]);
     return Buffer.concat([iv, cipher.getAuthTag(), body]);
 }
-function unseal(buffer, key) {
+export function unseal(buffer, key) {
     assert(buffer.length > 28, '同步对象不完整');
     try {
         const cipher = createDecipheriv('aes-256-gcm', key, buffer.subarray(0, 12));
@@ -55,8 +55,8 @@ export class WebDAV {
         const r = await this.request('MKCOL', key);
         assert(r.ok || r.status === 405, `WebDAV 创建目录失败 (${r.status})`);
     }
-    async list() {
-        const r = await this.request('PROPFIND', 'commits/', undefined, { Depth: '1' });
+    async list(directory = 'commits/', pattern = /^[0-9T-]+-[a-f0-9-]+\.bin$/) {
+        const r = await this.request('PROPFIND', directory, undefined, { Depth: '1' });
         assert(r.ok, `WebDAV 列出版本失败 (${r.status})`);
         const xml = await r.text();
         assert(xml.length < 16 * 1024 * 1024, '远端目录过大');
@@ -64,7 +64,7 @@ export class WebDAV {
         for (const m of xml.matchAll(/<(?:[\w-]+:)?href(?:\s[^>]*)?>([\s\S]*?)<\/(?:[\w-]+:)?href>/g)) {
             const href = m[1].replaceAll('&amp;', '&').replaceAll('&lt;', '<').replaceAll('&gt;', '>');
             const name = decodeURIComponent(href.split('/').at(-1));
-            if (/^[0-9T-]+-[a-f0-9-]+\.bin$/.test(name))
+            if (pattern.test(name))
                 result.push(name);
         }
         return [...new Set(result)].sort();

@@ -1,6 +1,6 @@
 # Session Grove — Interaction model
 
-Status: implemented in 0.3.0, following the two-page sketch and the confirmed rules below. This document supersedes earlier interface proposals and the conflicting collection/group terminology in `design.md`.
+Status: implemented in 0.4.0, following the two-page sketch and the confirmed rules below. Token/compaction visibility and cloud loading are detailed in [Context and sync](context-and-sync.md). This document supersedes earlier interface proposals and the conflicting collection/group terminology in `design.md`.
 
 ## Terms and invariants
 
@@ -43,7 +43,7 @@ Selection actions:
 | --- | --- |
 | Active, Ungrouped | Move to project; Archive |
 | Active, already filed | Deactivate |
-| Project | Archive selected rows; archive the entire project |
+| Project | Archive selected rows; archive the entire project when all its rows are selected |
 | Archived | Restore selected rows; restore an archived project |
 
 Mixed filed/Ungrouped batch selections are disabled to keep Move and Deactivate unambiguous. Move assigns the whole selected tree, including inactive branches, to an existing or newly named Project. Moving does not change activation. Bulk Deactivate in Current Active affects only the currently selected agent's active sessions in the selected rows.
@@ -59,7 +59,7 @@ Counters describe the tree: number of native paths, number of unique chats with 
 - User messages align right; agent messages align left.
 - Each chat has a selection checkbox. A segment checkbox selects its chats together.
 - Long messages show their opening and closing text, with an explicit Expand/Collapse control.
-- Colored segment backgrounds correspond to graph Nodes. Pending segments use gray shades.
+- Colored segment backgrounds correspond to graph Nodes. Pending segments use a separate warm palette and dashed outlines; organized Nodes use cooler colors.
 - Selecting a graph node on another branch switches to that branch's full Transcript, including its inherited prefix, and scrolls to the selected segment.
 - Device/path history and compatibility information are available through Source & revisions.
 
@@ -67,13 +67,13 @@ Counters describe the tree: number of native paths, number of unique chats with 
 
 The graph is a top-to-bottom DAG of consecutive segments. A single session is a chain; native forks introduce splits. Automatically inferred shared history starts as Pending. Inherited history is represented once, and fork suffixes remain separate Pending segments until organized.
 
-Node cards show title and chat count. Pending cards have gray dashed borders. Colors are automatically allocated from a palette with different colors on neighboring nodes; Pending neighbors likewise use different gray shades. Translucent ribbons connect visible Transcript backgrounds to their actual graph cards. No manual color setting is exposed.
+Node cards show title and chat count. Pending cards have warm tinted backgrounds and dashed borders. Colors are automatically allocated from a palette with different colors on neighboring nodes; Pending neighbors likewise use different warm colors. Translucent ribbons connect visible Transcript backgrounds to their actual graph cards. No manual color setting is exposed. Each Node also shows an explicitly approximate recorded-text token count, including recognized tools.
 
-Clicking a path's endpoint reveals Activate or Deactivate for that native session. Two native sessions ending at the same shared node can be selected using the path picker. Activate always materializes that session's full latest context, including Pending. To continue from an earlier checkpoint, first Fork at a node ending on a completed native turn. Node boundaries themselves may occur between any two visible chats; native fork/materialization safety still uses complete-turn boundaries and preserves tool records.
+Opening a tree selects no Node and exposes no mutation buttons. Selecting an eligible complete-turn Node reveals Fork. Move and Archive are list-only actions. Clicking a path's endpoint reveals Activate or Deactivate for that native session. Two native sessions ending at the same shared node can be selected using the path picker. Activate always materializes that session's full latest context, including Pending. To continue from an earlier checkpoint, first Fork at a node ending on a completed native turn. Node boundaries themselves may occur between any two visible chats; native fork/materialization safety still uses complete-turn boundaries and preserves tool records.
 
 ### Combine and Dissolve
 
-Checkbox selection exposes Combine, Dissolve and Clear.
+Checkbox selection exposes only legal actions: Combine for a continuous range without a fork crossing, Dissolve when selected chats have a named assignment, and Clear.
 
 **Combine** requires consecutive chats on one path and asks for a Node title. It can consume portions of existing Nodes and Pending segments. Unselected portions retain their original titles. Combining across a real fork point is rejected; shared prefix organization applies to all paths referencing that prefix.
 
@@ -104,9 +104,9 @@ The existing immutable raw JSONL revisions remain the materialization source. Th
 
 Legacy append-only named nodes are read as initial annotations. User edits layer over them. Automatically generated legacy shared-prefix nodes are displayed as Pending rather than pretending the user already named that work.
 
-Sync graph schema 3 includes layout versions and their ancestry. Sequential changes fast-forward. Concurrent organizations retain both versions and require an explicit choice in Settings; resolution records both ancestors so the same conflict does not reappear on the next sync. Schema 1/2 imports remain readable; all devices should use 0.3.0 or later when exchanging editable layouts.
+Sync graph schema 3 includes layout versions and their ancestry. Sequential changes fast-forward. Concurrent organizations retain both versions and require an explicit choice in Settings; resolution records both ancestors so the same conflict does not reappear on the next sync. Schema 1/2 imports remain readable. The 0.4.0 cloud directory protocol wraps these tree manifests; all writing devices should use 0.4.0 or later.
 
-Filing queues encrypted automatic WebDAV synchronization after configuration and unlock. Unconfigured, locked, and retrying states do not imply successful upload. Ungrouped history remains on the originating device. Discovery and capture continue in the background; Update performs immediate collection.
+Filing and organization queue encrypted automatic WebDAV publication after configuration and unlock; ordinary native chat growth only updates local Pending. Manual Upload can publish that Pending. Unconfigured, locked, and retrying states do not imply successful upload. Ungrouped history remains on the originating device. Discovery and capture continue in the background; Update performs immediate collection. Directory checks are independent of upload. Projects load their indexes on open; trees load missing/updated transcripts on open.
 
 ## Verification
 

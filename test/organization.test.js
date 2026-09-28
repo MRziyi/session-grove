@@ -122,28 +122,15 @@ test('cloud exports only filed projects, including logical nodes; device Active 
     copy(a.store, b.store);
     assert.equal(b.store.forest(p.id).length, 2);
 });
-test('automatic sync stays queued while locked, retries failures, and synchronizes after unlock', async (t) => {
-    const { store } = setup(t);
-    store.project('Queued project');
-    let attempts = 0, fail = true;
-    const auto = new AutoSync(store, () => ({ url: 'https://example.com/dav' }), async (s) => { attempts++; assert.ok(s.exportGraph().projects.length >= 1); if (fail)
-        throw new Error('offline'); return { uploaded: 1 }; });
+test('automatic upload queue survives lock and failures and only runs after an organization trigger', async t => {
+    const { store, cwd } = setup(t), p = store.project('Queued'), b = store.branch(p.id, 'Main', 'codex', codexSample(cwd, [['Context', 'Ready']]));
+    let attempts = 0;
+    const auto = new AutoSync(store, () => ({ url: 'https://example.com/dav' }), async () => { attempts++; throw new Error('offline'); });
     t.after(() => auto.close());
-    assert.equal(auto.status().phase, 'locked');
-    await auto.flush();
-    assert.equal(attempts, 0);
-    auto.unlock('my-test-passphrase');
-    await assert.rejects(auto.flush(), /offline/);
-    assert.equal(auto.status().phase, 'retrying');
-    fail = false;
-    await auto.flush();
-    assert.equal(auto.status().phase, 'synced');
-    store.project('Another');
-    assert.equal(auto.status().phase, 'queued');
-    await auto.flush();
-    assert.equal(auto.status().phase, 'synced');
-    auto.lock();
-    assert.equal(auto.status().phase, 'locked');
+    auto.schedule([b.id]); await auto.flush(); assert.equal(attempts, 0);
+    auto.unlock('my-test-passphrase'); await assert.rejects(auto.flush(), /offline/);
+    assert.equal(auto.status().phase, 'retrying'); assert.deepEqual(store.local('uploadQueue'), [b.id]);
+    auto.lock(); assert.equal(auto.status().phase, 'locked');
 });
 test('concurrent logical organization preserves both partitions without displaying overlapping nodes', t => {
     const a = setup(t), b = setup(t), p = a.store.project('Shared');

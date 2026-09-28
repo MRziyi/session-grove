@@ -1,5 +1,19 @@
 let language = localStorage.getItem('grove-language') === 'zh' ? 'zh' : 'en';
 const dictionary = {
+    'Loading project index…': '正在加载项目目录…', 'Loading context…': '正在加载上下文…', 'Unlock sync to download this project.': '请解锁同步以下载项目目录。',
+    'Project sync': '项目同步',
+    'Context': '上下文', 'Inspect': '查看', 'Local changes': '有本地更新', '≈ {count} tokens': '约 {count} tokens',
+    'Rough estimate of recorded message and tool text. Excludes hidden instructions, encrypted content and images; not live context usage.': '粗略估算记录中的消息与工具文本，不含隐藏指令、加密内容和图片；不代表当前上下文占用。',
+    'Last upload: {time}': '最近上传：{time}', 'Last cloud check: {time}': '最近检查云端：{time}',
+    'Upload includes unorganized Pending.': '手动上传会包含尚未整理的 Pending。', 'No local changes to upload.': '没有需要上传的本地改动。',
+    'Stored in cloud · download on open': '存于云端，打开时下载', 'Cloud update available': '云端有更新', 'Cached locally · cloud synced': '已缓存到本机，云端同步', 'Local changes · not uploaded yet': '本地有改动，尚未上传', 'Transcript in cloud': '对话存于云端',
+    'Context compacted here': '上下文在此压缩', 'After compaction': '压缩后', 'Recorded path text': '本路径记录文本估算', 'Latest reported input': '最近记录的输入 token', 'Reported context limit': '记录中的上下文上限', 'Unknown': '未知',
+    'Full history is preserved. After compaction, earlier chats are history, not necessarily the model’s current context.': '完整历史会保留。压缩后，之前的对话属于历史记录，不一定仍在模型当前上下文中。',
+    'Reported input is the last recorded request, not a live meter or cumulative billing total.': '输入值来自最近一条有统计的请求，不是实时占用，也不是累计计费总量。',
+    'Compaction': '上下文压缩', 'reported input tokens': '记录的输入 tokens', 'Readable summary': '可读摘要', 'Retained readable messages': '保留的可读消息', 'No compaction event recorded.': '没有记录到压缩事件。',
+    'The native record contains an encrypted compaction payload. Its summary cannot be read or quality-scored here.': '原生记录包含加密的压缩内容，无法在这里读取摘要或评估其质量。', 'No readable summary was saved in this record.': '这条记录没有保存可读摘要。',
+    'Unlock sync to download this session.': '请解锁同步以下载这条会话。', 'Resolve sync conflicts before uploading.': '请先处理同步冲突再上传。',
+
     'Restore to project': '恢复到项目', 'Restored to project': '已恢复到项目', 'Choose a project to restore ungrouped sessions.': '请选择一个项目来恢复未归类会话。',
     'Current Active': '当前激活', 'Active Codex Sessions': '已激活的 Codex 会话', 'Active Claude Code Sessions': '已激活的 Claude Code 会话',
     'Upload': '上传', 'Sync': '同步', 'Update': '更新', 'Sync locked': '同步已锁定', 'No projects yet': '尚无项目',
@@ -60,7 +74,7 @@ const dictionary = {
     'Password': '密码', 'Password (blank keeps existing)': '密码（留空保留）', 'Encryption passphrase': '加密口令',
     'At least 12 characters; same on every device': '至少 12 字符，每台设备使用相同口令',
     'Unlock automatic project sync': '解锁项目自动同步', 'Sync now': '立即同步', 'Lock sync': '锁定同步', 'Save connection': '保存连接',
-    'Filed projects sync automatically while this service is unlocked. Local unfiled sessions and Active selections never upload. The passphrase stays in memory only.': '本次服务解锁后，已归类项目自动同步。本机未归类会话和 Active 选择不会上传。加密口令只保留在内存中。',
+    'Organization changes upload automatically while unlocked. New Pending stays local until you organize it or click Upload. The passphrase stays in memory only.': '解锁后自动检查云端目录；项目归类和节点整理触发上传。新增 Pending 先保存在本机，也可手动上传。未归类会话与 Active 选择不上传，口令仅留在内存。',
     'Connection saved': '连接已保存', 'Sync complete': '同步完成', 'Never': '从未', 'Last sync': '上次同步',
     'Configure sync': '配置同步', 'Unlock sync': '解锁同步', 'Upload queued': '待上传', 'Syncing…': '同步中…', 'Synced': '已同步', 'Retrying': '等待重试',
     'METADATA CONFLICTS': '元数据冲突', 'Keep local': '保留本地', 'Use remote': '采用远端', 'Local': '本地', 'Remote': '远端',

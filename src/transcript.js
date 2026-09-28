@@ -1,3 +1,4 @@
+import { contextInfo } from './context.js';
 import { assert, hash, id, now } from './util.js';
 export function parse(raw, agent) {
     const records = [], errors = [];
@@ -74,7 +75,7 @@ export function parse(raw, agent) {
     const media = records.some(({ value: v }) => v && /"(?:image_url|file_id|local_images|local_audio|audio_url)"/.test(JSON.stringify(v)) && /"(?:image_url|file_id|audio_url)"\s*:\s*"(?!data:)|"(?:local_images|local_audio)"\s*:\s*\[\s*"/.test(JSON.stringify(v)));
     if (media)
         warnings.push('包含外部附件引用；当前版本需在目标环境保留这些资源');
-    return { records, nativeId, cwd, messages, checkpoints, warnings, errors, hasUser, complete: !turnOpen && !pendingTools.size, meta };
+    return { context: contextInfo(records, agent), records, nativeId, cwd, messages, checkpoints, warnings, errors, hasUser, complete: !turnOpen && !pendingTools.size, meta };
 }
 export function renderNative(raw, agent, nativeId, cwd, title) {
     const parsed = parse(raw, agent);

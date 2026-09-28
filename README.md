@@ -6,7 +6,7 @@
 
 Organize Codex and Claude Code sessions into projects, name meaningful pieces of work, manage branches and archives, and choose an explicit Active set. Continue the actual conversation in your agent's CLI or IDE, then bring its updates back into Grove. WebDAV adds optional cross-device storage.
 
-**Version 0.3.0 — experimental.** Core and adapter tests pass. Codex native read/resume has been verified against the version listed below; real Claude Code client verification is still outstanding.
+**Version 0.4.0 — experimental.** Core and adapter tests pass. Codex native read/resume has been verified against the version listed below; real Claude Code client verification is still outstanding.
 
 ## Quick start
 
@@ -82,7 +82,7 @@ The interface defaults to **English**. Switch to **中文** in the top banner; t
 1. **Start in Codex or Claude Code.** Click **Update** to collect new conversations. Current Active separates the two agents and counts actual local native sessions.
 2. **File entire trees into Projects.** Unfiled sessions appear under **Ungrouped**. Select them and choose **Move to project**, including inline project creation. Native forks with a matching completed prefix fold into one row. A tree counts once in the Projects navigation.
 3. **Search titles and full content.** Lists are grouped by Project or Ungrouped, ordered by each group's latest conversation change, then by each row's latest change.
-4. **Read the Transcript alongside its Graph.** The detail page keeps compact navigation and the session list on the left. Choose a graph branch to see its full conversation. Automatically assigned colors and ribbons connect chats to their logical Nodes; unorganized chats are gray **Pending** segments.
+4. **Read the Transcript alongside its Graph.** The detail page keeps compact navigation and the session list on the left. Choose a graph branch to see its full conversation. Automatically assigned colors and ribbons connect chats to their logical Nodes; unorganized chats use a warm **Pending** palette, distinct from the cool colors of named Nodes.
 5. **Combine and Dissolve selected chats.** Name consecutive chats as a Node, or return any selected chats to Pending. Partial edits leave the rest of existing Nodes intact. Shared-prefix edits affect all inheriting branches. Combine cannot cross a fork point. These edits never rewrite native history.
 6. **Activate at a path endpoint.** Choose an existing local working directory; continue actual chat in your native client. **Deactivate** retains project history while removing that local native session. Close running agents and their IDE extensions before these cold writes, then reopen the client. A blocked action leaves activation and Archive state unchanged.
 7. **Archive and restore in Grove.** Archive a session tree or an entire Project to retain its history and deactivate its sessions on this device. Restoring filed work does not automatically activate it. Restoring Ungrouped work requires choosing a Project (or creating one), so it remains accessible without auto-activation.
@@ -91,7 +91,9 @@ Ordinary sessions originate in the native client; Grove creates new native sessi
 
 CLI and IDE interfaces using the same native data directory share one activation instance. Device and interface information is provenance, not the project hierarchy. Background collection checks for local changes every 10 seconds. Filing and organization do not change the displayed conversation modification time.
 
-See [Interaction model](docs/interaction-model.md) for the two-page layout, terminology and action rules.
+Nodes show approximate recorded-text tokens, including recognized tool text. The **Context** panel separates these estimates from recorded native input usage and compaction events. Readable compact summaries are displayed when saved; encrypted payloads remain explicitly opaque.
+
+See [Context and sync](docs/context-and-sync.md) for token limits, automatic upload triggers and lazy cloud loading. See [Interaction model](docs/interaction-model.md) for the two-page layout, terminology and action rules.
 
 ## Encrypted WebDAV sync
 
@@ -100,13 +102,16 @@ In **Sync & settings**, enter your WebDAV root URL, username and password, then 
 - AES-256-GCM authenticated encryption, with scrypt key derivation and compression before encryption.
 - The encryption passphrase stays in process memory only. WebDAV connection credentials are stored locally in `webdav.json` with user-only permissions.
 - Content-addressed immutable fragments deduplicate shared history. Dependencies upload before an encrypted revision manifest is published.
-- Filing, organizing and updating project work queues automatic synchronization while unlocked. Remote updates are checked every 15 seconds.
+- Filing, organizing Nodes, forking, archiving and restoring queue affected trees for upload after a two-second debounce. Native chat growth only updates local Pending; it does not auto-upload.
+- Manual **Upload** includes unfinished Pending; it is disabled when nothing has changed. Hover for the last successful upload time. **Sync** checks the directory without pushing Pending.
+- Cloud directories are checked every 15 seconds while unlocked. Project indexes load on opening a project; missing or newer tree bodies load on opening that tree. Cloud-only, cached, updated and unsent states have a small cloud marker.
+- Full-text search of a cloud project may fetch its transcripts on demand. Ordinary list navigation does not. Cached content remains readable offline.
 - Without configuration, while locked, or offline, changes remain local and are shown as queued or retrying. Local storage is not reported as a successful upload.
 - Unfiled sessions, native authentication, native databases and device-specific Active selections do not upload. Pulling never automatically activates a session.
 - Divergent conversations are retained as separate branches. Concurrent metadata edits or alternative logical-node organizations remain explicit choices.
 - Restarting the service requires unlocking sync again. Remote history objects are not automatically deleted.
 
-Use HTTPS; HTTP is permitted only for local testing. Editable Node layouts use sync graph schema 3; use version 0.3.0+ on all devices. Earlier graph schemas remain readable. Grove creates `session-grove-v1/` below the configured WebDAV URL and leaves other directories alone.
+Use HTTPS; HTTP is permitted only for local testing. The indexed cloud directory uses schema 4 with schema 3 tree graphs. Use 0.4.0+ on all writing devices; older vaults can be indexed without downloading all transcript bodies. Mixed-version writing after migration is not supported. Grove creates `session-grove-v1/` below the configured WebDAV URL and leaves other directories alone.
 
 ## Compatibility and current limits
 
@@ -175,7 +180,9 @@ bin/                    Local server CLI
 src/store.js            Projects, revisions, raw fragments and merge
 src/organization.js     Legacy logical nodes and native prefix inference
 src/workspace.js        Session lists, shared graph paths and editable Node layouts
-src/auto-sync.js        Automatic sync, unlock, retry and status
+src/auto-sync.js        Organization-triggered upload, directory checks and status
+src/cloud.js            Encrypted lazy catalog, project indexes and tree hydration
+src/context.js          Approximate token counts and recorded compaction details
 src/transcript.js       Native event parsing, checkpoints and materialization
 src/native.js           Discovery, collection, Active changes and recovery
 src/sync.js             Encrypted WebDAV object and revision transfer

@@ -8,7 +8,7 @@ import { once } from 'node:events';
 import { createApp } from '../src/server.js';
 import { Store } from '../src/store.js';
 import { sync } from '../src/sync.js';
-import { codexSample } from '../src/demo.js';
+import { codexSample, codexTurn } from '../src/demo.js';
 test('HTTP protects local API and implements project to activation lifecycle', async (t) => {
     const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'grove-http-'))), cwd = path.join(root, 'work');
     fs.mkdirSync(cwd);
@@ -112,6 +112,13 @@ test('workspace HTTP actions archive atomically, restore without activation, rej
     const moved = await request('/move', { itemIds: [child.id], projectName: 'Chrono' }); assert.equal(moved.status, 200);
     const projectId = moved.data.projectId;
     assert.equal((await request('/manage', { action: 'activate', branchIds: [a.id], cwd })).status, 200);
+    app.autoSync.queue.clear(); app.store.local('uploadQueue', []);
+    fs.appendFileSync(app.store.instances()[0].file, codexTurn('Still chatting', 'New pending work').map(v => JSON.stringify(v) + '\n').join(''));
+    assert.equal((await request('/collect', {})).status, 200);
+    assert.equal(app.autoSync.queue.size, 0, 'native capture must not enqueue uploads');
+    const pendingGraph = app.store.treeGraph(a.id);
+    assert.equal((await request('/trees/' + a.id, { version: pendingGraph.version, pathId: a.id, chatIds: [pendingGraph.paths.find(p => p.branchId === a.id).messages.at(-1).id], action: 'combine', name: 'A finished step' })).status, 200);
+    assert.ok(app.autoSync.queue.has(a.id), 'organizing must enqueue the changed tree');
     busy = true;
     assert.equal((await request('/manage', { action: 'archive', projectId })).status, 400);
     assert.equal(app.store.get('project', projectId).archived, undefined);

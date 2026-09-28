@@ -117,7 +117,7 @@ test('native forks discovered after filing and organizing reuse the project tree
     assert.equal(g.nodes[0].name, 'Shared context'); assert.equal(g.nodes[0].branchIds.length, 2);
     assert.equal(g.nodes.reduce((n, v) => n + v.count, 0), 8);
 });
-test('all Pending graph neighbors receive different automatic gray shades', t => {
+test('all Pending graph neighbors receive different automatic warm colors', t => {
     const { store, cwd } = fixture(t), b = store.branch(null, 'Main', 'codex', codexSample(cwd, pairs(4)));
     store.fork(b.id, { name: 'First', end: store.detail(b.id).checkpoints[0].end });
     store.fork(b.id, { name: 'Second', end: store.detail(b.id).checkpoints[2].end });
@@ -141,4 +141,19 @@ test('divergent device continuations retain shared chat identities and remote su
     assert.equal(graph.chatCount, 8);
     assert.ok(graph.nodes.some(n => n.name === 'Remote direction' && n.count === 2));
     assert.equal(graph.nodes[0].branchIds.length, 2);
+});
+test('node token estimates include recorded tool text without turning compaction into lost history', t => {
+    const { store, cwd } = fixture(t);
+    const raw = codexSample(cwd, [['Task', 'Ready']]) + [
+        { type: 'compacted', payload: { message: 'Retain task goals.', replacement_history: [] } },
+        { type: 'response_item', payload: { type: 'message', role: 'user', content: [{ type: 'input_text', text: 'Read the report' }] } },
+        { type: 'response_item', payload: { type: 'function_call', call_id: 'call-1', arguments: '{}' } },
+        { type: 'response_item', payload: { type: 'function_call_output', call_id: 'call-1', output: 'x'.repeat(4000) } },
+        { type: 'response_item', payload: { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'Report read' }] } },
+        { type: 'event_msg', payload: { type: 'task_complete' } }
+    ].map(v => JSON.stringify(v) + '\n').join('');
+    const b = store.branch(null, 'Compacted', 'codex', raw), g = store.treeGraph(b.id);
+    assert.equal(g.chatCount, 4); assert.equal(g.nodes.length, 2); assert.equal(g.nodes[1].afterCompaction, true);
+    assert.ok(g.nodes[1].tokens.recordedEstimate > 1000); assert.ok(g.nodes[1].tokens.estimate < 20);
+    assert.equal(g.paths[0].context.compactions[0].summary, 'Retain task goals.');
 });

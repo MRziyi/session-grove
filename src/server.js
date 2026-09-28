@@ -8,7 +8,7 @@ import { Native } from './native.js';
 import { AutoSync } from './auto-sync.js';
 import { metadata, treeMembers } from './organization.js';
 import { isActive } from './workspace.js';
-import { assert, atomic, json, text, now, id } from './util.js';
+import { assert, atomic, json, text, now, id, hash } from './util.js';
 const webRoot = fileURLToPath(new URL('../web/', import.meta.url));
 export function createApp({ root, roots, guard, demo = false }) {
     const store = new Store(root), native = new Native(store, { roots, guard }), token = randomBytes(32).toString('hex');
@@ -20,9 +20,17 @@ export function createApp({ root, roots, guard, demo = false }) {
     catch (e) {
         store.local('discoveryError', e.message);
     }
+    const management = () => new Map(store.collections().items.filter(i => i.projectId).map(i => [i.id, hash(JSON.stringify([
+        store.get('project', i.projectId), i.sessionIds.map(id => { const b = store.get('branch', id); return [b.id, b.name, b.projectId, b.archived, b.parentId, b.forkEnd, b.nodeHead, b.layoutHead]; }),
+        store.get('branch', i.id).layoutHead
+    ]))]));
+    const snapshot = () => autoSync.decorate(store.snapshot());
     const server = http.createServer(async (req, res) => {
-        const send = (status, value, type = 'application/json') => { res.writeHead(status, { 'Content-Type': type, 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff', 'Referrer-Policy': 'no-referrer', 'Content-Security-Policy': "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'" }); res.end(type === 'application/json' ? JSON.stringify(value) : value); if (req.method !== 'GET' && status < 400)
-            autoSync.schedule(); };
+        const beforeManagement = req.method !== 'GET' ? management() : null;
+        const send = (status, value, type = 'application/json') => { res.writeHead(status, { 'Content-Type': type, 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff', 'Referrer-Policy': 'no-referrer', 'Content-Security-Policy': "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'" }); res.end(type === 'application/json' ? JSON.stringify(value) : value); if (beforeManagement && status < 400 && !req.url.startsWith('/api/sync') && !['/api/collect', '/api/webdav'].includes(req.url)) {
+            const changed = [...management()].filter(([id, value]) => beforeManagement.get(id) !== value).map(([id]) => id);
+            if (changed.length) autoSync.schedule(changed);
+        } };
         try {
             const expected = `127.0.0.1:${server.address().port}`;
             assert(req.headers.host === expected, '请使用启动时显示的本地地址', 403);
@@ -33,8 +41,10 @@ export function createApp({ root, roots, guard, demo = false }) {
                 const file = route === '/' ? 'index.html' : route.slice(1);
                 return send(200, fs.readFileSync(path.join(webRoot, file)), file.endsWith('.css') ? 'text/css' : file.endsWith('.js') ? 'text/javascript' : 'text/html; charset=utf-8');
             }
-            if (req.method === 'GET' && route === '/api/bootstrap')
-                return send(200, { token, demo, ...store.snapshot(), roots: native.roots, cloud: autoSync.status(), lastSync: store.local('lastSync'), plan: native.plan() });
+            if (req.method === 'GET' && route === '/api/bootstrap') {
+                if (autoSync.passphrase) autoSync.flush('pull').catch(() => {});
+                return send(200, { token, demo, ...snapshot(), roots: native.roots, cloud: autoSync.status(), lastSync: store.local('lastSync'), plan: native.plan() });
+            }
             const supplied = Buffer.from(req.headers['x-grove-token'] || '');
             assert(supplied.length === token.length && timingSafeEqual(supplied, Buffer.from(token)), '本地访问凭证无效，请刷新页面', 403);
             let body = {};
@@ -56,21 +66,40 @@ export function createApp({ root, roots, guard, demo = false }) {
                 assert(!autoSync.running, '同步进行中，请稍后操作', 409);
             }
             if (req.method === 'GET' && route === '/api/state')
-                return send(200, { ...store.snapshot(), cloud: autoSync.status(), discoveryError: store.local('discoveryError'), lastSync: store.local('lastSync'), plan: native.plan() });
+                return send(200, { ...snapshot(), cloud: autoSync.status(), discoveryError: store.local('discoveryError'), lastSync: store.local('lastSync'), plan: native.plan() });
             if (req.method === 'GET' && route === '/api/discover')
                 return send(200, native.discover());
             if (req.method === 'GET' && route === '/api/webdav') {
                 const c = json(configFile, {});
                 return send(200, { url: c.url || '', username: c.username || '', hasPassword: !!c.password });
             }
-            if (req.method === 'GET' && route === '/api/list')
-                return send(200, store.listing(url.searchParams.get('scope') || 'active:codex', url.searchParams.get('q') || ''));
+            if (req.method === 'GET' && route === '/api/list') {
+                const scope = url.searchParams.get('scope') || 'active:codex', query = url.searchParams.get('q') || '';
+                if (scope === 'archived') for (const p of autoSync.cloud.summaries()) await autoSync.openProject(p.id, query);
+                else if (!scope.startsWith('active:')) await autoSync.openProject(scope, query);
+                return send(200, autoSync.listing(scope, query));
+            }
             const tree = route.match(/^\/api\/trees\/([^/]+)$/);
-            if (req.method === 'GET' && tree) return send(200, store.treeGraph(tree[1]));
+            if (req.method === 'GET' && tree) { await autoSync.openTree(tree[1]); return send(200, store.treeGraph(tree[1])); }
             if (req.method === 'POST' && tree) return send(200, store.organize(tree[1], body));
-            if (req.method === 'POST' && route === '/api/move') return send(200, store.moveItems(body));
+            if (req.method === 'POST' && route === '/api/move') {
+                if (body.projectId && !store.all('project').some(p => p.id === body.projectId)) {
+                    const p = autoSync.cloud.summaries().find(p => p.id === body.projectId); assert(p, 'Project not found.');
+                    const { index, treeIds, indexAncestors, count, ...project } = p; store.put('project', project);
+                }
+                return send(200, store.moveItems(body));
+            }
             if (req.method === 'POST' && route === '/api/manage') {
                 assert(['activate', 'deactivate', 'archive', 'restore'].includes(body.action), 'Unknown session action.');
+                if (body.projectId && autoSync.passphrase) {
+                    await autoSync.openProject(body.projectId);
+                    for (const i of autoSync.cloud.items().filter(i => i.projectId === body.projectId)) await autoSync.openTree(i.id);
+                }
+                for (const id of body.itemIds || []) await autoSync.openTree(id);
+                if (body.destinationProjectId && !store.all('project').some(p => p.id === body.destinationProjectId)) {
+                    const p = autoSync.cloud.summaries().find(p => p.id === body.destinationProjectId); assert(p, 'Project not found.');
+                    const { index, treeIds, indexAncestors, count, ...project } = p; store.put('project', project);
+                }
                 let members;
                 if (body.projectId) members = store.all('branch').filter(b => b.projectId === store.get('project', body.projectId).id);
                 else if (body.itemIds?.length) members = [...new Map(body.itemIds.flatMap(id => treeMembers(store, id)).map(b => [b.id, b])).values()];
@@ -214,8 +243,7 @@ export function createApp({ root, roots, guard, demo = false }) {
         if (!autoSync.running) {
             try {
                 const r = native.refreshLocal();
-                if (r.updates.length || r.discovered || r.grouped)
-                    autoSync.schedule();
+                // Native chat growth updates local Pending only; organization queues upload.
             }
             catch { /* Next manual capture surfaces errors. */ }
         }

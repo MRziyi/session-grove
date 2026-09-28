@@ -1,4 +1,5 @@
 import { assert, hash, id as newId, now } from './util.js';
+import { estimateTokens, toolText } from './context.js';
 import { parse } from './transcript.js';
 import { rootOf, treeMembers } from './organization.js';
 
@@ -57,6 +58,13 @@ export function treeGraph(store, branchId) {
         const key = `${b.id}:${revisionId}`;
         if (cache.has(key)) return cache.get(key);
         const p = parse(store.raw(revisionId), b.agent), visible = p.messages.filter(m => m.role !== 'tool');
+        const toolCosts = new Map(), visibleByLine = new Map(visible.map(m => [m.line, m])), toolsByLine = new Map(p.messages.filter(m => m.role === 'tool').map(m => [m.line, m.text])); let previousLine = null;
+        for (const [index, record] of p.records.entries()) {
+            const shown = visibleByLine.get(index + 1);
+            if (shown) previousLine = shown.line;
+            const tool = b.agent === 'claude' ? toolsByLine.get(index + 1) || '' : toolText(record.value, b.agent);
+            if (previousLine && tool) toolCosts.set(previousLine, (toolCosts.get(previousLine) || 0) + estimateTokens(tool));
+        }
         let inherited = [];
         if (b.parentId && b.forkRevision) {
             const parent = store.get('branch', b.parentId);
@@ -71,7 +79,7 @@ export function treeGraph(store, branchId) {
         const path = visible.map((m, index) => {
             prefix = hash(prefix + JSON.stringify([m.role, m.text]));
             const message = inherited[index] || { ...m, id: `${b.chatIdentity || b.id}:${prefix.slice(0, 24)}`, ownerId: b.id };
-            const value = { ...message, line: m.line };
+            const value = { ...message, line: m.line, toolTokens: toolCosts.get(m.line) || 0 };
             if (!messages.has(value.id)) messages.set(value.id, value);
             return value;
         });
@@ -80,7 +88,7 @@ export function treeGraph(store, branchId) {
     }
     const paths = members.filter(b => !b.synthetic).map(b => ({ branchId: b.id, name: b.name, agent: b.agent, archived: !!b.archived,
         head: b.head, active: store.instances().some(i => i.branchId === b.id && isActive(i)),
-        messages: pathFor(b), checkpoints: parse(store.raw(b.head), b.agent).checkpoints }));
+        context: parse(store.raw(b.head), b.agent).context, messages: pathFor(b), checkpoints: parse(store.raw(b.head), b.agent).checkpoints }));
     const assignments = {};
     // Read legacy append-only nodes as initial annotations without changing history.
     for (const b of members) {
@@ -92,7 +100,11 @@ export function treeGraph(store, branchId) {
     }
     const layout = root.layoutHead ? store.get('layout', root.layoutHead) : null;
     if (layout) for (const [id, value] of Object.entries(layout.assignments)) assignments[id] = value;
-    const next = new Map(), previous = new Map(), endpoints = new Set();
+    const next = new Map(), previous = new Map(), endpoints = new Set(), compactStarts = new Set();
+    for (const p of paths) for (const event of p.context.compactions) {
+        const first = p.messages.find(m => m.line > event.line);
+        if (first) compactStarts.add(first.id);
+    }
     for (const p of paths) {
         if (p.messages.length) endpoints.add(p.messages.at(-1).id);
         for (let i = 0; i < p.messages.length; i++) {
@@ -110,7 +122,7 @@ export function treeGraph(store, branchId) {
             if (nodeByChat.has(m.id)) { current = nodeByChat.get(m.id); continue; }
             const predecessor = [...(previous.get(m.id) || [])][0];
             const parent = nodeByChat.get(predecessor);
-            const extend = parent && current === parent && next.get(predecessor)?.size === 1 && !endpoints.has(predecessor) && same(predecessor, m.id);
+            const extend = !compactStarts.has(m.id) && parent && current === parent && next.get(predecessor)?.size === 1 && !endpoints.has(predecessor) && same(predecessor, m.id);
             if (!extend) {
                 current = { id: `segment-${hash(m.id).slice(0, 20)}`, annotationId: assignments[m.id]?.id || null,
                     name: assignments[m.id]?.name || null, pending: !assignments[m.id], chatIds: [], branchIds: [], endBranchIds: [], parentIds: [], childIds: [] };
@@ -136,7 +148,7 @@ export function treeGraph(store, branchId) {
         nodes.find(n => n.id === from).childIds.push(to);
         nodes.find(n => n.id === to).parentIds.push(from);
     }
-    // Topological order, deterministic colors, and adjacent Pending gray shades.
+    // Topological order, deterministic colors, and adjacent Pending warm colors.
     const ordered = [], remaining = new Set(nodes.map(n => n.id));
     while (remaining.size) {
         const ready = nodes.filter(n => remaining.has(n.id) && n.parentIds.every(id => !remaining.has(id)));
@@ -145,9 +157,11 @@ export function treeGraph(store, branchId) {
             n.depth = n.parentIds.length ? 1 + Math.max(...n.parentIds.map(id => nodes.find(x => x.id === id).depth)) : 0;
             const used = new Set(n.parentIds.map(id => nodes.find(x => x.id === id).color));
             let color = parseInt(hash(n.annotationId || n.id).slice(0, 4), 16) % (n.pending ? 4 : 7);
-            while (used.has(`${n.pending ? 'gray' : 'color'}-${color}`)) color = (color + 1) % (n.pending ? 4 : 7);
-            n.color = `${n.pending ? 'gray' : 'color'}-${color}`;
+            while (used.has(`${n.pending ? 'pending' : 'color'}-${color}`)) color = (color + 1) % (n.pending ? 4 : 7);
+            n.color = `${n.pending ? 'pending' : 'color'}-${color}`;
             n.count = n.chatIds.length;
+            n.tokens = { estimate: n.chatIds.reduce((sum, id) => sum + estimateTokens(messages.get(id)?.text), 0), recordedEstimate: n.chatIds.reduce((sum, id) => sum + estimateTokens(messages.get(id)?.text) + (messages.get(id)?.toolTokens || 0), 0), kind: 'recorded-text-estimate' };
+            n.afterCompaction = compactStarts.has(n.chatIds[0]);
             ordered.push(n); remaining.delete(n.id);
         }
     }
