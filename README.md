@@ -14,7 +14,7 @@ You build a useful context, branch to try another idea, then branch again to wri
 
 Session Grove gives that work a structure:
 
-- **One Project for one piece of work.** Keep a paper, repository or research topic together across sessions and devices. Shared-prefix conversations appear as one tree. Internal agent workers and empty sessions stay out of your list.
+- **One Project for one piece of work.** Keep a paper, repository or research topic together across sessions and devices. Shared-prefix conversations appear as one tree. Internal agent workers and empty sessions stay out of your list. Scheduled/background sessions are hidden by default, with an opt-in filter in Settings.
 - **A home for everyday questions.** Ungrouped is a shared inbox across devices. Browse recent work, expand older sessions, search everything, and archive in batches without having to classify every conversation.
 - **See the source.** Tool badges identify Codex/Claude history; a device badge shows the latest recorded conversation source.
 - **Name the work, not every message.** Turn a stretch of conversation into “Set up context”, “Draft the introduction” or “Test the alternative”. New conversation stays in Pending until you organize it.
@@ -34,7 +34,9 @@ Grove manages the session library. **Codex and Claude Code remain where you actu
 5. Select a session's endpoint to **Activate**, **Deactivate**, or **Archive** that path. Archived paths disappear from the in-use graph and remain complete in Archived. Other branches stay visible.
 6. Continue chatting in the agent. New chats extend Pending automatically. Organizing Nodes triggers cloud publication; **Sync** can also publish the Pending you have not organized yet.
 
-Read conversations as Markdown. Expand recorded activity to inspect tool inputs/results, named files and readable reasoning alongside the conversation. Large graphs support background dragging, zoom and reset; Sankey bands connect only visible content.
+A Fork adds a selectable empty endpoint. If the selected Node contains an unfinished turn, the confirmation identifies the chats excluded at the last completed checkpoint. The new path inherits its compaction choices.
+
+Read conversations as Markdown. Expand recorded activity to inspect tool inputs/results, named files and readable reasoning alongside the conversation. Encrypted reasoning without a readable summary is labeled explicitly: Grove preserves its original bytes and does not pretend to decode them. Large record previews are paged. Large graphs support background dragging, zoom and reset; Sankey bands connect only visible content.
 
 Actions appear only when they apply to the current selection. **Settings** contains language, WebDAV and automatic-update intervals. **ⓘ Information**, at the bottom of the sidebar, contains the action guide and diagnostics. **About** links to the author and repository.
 
@@ -64,13 +66,13 @@ WebDAV is optional. Enter your server address, account and password; Grove adds 
 
 Filing work, naming Nodes and other organization changes upload automatically. Local sessions refresh every **1 minute** by default. A **15-minute** fallback uploads changed projects, including unfinished Pending. Every upload captures local updates first; an unchanged library makes no scheduled cloud request. Both intervals can be changed or disabled in Settings.
 
-**Sync** sends outstanding project changes—including unfinished Pending—and checks the cloud directory. The hover text shows the last upload and directory-check times. Native Active choices stay local to each device. Cloud reads follow startup, focus and explicit navigation with freshness checks; ordinary page refreshes do not poll WebDAV. Sync and Update show live countdowns; ticking them makes no server request and pauses when the page is hidden.
+**Sync** sends outstanding project changes—including unfinished Pending—and checks the cloud directory. The hover text shows the last upload and directory-check times. Native Active choices stay local to each device. On a new installation, nothing is imported automatically: click **Update** once to enable local reading; configure WebDAV and click **Sync** once to enable cloud synchronization. Existing encrypted vaults ask for their current passphrase, with an explicit Unlock button. After that, cloud reads follow startup, focus and explicit navigation with freshness checks; ordinary page refreshes do not poll WebDAV. Sync and Update show live countdowns and spin for actual manual or automatic work, followed by a brief green check or error indicator. An unchanged manual Sync reports “Already up to date” without uploading. Ticking countdowns makes no server request and pauses when the page is hidden.
 
 The library retains original session records. Node edits organize those records rather than rewriting the conversation. Cloud content is encrypted when you enable encryption; a yellow status identifies unencrypted storage. Saved credentials and the optional passphrase live in owner-only local files so `pnpm dev` can reconnect. This is not macOS Keychain storage.
 
 ## Current scope
 
-**0.8.0 · experimental · macOS first.** Same-agent branching and cross-device continuation are supported; Claude-to-Codex conversion is not.
+**0.8.1 · experimental · macOS first.** Same-agent branching and cross-device continuation are supported; Claude-to-Codex conversion is not.
 
 **Context fidelity has limits.** Supported materialization preserves recorded tool calls/results, reasoning and instructions instead of rebuilding a conversation from visible prose. Codex paginated forks resolve their recorded prefix references and remain paginated on activation. Native New branch and Grove Fork have been compared at the same checkpoint, including tool/reasoning records and native projected items. Missing history segments still block context changes. Dynamic client instructions, opaque compaction and external assets prevent a promise of identical model requests. See the [requirements and fidelity audit](docs/requirements-audit.md).
 

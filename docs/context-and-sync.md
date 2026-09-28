@@ -118,3 +118,11 @@ All writing devices should use 0.7.1+ to honor path context policies. A native a
 ## Optional encryption and key changes
 
 Schema 1 encrypted vaults remain readable. Schema 2 adds an explicit `encrypted`/`plain` mode and an optional generation pointer. Plain objects carry a format header and compression; they are not encrypted. Rekeying stages every old cloud object in a new generation, including unopened trees, and verifies every decoded read-back. A matching strong ETag or an exclusive WebDAV lock protects replacement of `vault.json`. Old files are removed only after verified publication; cleanup errors remain visible. The local private migration journal keeps the destination key until local settings commit. See the settings state machine in the interaction model.
+
+## Record fidelity and responsiveness (0.8.1)
+
+An opaque reasoning record can have no readable summary at all. The display says so explicitly. The immutable object, encrypted payload and unknown fields are retained; the record inspector omits opaque blobs and pages large readable content solely in its display projection. This does not claim the client or model will reuse opaque reasoning in every future request. Native compaction itself determines which earlier context is superseded.
+
+Fork copies the recorded prefix at a completed checkpoint and inherits applicable compaction choices. A zero-chat endpoint is visible and selectable for activation. If a logical Node includes an ongoing turn, the Fork confirmation explains the excluded trailing chats; no synthetic completion event or missing tool result is fabricated.
+
+Large histories previously exceeded the 24 MiB parsing cache and could be parsed repeatedly. The cache now keeps one oversized history up to the native 100 MiB limit, evicting other entries. Record inspection reads the requested immutable record directly. Folded tool/reasoning activity is rendered on demand. On one temporary copy of the current local library, cold target-graph computation measured about 1,615 ms before and 321 ms after (21 vs 12 history reads, process RSS 932 vs 406 MB). These are one-run local measurements, not a guarantee for other histories; first parsing and changed histories still cost time.

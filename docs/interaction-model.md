@@ -129,3 +129,12 @@ Tool badges appear on rows and graph Nodes. Shared prefix Nodes retain their ori
 Remote archive metadata does not silently remove a still-running native copy. Current Active shows an explicit pending-deactivation notice and action until that local copy is deactivated.
 
 Countdowns use server-provided deadlines and a local one-second clock. No HTTP or WebDAV request is made by a tick. The clock pauses for hidden pages and when neither timer has a deadline. A small status endpoint replaces repeated full-library polling.
+
+## 0.8.1 refinements
+
+- New installation: an empty list explains Update (local) and configure WebDAV → Sync (cloud). Each subsystem starts automatically only after its first explicit action.
+- Existing encrypted vault: current passphrase + Unlock, followed by locked configured state and optional Modify. New encryption is a separate later action.
+- Update/Sync animate during real work, including timers, then show a transient success/error mark. Manual no-change Sync confirms the directory is current without uploading.
+- Fork ends at a complete native checkpoint; if trailing chats are unfinished, the confirmation makes the cutoff explicit. Every new fork has a selectable, zero-chat Pending endpoint.
+- Tool/device labels are compact pills. Scheduled/background sessions are hidden by provenance by default, with a Settings filter applied on Update; title keywords are not used to guess automation.
+- Reasoning with encrypted content but no text says “no readable summary, original preserved.” Expanded context records are bounded and paged, while storage and activation keep original contents.

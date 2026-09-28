@@ -1,5 +1,11 @@
 // Requires a fresh Chrome profile started with --remote-debugging-port=9228.
 import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { createApp } from '../src/server.js';
+import { Store } from '../src/store.js';
+import { Cloud } from '../src/cloud.js';
+import { codexSample } from '../src/demo.js';
 import http from 'node:http';
 import { createHash } from 'node:crypto';
 import { once } from 'node:events';
@@ -58,6 +64,10 @@ assert.equal(await evaluate('document.querySelectorAll(".banner-actions button")
 assert.equal(await evaluate('!!document.querySelector("#upload") || !!document.querySelector(".banner #language")'), false);
 fs.mkdirSync('test-results', { recursive: true });
 const screenshot = async name => { const result = await call('Page.captureScreenshot', { format: 'png' }); fs.writeFileSync('test-results/' + name + '.png', Buffer.from(result.data, 'base64')); };
+assert.equal(await evaluate('document.querySelector("#collect").click();document.querySelector("#collect").dataset.operation'), 'running');
+assert.equal(await evaluate('getComputedStyle(document.querySelector("#collect>.icon")).animationName'),'operation-spin');
+await wait('document.querySelector("#collect").dataset.operation==="success"');
+await new Promise(r=>setTimeout(r,3700));assert.equal(await evaluate('document.querySelector("#collect").dataset.operation'),'');
 await screenshot('v8-active-list');
 await evaluate('[...document.querySelectorAll("[data-scope]")].find(e=>e.dataset.scope==="00000000-0000-4000-8000-000000000001").click()');await wait('document.querySelector("[data-time-group=older]")');
 assert.equal(await evaluate('document.querySelector("[data-time-group=older]").open'),false);assert.equal(await evaluate('document.querySelector("[data-time-group=older]").querySelectorAll(".session-row").length'),0);
@@ -160,8 +170,9 @@ await evaluate('{const p=document.querySelector("#branch-picker");p.value=[...p.
 await wait('document.querySelector(".compaction-edge button")');
 assert.ok(await evaluate('document.querySelectorAll(".graph-node.context-muted").length > 0'));
 assert.ok(await evaluate('document.querySelector("#transcripts .markdown h2")'));
+await evaluate('document.querySelector("#transcripts .activity").open=true');await wait('document.querySelector("#transcripts [data-record]")');
 assert.ok(await evaluate('document.querySelector("#transcripts .file-tags").textContent.includes("notes/experiment.md")'));
-await evaluate('document.querySelector("#transcripts .activity").open=true;document.querySelector("#transcripts [data-record]").click()');
+await evaluate('document.querySelector("#transcripts [data-record]").click()');
 await wait('document.querySelector(".record-detail")');assert.ok(await evaluate('document.querySelector(".record-detail").textContent.includes("notes/experiment.md")'));await evaluate('document.querySelector("#dialog-close").click()');
 
 await evaluate('document.querySelector(".compaction-edge button").click()');
@@ -199,6 +210,10 @@ await evaluate('{ const el=document.querySelector("[name=passphrase]");el.value=
 await wait('document.querySelector("#modify-encryption")');
 assert.ok(await evaluate('document.querySelector("[name=passphrase]").disabled&&document.querySelector("[name=passphrase]").value.length>0'));
 await screenshot('v8-settings-configured');
+assert.ok(await evaluate('document.querySelector(".setup-hint")'));
+await evaluate('document.querySelector("#dialog-close").click();document.querySelector("#sync").click()');await wait('document.querySelector("#sync").dataset.operation==="success"');
+await evaluate('document.querySelector("#sync").click()');await wait('document.querySelector("#toast").textContent==="Already up to date"');
+await evaluate('document.querySelector("#settings").click()');await wait('document.querySelector("#modify-encryption")');
 const clockValues=new Set();for(let i=0;i<15;i++){clockValues.add(await evaluate('document.querySelector("#sync .button-countdown")?.textContent'));await new Promise(r=>setTimeout(r,200));}assert.ok(clockValues.size>1,'Sync clock must advance while Settings is open');
 await evaluate('document.querySelector("#modify-encryption").click()');await wait('document.querySelector("#confirm-encryption")');
 await evaluate('{ const el=document.querySelector("[name=passphrase]");el.focus();el.value="";delete el.dataset.stored;el.dispatchEvent(new Event("input",{bubbles:true}));document.querySelector("#confirm-encryption").click(); }');
@@ -209,5 +224,38 @@ await evaluate('document.querySelector("#dialog-close").click()');
 await call('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 1, mobile: true });
 assert.ok(await evaluate('document.body.scrollWidth <= 390'));
 await screenshot('v8-mobile'); assert.deepEqual(errors, []);
+// A second device must remain empty through verification and unlock.
+const freshRoot=fs.mkdtempSync(path.join(os.tmpdir(),'grove-browser-onboarding-'));
+const freshRoots={codex:path.join(freshRoot,'codex'),claude:path.join(freshRoot,'claude')};
+fs.mkdirSync(path.join(freshRoots.codex,'sessions'),{recursive:true});
+fs.writeFileSync(path.join(freshRoots.codex,'sessions','sample.jsonl'),codexSample(freshRoot,[['Unimported local question','Answer']]));
+const seed=new Store(path.join(freshRoot,'seed')),config={url:mockUrl+'/new-device/Session-Grove/',username:'browser',password:'sample'},cloud=new Cloud(seed,()=>config);
+const cloudBranch=seed.branch(null,'Cloud-only test','codex',codexSample(freshRoot,[['Remote question','Remote answer']]));
+await cloud.publish([cloudBranch.id],'existing-browser-passphrase');seed.close();
+const fresh=createApp({root:path.join(freshRoot,'fresh'),roots:freshRoots,guard:()=>{}});fresh.server.listen(0,'127.0.0.1');await once(fresh.server,'listening');
+try {
+    await call('Page.navigate',{url:'http://127.0.0.1:'+fresh.server.address().port});
+    await wait('document.querySelector("#session-list .empty")');
+    assert.equal(await evaluate('document.querySelectorAll(".session-row").length'),0);
+    assert.equal(await evaluate('!!document.querySelector("#collect .button-countdown")'),false);
+    await evaluate('document.querySelector("#settings").click()');await wait('document.querySelector("#verify-connection")');
+    await evaluate(`for(const [name,value] of Object.entries({url:${JSON.stringify(mockUrl+'/new-device')},username:'browser',password:'sample'})){const el=document.querySelector('[name='+name+']');el.value=value;el.dispatchEvent(new Event('input',{bubbles:true}));}document.querySelector('#verify-connection').click()`);
+    await wait('document.querySelector("#unlock-vault")');
+    assert.equal(await evaluate('!!document.querySelector("[name=passphrase]")'),false);
+    await evaluate('const el=document.querySelector("[name=currentPassphrase]");el.value="existing-browser-passphrase";el.dispatchEvent(new Event("input"));document.querySelector("#unlock-vault").click()');
+    await wait('document.querySelector(".setup-hint")');
+    assert.equal(fresh.store.all('branch').length,0);assert.equal(fresh.autoSync.cloud.projectRefs().length,0);
+    await evaluate('document.querySelector("#dialog-close").click();document.querySelector("#sync").click()');
+    await wait('document.querySelector("#sync").dataset.operation==="success"');
+    assert.equal(fresh.store.all('branch').length,0,'first Sync must not import native history');
+    await evaluate('document.querySelector("[data-scope="+CSS.escape("00000000-0000-4000-8000-000000000001")+"]").click()');
+    await wait('document.querySelectorAll(".session-row").length===1');
+    assert.ok(await evaluate('document.querySelector(".session-row").textContent.includes("Cloud-only test")'));
+    await evaluate('document.querySelector("#collect").click()');await wait('document.querySelector("#collect").dataset.operation==="success"');
+    assert.equal(fresh.store.all('branch').length,1,'Update imports local history independently');
+    assert.deepEqual(errors,[]);
+} finally {
+    await call('Page.navigate',{url:'about:blank'});fresh.server.closeAllConnections();await new Promise(resolve=>fresh.server.close(resolve));fs.rmSync(freshRoot,{recursive:true,force:true});
+}
 console.log('Browser smoke passed: live clocks, shared inbox/time groups, device/tool badges, compact About/footer, aligned selection actions, styled selectors, zoom/pan/reset, clipped ribbons, stale-view rejection, compaction toggle/apply, contiguous ranges, Pending rename, endpoint archive, isolated archived paths, restore, activation preflight, diagnostics entry, narrow layout.');
 await call('Page.close'); ws.close(); mock.close();

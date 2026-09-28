@@ -1,6 +1,14 @@
-# Sync triggers and measured overhead
+# Sync policy
 
-Implemented in 0.8.0. Local capture and cloud traffic are separate.
+## First use and operation feedback (0.8.1)
+
+A new library begins empty. Local discovery and its one-minute timer start after the first explicit Update. WebDAV verification/connection creates only configuration/protocol metadata, never publishes local history or reads cloud project indexes. The first explicit Sync enables cloud catalog reads, lazy hydration, operation-triggered uploads and the 15-minute fallback. Sync does not implicitly opt a fresh device into importing its native history. These onboarding choices persist across restarts. Upgrades retain previously initialized libraries.
+
+Manual and scheduled work share running/success/error events, streamed over one authenticated local HTTP connection. This stream is idle between operations and makes no WebDAV requests. Countdown ticks remain local to the browser. Automatic fallback scans opted-in local sessions first and contacts WebDAV only when dirty; explicit Sync checks remote metadata even when local content is unchanged, but does not publish redundant objects.
+
+## Sync triggers and measured overhead
+
+Implemented in 0.8.1. Local capture and cloud traffic are separate.
 
 | Event | Upload | Check directory / fetch |
 | --- | --- | --- |

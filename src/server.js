@@ -1,3 +1,4 @@
+import { recordPreview } from './record-preview.js';
 import { VERSION } from './version.js';
 import { INBOX_ID, inboxProject } from './inbox.js';
 import { Settings } from './settings.js';
@@ -24,24 +25,22 @@ export function createApp({ root, roots, guard, demo = false }) {
     const diagnostics = new Diagnostics(root);
     const autoSync = new AutoSync(store, () => json(configFile, {}));
     autoSync.diagnostics = diagnostics;
-    autoSync.beforeUpload = () => captureLocal();
-    let interval, nextCaptureAt = null, lastCaptureAt = null;
+    if (store.local('localUpdateStarted') === null) store.local('localUpdateStarted', demo || store.instances().length > 0);
+    if (store.local('syncStarted') === null) store.local('syncStarted', !!store.local('lastSync') || !!autoSync.status().lastCheck);
+    autoSync.configureTimer();
+    autoSync.beforeUpload = () => store.local('localUpdateStarted') ? captureLocal() : null;
+    let capturePromise; let interval, nextCaptureAt = null, lastCaptureAt = null;
     const settings = new Settings(root, store, autoSync, configureCapture); settings.diagnostics = diagnostics;
     const savedKey = settings.savedKey();
     if (savedKey !== null && !fs.existsSync(settings.journal)) autoSync.unlock(savedKey);
-    try {
-        const started = performance.now(), captured = captureLocal();
-        diagnostics.record('capture', { mode: demo ? 'demo' : 'personal', discovered: captured.discovered, updated: captured.updates.length, count: captured.errors.length, durationMs: Math.round(performance.now() - started) });
-    }
-    catch (e) {
-        diagnostics.record('capture-error', { code: 'INITIAL_CAPTURE_FAILED' });
-        store.local('discoveryError', e.message);
-    }
     const management = () => new Map(store.collections().items.map(i => [i.id, hash(JSON.stringify([
         i.projectId ? store.get('project', i.projectId) : inboxProject(), i.sessionIds.map(id => { const b = store.get('branch', id); return [b.id, b.name, b.projectId, b.archived, b.parentId, b.forkEnd, b.nodeHead, b.layoutHead, b.contextPolicy]; }),
         store.get('branch', i.id).layoutHead
     ]))]));
-    const timing = () => ({ appVersion: VERSION, serverNow: Date.now(), stateVersion: diagnostics.startedAt + ':' + store.version + ':' + store.cloudVersion, update: { nextRunAt: nextCaptureAt, lastRunAt: lastCaptureAt } });
+    const streams = new Set(); let updateOperation = null;
+    const operation = (kind, value) => { for (const res of streams) res.write('event: operation\ndata: ' + JSON.stringify({kind, ...value}) + '\n\n'); };
+    autoSync.onOperation = value => operation('sync', {...value, status:autoSync.status()});
+    const timing = () => ({ appVersion: VERSION, serverNow: Date.now(), stateVersion: diagnostics.startedAt + ':' + store.version + ':' + store.cloudVersion, update: { nextRunAt: nextCaptureAt, lastRunAt: lastCaptureAt, started: !!store.local('localUpdateStarted'), operation: updateOperation } });
     const snapshot = () => autoSync.decorate(store.snapshot());
     const server = http.createServer(async (req, res) => {
         const started = performance.now(), requestId = id().slice(0, 8);
@@ -83,7 +82,11 @@ export function createApp({ root, roots, guard, demo = false }) {
                     throw Object.assign(new Error('JSON 格式错误'), { status: 400 });
                 }
                 assert(!autoSync.running || ['/api/settings/confirm','/api/settings/verify','/api/settings/timers'].includes(route), '同步进行中，请稍后操作', 409);
+                assert(!capturePromise || route==='/api/collect', 'Local update in progress.', 409);
                 assert(settings.job?.state !== 'running', 'Settings migration in progress.', 409);
+            }
+            if (req.method === 'GET' && route === '/api/events') {
+                res.writeHead(200, {'Content-Type':'text/event-stream','Cache-Control':'no-store','X-Content-Type-Options':'nosniff'}); res.write(': connected\n\n'); streams.add(res); req.on('close',()=>streams.delete(res)); return;
             }
             if (req.method === 'GET' && route === '/api/status') return send(200, { ...timing(), cloud: autoSync.status() });
             if (req.method === 'GET' && route === '/api/state')
@@ -187,7 +190,7 @@ export function createApp({ root, roots, guard, demo = false }) {
             const compaction = route.match(/^\/api\/branches\/([^/]+)\/compaction$/);
             if (req.method === 'POST' && compaction) return send(200, store.setCompaction(compaction[1], body));
             const record = route.match(/^\/api\/branches\/([^/]+)\/records\/(\d+)$/);
-            if (req.method === 'GET' && record) { const branch = store.get('branch', record[1]); assert(url.searchParams.get('head') === branch.head, 'History changed. Refresh before opening this record.', 409); const r = store.parsed(branch.head, branch.agent).records[Number(record[2]) - 1]; assert(r, 'Record not found.', 404); return send(200, { value: r.value, raw: r.raw }); }
+            if (req.method === 'GET' && record) { const branch = store.get('branch', record[1]); assert(url.searchParams.get('head') === branch.head, 'History changed. Refresh before opening this record.', 409); const ref=store.get('revision',branch.head).refs[Number(record[2])-1];assert(ref,'Record not found.',404);const raw=store.objectStatement.get(ref)?.body;assert(raw,'Record not found.',404);return send(200,recordPreview(JSON.parse(raw),Number(url.searchParams.get('offset')||0))); }
             const detail = route.match(/^\/api\/branches\/([^/]+)$/);
             if (req.method === 'GET' && detail)
                 return send(200, store.detail(detail[1]));
@@ -221,7 +224,7 @@ export function createApp({ root, roots, guard, demo = false }) {
             }
             if (req.method === 'POST' && route === '/api/import')
                 return send(201, native.import(body.key, body.projectId, body.name));
-            if (req.method === 'POST' && route === '/api/collect') { const r = captureLocal(); return send(200, r); }
+            if (req.method === 'POST' && route === '/api/collect') { store.local('localUpdateStarted', true); const r = await captureLocal(); return send(200, r); }
             if (req.method === 'POST' && route === '/api/apply')
                 return send(200, native.apply());
             if (req.method === 'POST' && route === '/api/recover')
@@ -277,20 +280,34 @@ export function createApp({ root, roots, guard, demo = false }) {
         }
     });
     function captureLocal() {
-        const start = performance.now(), r = native.refreshLocal(); lastCaptureAt = Date.now();
-        diagnostics.record('capture', { updated: r.updates.length, discovered: r.discovered, count: r.errors.length, durationMs: Math.round(performance.now() - start) });
-        configureCapture(); return r;
+        if(capturePromise) return capturePromise;
+        capturePromise = performCapture().finally(()=>{capturePromise=null;}); return capturePromise;
+    }
+    async function performCapture() {
+        const startedAt = Date.now(); updateOperation = { id: id(), state: 'running', startedAt }; operation('update', updateOperation);
+        // Flush the operation event before synchronous native parsing starts.
+        await new Promise(resolve => setImmediate(resolve));
+        try {
+            const start = performance.now(), r = native.refreshLocal(); lastCaptureAt = Date.now();
+            diagnostics.record('capture', { updated: r.updates.length, discovered: r.discovered, count: r.errors.length, durationMs: Math.round(performance.now() - start) });
+            updateOperation = { ...updateOperation, state: r.errors.length ? 'error' : 'success', finishedAt: Date.now() };
+            return r;
+        } catch(e) { updateOperation = { ...updateOperation, state: 'error', finishedAt: Date.now() }; throw e; }
+        finally { configureCapture(); operation('update', {...updateOperation,status:{nextRunAt:nextCaptureAt,lastRunAt:lastCaptureAt,started:true}}); }
     }
     function configureCapture() {
         clearTimeout(interval); nextCaptureAt = null;
-        const p = preferences(store); if (!p.localUpdateEnabled) return;
+        const p = preferences(store); if (!p.localUpdateEnabled || !store.local('localUpdateStarted')) return;
         nextCaptureAt = Date.now() + p.localUpdateMinutes * 60000;
-        interval = setTimeout(() => {
-            try { if (!autoSync.running && settings.job?.state !== 'running') captureLocal(); else configureCapture(); }
+        interval = setTimeout(async () => {
+            try { if (!autoSync.running && settings.job?.state !== 'running') await captureLocal(); else configureCapture(); }
             catch { diagnostics.record('capture-error', { code: 'capture_failed' }); configureCapture(); }
         }, p.localUpdateMinutes * 60000); interval.unref();
     }
     configureCapture();
     server.on('close', () => { clearInterval(interval); autoSync.close(); store.close(); });
-    return { server, store, native, autoSync, diagnostics, settings };
+    return { server, store, native, autoSync, diagnostics, settings, close(callback) {
+        for(const res of streams)res.end(); streams.clear();
+        if(capturePromise)capturePromise.catch(()=>{}).finally(()=>server.close(callback)); else server.close(callback);
+    } };
 }

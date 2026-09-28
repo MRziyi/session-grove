@@ -55,9 +55,8 @@ if (!Number.isInteger(port) || port < 0 || port > 65535)
     throw new Error('Invalid port');
 app.server.listen(port, '127.0.0.1', () => {
     console.log(`Session Grove${demo ? ' · isolated demo' : ''}\nhttp://127.0.0.1:${app.server.address().port}\nLibrary: ${root}`);
-    if (app.autoSync.passphrase !== null) app.autoSync.flush('pull').then(() => app.autoSync.flush('queued')).catch(() => {});
 });
-app.server.on('error', e => { console.error(e.message); process.exitCode = 1; app.server.close(); });
+app.server.on('error', e => { console.error(e.message); process.exitCode = 1; app.close(); });
 process.on('exit', () => {
     try {
         if (fs.readFileSync(lock, 'utf8') === String(process.pid))
@@ -66,4 +65,4 @@ process.on('exit', () => {
     catch { }
 });
 for (const signal of ['SIGINT', 'SIGTERM'])
-    process.on(signal, async () => { await app.settings.pending; await app.autoSync.pending?.catch(() => {}); app.server.close(() => process.exit(0)); });
+    process.on(signal, async () => { await app.settings.pending; await app.autoSync.pending?.catch(() => {}); app.close(() => process.exit(0)); });

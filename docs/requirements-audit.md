@@ -1,7 +1,10 @@
-# Requirements and context-fidelity audit — 0.8.0
+# Requirements and context-fidelity audit — 0.8.1
 
 | Requirement | Status / evidence |
 | --- | --- |
+| First-use Update / Sync gates, existing-vault Unlock | Implemented; HTTP, mock WebDAV and new-device browser flow |
+| Animated manual/scheduled operations and no-change Sync | Authenticated local event stream, browser feedback and no-PUT regression |
+| Scheduled/background filter, opaque-reasoning display | Provenance filter, immutable-record and preview tests |
 | Projects own trees; devices/clients are provenance | Implemented; membership, prefix inference and cross-device tests |
 | Current Active / Projects / Archived, isolated archived paths | Implemented; server projections and stale-response browser regression |
 | Logical Nodes, Pending, continuous ranges, shared-prefix edits | Implemented; repartition, branch-boundary and browser tests |

@@ -1,0 +1,1 @@
+Claude brand mark: [Simple Icons](https://github.com/simple-icons/simple-icons/blob/develop/icons/claude.svg), CC0-1.0. Brand marks remain the property of their owners. Device pictograms are local SVG drawings (Mac Studio enclosure, laptop, desktop, Windows panes); no network icon requests.

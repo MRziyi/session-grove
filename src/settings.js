@@ -31,6 +31,7 @@ export class Settings {
         const old = this.read(), destination = this.draft?.config || old;
         assert(this.draft || old.verified, 'Verify WebDAV first.');
         const oldPassphrase = body.currentPassphrase ?? this.savedKey();
+        if (this.status().needsCurrentPassphrase) assert(body.passphrase === undefined, 'Unlock the existing vault before changing encryption.');
         const passphrase = body.passphrase === undefined ? oldPassphrase ?? (this.draft?.vault?.mode === 'plain' ? '' : null) : body.passphrase;
         assert(typeof passphrase === 'string' && (!passphrase.length || passphrase.length >= 12), 'Use at least 12 characters, or leave encryption off.');
         this.job = { state: 'running', phase: this.autoSync.running ? 'waiting' : 'preparing', completed: 0, total: 0 };
@@ -56,7 +57,7 @@ export class Settings {
                 }
                 const cloud = new Cloud(this.store, () => destination); await cloud.connect(passphrase); if (migratedCache) cloud.save(migratedCache); cloud.lock();
                 this.commit(destination, passphrase);
-                this.autoSync.unlock(passphrase); await this.autoSync.flush('pull', true);
+                this.autoSync.unlock(passphrase);
                 this.diagnostics?.record('settings-change', { phase: 'complete', count: cleanupPending, durationMs: Date.now() - started });
                 this.job = { ...this.job, state: 'complete', phase: 'complete', cleanupPending }; this.draft = null;
             } catch (e) {
@@ -77,7 +78,7 @@ export class Settings {
         const pending = json(this.journal, null); assert(pending, 'No settings recovery is pending.');
         const { vault } = await verifyConnection(pending.destination); assert(vault, 'Migration did not publish. Verify the connection and retry the change.');
         vaultKey(vault, pending.passphrase); this.commit(pending.destination, pending.passphrase); this.autoSync.unlock(pending.passphrase);
-        this.job = null; this.draft = null; await this.autoSync.flush('pull'); return this.status();
+        this.job = null; this.draft = null; return this.status();
     }
     timers(body) { const p = savePreferences(this.store, body); this.autoSync.configureTimer(); this.onTimers(); return p; }
 }

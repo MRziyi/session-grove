@@ -1,5 +1,23 @@
 let language = localStorage.getItem('grove-language') === 'zh' ? 'zh' : 'en';
 const dictionary = {
+    'Save preferences': '保存设置',
+    'Sync failed': '同步失败',
+    "Already up to date": "已经是最新版本",
+    "Unlock vault": "解锁资料库",
+    "Loading…": "加载中…",
+    "Previous": "上一页",
+    "Next": "下一页",
+    "Ready · click Sync": "已就绪 · 点击 Sync",
+    "Ready. Click Sync once to load the cloud directory and enable automatic sync.": "已就绪。请首次手动点击 Sync，读取云端目录并启用自动同步。",
+    "Ready. Close Settings and click Sync once to load the cloud directory and enable automatic sync.": "配置已完成。关闭设置后，请首次手动点击 Sync，读取云端目录并启用自动同步。",
+    "Click Update to read local sessions, or configure WebDAV and click Sync to load the cloud directory.": "点击上方 Update 读取本地会话；或配置 WebDAV 后点击 Sync 读取云端目录。",
+    "This cloud vault is encrypted. Enter its existing passphrase to connect. Encryption can be changed afterward.": "此云端资料库已加密。输入它现有的口令以连接，连接后可修改加密设置。",
+    "Show scheduled and background sessions": "显示定时任务和后台会话",
+    "Fork from the last completed turn. {count} chats from the unfinished turn will stay on the original path.": "将从最近的完整轮次创建分支。未完成轮次中的 {count} 条对话会留在原路径。",
+    "Encrypted reasoning · no readable summary. Original preserved.": "加密推理记录 · 无可读摘要，原始内容已保留。",
+    "Encrypted reasoning is preserved in the session; only its readable summary can be displayed.": "加密推理内容保留在原始会话中；界面只能显示其可读摘要。",
+    "Use Update after changing this filter. Native files are never deleted.": "修改筛选后点击 Update。不会删除原生文件。",
+
     'Due': '待执行', 'Updating…': '更新中…',
     'Periodic upload fallback': '定时上传兜底',
     '{count} archived sessions are still active on this device.': '有 {count} 条已归档会话仍在本机激活。', 'Deactivate archived sessions': '停用已归档会话',

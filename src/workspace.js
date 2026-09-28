@@ -1,3 +1,4 @@
+import { preferences } from './preferences.js';
 import { INBOX_ID, inboxProject, cloudProjectId } from './inbox.js';
 import { contentOrigin } from './device.js';
 import { supportedHistory } from './codex-history.js';
@@ -9,8 +10,10 @@ import { rootOf, treeMembers } from './organization.js';
 // Native threads, collection rows, and logical nodes are distinct projections.
 export const isActive = i => i.applied && !i.missing && !i.excluded && i.cwdAvailable !== false;
 export function visibleSession(store, b) {
-    if (b.synthetic || b.excluded) return false;
-    return !store.summary(b.head,b.agent).excluded;
+    if (b.scheduled && !preferences(store).showScheduledSessions) return false;
+    if (b.synthetic || b.excluded && !(b.excluded === 'scheduled' && preferences(store).showScheduledSessions)) return false;
+    const excluded=store.summary(b.head,b.agent).excluded;
+    return !excluded || excluded === 'scheduled' && preferences(store).showScheduledSessions;
 }
 const modified = b => b.contentUpdatedAt || b.updatedAt;
 export function collections(store) {
@@ -142,6 +145,11 @@ export function buildGraph(store, branchId) {
             const n = byNode.get(id);
             n.branchIds.push(p.branchId);
         }
+        const branch = store.get('branch', p.branchId);
+        if (branch.parentId && !p.messages.some(m => m.line > branch.forkEnd)) {
+            const empty = {id:'empty-'+p.branchId, empty:true, name:null, pending:true, chatIds:[], branchIds:[p.branchId], endBranchIds:[], parentIds:[], childIds:[]};
+            nodes.push(empty); byNode.set(empty.id,empty); p.nodeIds.push(empty.id);
+        }
         if (p.nodeIds.length) byNode.get(p.nodeIds.at(-1)).endBranchIds.push(p.branchId);
         for (let i = 1; i < p.nodeIds.length; i++) {
             const a = p.nodeIds[i - 1], b = p.nodeIds[i];
@@ -163,7 +171,7 @@ export function buildGraph(store, branchId) {
             n.color = `${n.pending ? 'pending' : 'color'}-${color}`;
             n.splitBoundary = n.childIds.length > 1 || n.endBranchIds.length > 0;
             n.count = n.chatIds.length;
-            n.agents = [...new Set(n.chatIds.map(id => messages.get(id)?.agent).filter(Boolean))];
+            n.agents = n.empty ? [store.get('branch',n.branchIds[0]).agent] : [...new Set(n.chatIds.map(id => messages.get(id)?.agent).filter(Boolean))];
             n.origin = messages.get(n.chatIds.at(-1))?.origin || null;
             n.tokens = { estimate: n.chatIds.reduce((sum, id) => sum + estimateTokens(messages.get(id)?.text), 0), recordedEstimate: n.chatIds.reduce((sum, id) => sum + estimateTokens(messages.get(id)?.text) + (messages.get(id)?.toolTokens || 0), 0), kind: 'recorded-text-estimate' };
             n.afterCompaction = compactStarts.has(n.chatIds[0]);

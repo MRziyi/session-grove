@@ -36,14 +36,15 @@ export class Store {
         this.localWrite = this.db.prepare('INSERT OR REPLACE INTO local VALUES (?,?)');
         initializeOrganization(this);
     }
-    invalidate() { this.version++; this.memoCache.clear(); }
+    invalidate() { this.version++; this.memoCache.clear(); this.graphCache=null; }
     memo(key, fn) { if (!this.memoCache.has(key)) this.memoCache.set(key, fn()); return this.memoCache.get(key); }
     parsed(revisionId, agent) {
         const key = agent + ':' + revisionId;
         if (this.parseCache.has(key)) { const entry = this.parseCache.get(key); this.parseCache.delete(key); this.parseCache.set(key, entry); return entry.value; }
         const raw = this.raw(revisionId), value = parse(raw, agent), size = Buffer.byteLength(raw);
         while (this.parseCache.size && (this.parseBytes + size > 24 * 1024 * 1024 || this.parseCache.size >= 24)) { const key = this.parseCache.keys().next().value; this.parseBytes -= this.parseCache.get(key).size; this.parseCache.delete(key); }
-        if (size < 24 * 1024 * 1024) { this.parseCache.set(key, { value, size }); this.parseBytes += size; }
+        // Keep one oversized session rather than reparsing it for every projection.
+        if (size <= 100 * 1024 * 1024) { this.parseCache.set(key, { value, size }); this.parseBytes += size; }
         return value;
     }
     summary(revisionId, agent) {
@@ -53,7 +54,7 @@ export class Store {
     rememberSummary(revisionId,agent,p) {
         const key=agent+':'+revisionId, chats = p.messages.filter(m => m.role !== 'tool').length;
         const value = { chats, firstUser:p.messages.find(m=>m.role==='user')?.text.slice(0,100), complete: p.complete && !p.errors.length, external: p.warnings.some(w=>w.includes('外部附件')), nativeId:p.nativeId, cwd:p.cwd, mode:p.meta?.history_mode, forkedFrom:p.meta?.forked_from_id || p.meta?.forkedFromId, forkOrdinal:p.meta?.forked_from_ordinal_exclusive, forkEnd:p.meta?.forked_from_ordinal_exclusive == null ? -1 : p.records.findIndex(r=>r.value?.ordinal >= p.meta.forked_from_ordinal_exclusive), supported:supportedHistory(p),
-            excluded:sessionExclusion({agent,source:p.meta?.source,sidechain:agent === 'claude' && p.records.find(r=>['user','assistant'].includes(r.value?.type))?.value?.isSidechain === true,chats}) };
+            excluded:sessionExclusion({agent,source:p.meta?.source,threadSource:p.meta?.thread_source,sidechain:agent === 'claude' && p.records.find(r=>['user','assistant'].includes(r.value?.type))?.value?.isSidechain === true,chats}) };
         if(this.summaryCache.size >= 4096) this.summaryCache.delete(this.summaryCache.keys().next().value);
         this.summaryCache.set(key,value); return value;
     }
@@ -210,7 +211,11 @@ export class Store {
     detectFamilies() { return detectFamilies(this); }
     collections() { return this.memo('collections', () => collections(this)); }
     listing(scope, query) { return listing(this, scope, query); }
-    treeGraph(id, view = 'all') { return treeGraph(this, id, view); }
+    treeGraph(id, view = 'all') {
+        const key = `${this.version}:${id}:${view}`;
+        if(this.graphCache?.key===key)return this.graphCache.value;
+        const value=treeGraph(this,id,view);this.graphCache={key,value};return value;
+    }
     organize(id, options) { return organize(this, id, options); }
     moveItems(options) { return moveItems(this, options); }
     snapshot() { return this.memo('snapshot', () => this.buildSnapshot()); }

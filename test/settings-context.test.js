@@ -96,3 +96,17 @@ test('settings confirmation queues behind a running sync instead of rejecting th
  let release;const active=auto.exclusive(()=>new Promise(r=>release=r));await new Promise(r=>setTimeout(r,0));
  settings.start({passphrase:'replacement-settings-key'});assert.equal(settings.job.phase,'waiting');release();await active;await settings.pending;assert.equal(settings.job.state,'complete');assert.equal(auto.passphrase,'replacement-settings-key');
 });
+
+test('new-device verification and unlock never fetch catalog or histories before the first explicit sync',async t=>{
+ const e=await fixture(t),a=e.device('source'),b=e.device('fresh'),pass='existing-synthetic-key';
+ const branch=a.store.branch(null,'Cloud session','codex',codexSample('/work',[['Context','Answer']]));await a.cloud.publish([branch.id],pass);
+ b.store.local('syncStarted',false);const auto=new AutoSync(b.store,()=>settings.read()),settings=new Settings(b.store.root,b.store,auto,()=>{});t.after(()=>auto.close());
+ await settings.verify(e.config);assert.equal(settings.status().needsCurrentPassphrase,true);
+ assert.throws(()=>settings.start({currentPassphrase:pass,passphrase:'unwanted-new-key'}),/Unlock/);
+ e.requests.length=0;settings.start({currentPassphrase:pass});await settings.pending;assert.equal(settings.job.state,'complete');
+ await auto.checkCatalog(0);await auto.openProject('00000000-0000-4000-8000-000000000001');await auto.fallback();auto.schedule([branch.id]);
+ assert.equal(b.store.all('branch').length,0);assert.equal(auto.status().nextRunAt,null);assert.equal(auto.cloud.projectRefs().length,0);
+ assert.ok(!e.requests.some(([method,key])=>method==='PROPFIND'||method==='GET'&&/\/(objects|trees|projects|heads)\/.+/.test(key)));
+ await auto.flush('both',true);assert.equal(auto.status().started,true);assert.ok(auto.cloud.projectRefs().length);assert.equal(b.store.all('branch').length,0,'catalog-only sync remains lazy');
+ e.requests.length=0;const result=await auto.flush('both',true);assert.equal(result.published,0);assert.equal(result.remoteChanged,false);assert.ok(!e.requests.some(([method])=>method==='PUT'),'an unchanged manual sync must not upload');
+});

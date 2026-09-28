@@ -15,7 +15,7 @@ export function ledger(parsed, agent) {
             if(v.type==='response_item'){
                 if(['function_call','custom_tool_call'].includes(p.type)){const args=p.arguments??p.input??'',e=add(line,'tool-call',p.name||p.type,text(args),{files:fileNames(args),callId:p.call_id});calls.set(p.call_id,e);}
                 else if(['function_call_output','custom_tool_call_output'].includes(p.type)){const call=calls.get(p.call_id);add(line,'tool-result',call?.label||p.type,text(p.output),{files:call?.files||[],callId:p.call_id});}
-                else if(p.type==='reasoning'){add(line,'reasoning','Reasoning',content(p.summary)+'\n'+content(p.content),{opaque:!!p.encrypted_content});}
+                else if(p.type==='reasoning'){add(line,'reasoning','Reasoning',content(p.summary)+'\n'+content(p.content),{opaque:!!p.encrypted_content, unreadable:!!p.encrypted_content&&!content(p.summary).trim()&&!content(p.content).trim()});}
                 else if(p.type==='message'&&!['user','assistant'].includes(p.role))add(line,'instructions',p.role||'Instructions',content(p.content));
                 else if(p.type==='message'){for(const c of Array.isArray(p.content)?p.content:[])if(!['text','input_text','output_text'].includes(c.type))add(line,'attachment',c.type,'',{opaque:true});}
                 else add(line,'other',p.type||'Response item','',{opaque:true});

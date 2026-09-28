@@ -1,3 +1,4 @@
+import { preferences } from './preferences.js';
 import { readCodexHistory, codexFiles } from './codex-history.js';
 import fs from 'node:fs';
 import { policyHash } from './context-policy.js';
@@ -32,7 +33,7 @@ export class Native {
         // references that revision instead of duplicating the whole log in local state.
         const instances = store.instances(); let compacted = false;
         for (const i of instances) {
-            if (i.summaryVersion === 1 && i.summaryRevision === i.baseRevision && i.summaryJson) { try { store.summaryCache.set(i.agent+':'+i.baseRevision,JSON.parse(i.summaryJson)); } catch {} }
+            if (i.summaryVersion === 2 && i.summaryRevision === i.baseRevision && i.summaryJson) { try { store.summaryCache.set(i.agent+':'+i.baseRevision,JSON.parse(i.summaryJson)); } catch {} }
             if (i.adopted && i.baseline) { i.baseline=null; compacted=true; }
             else if (i.baseline && i.baseRevision && i.baseline === store.raw(i.baseRevision)) { i.baseline = null; compacted = true; }
         }
@@ -44,7 +45,7 @@ export class Native {
     }
     history(file, agent) { return agent === 'codex' ? readCodexHistory(file, this.historyFiles || codexFiles(this.roots.codex)) : this.read(file); }
     discover() {
-        const found = [], errors = [];
+        const found = [], errors = [], showScheduled = preferences(this.store).showScheduledSessions;
         const instances = this.store.instances();
         this.catalog.clear(); this.observations = new Map(); this.historyFiles = [...new Set([...codexFiles(this.roots.codex), ...instances.filter(i => i.agent === 'codex' && i.file && inside(this.store.root, i.file) && fs.existsSync(i.file)).map(i => i.file)])];
         for (const agent of ['codex', 'claude']) {
@@ -84,7 +85,7 @@ export class Native {
                         continue;
                     try {
                         const indexed = indexedFiles.get(path.resolve(file));
-                        const internal = indexed && sessionExclusion({ agent, source: indexed.source, threadSource: indexed.thread_source });
+                        const internal = indexed && sessionExclusion({ showScheduled, agent, source: indexed.source, threadSource: indexed.thread_source });
                         if (internal) { this.observations.set(file, { nativeId: indexed.id, excluded: internal }); continue; }
                         const namedId = path.basename(file).match(/[a-f0-9]{8}-(?:[a-f0-9]{4}-){3}[a-f0-9]{12}/)?.[0];
                         if (namedId && canonicalPaths.has(namedId) && canonicalPaths.get(namedId) !== path.resolve(file)) continue;
@@ -92,15 +93,16 @@ export class Native {
                         const known = agent === 'codex' && indexed?.source && instances.find(i=>i.nativeId===indexed.id && i.agent===agent);
                         const saved = known && this.store.summary(known.baseRevision,agent);
                         let p = saved ? { nativeId:known.nativeId,cwd:known.cwd,count:saved.chats,firstUser:saved.firstUser,source:indexed.source,warnings:[],errors:0 } : this.scanCache.get(file)?.stamp === stamp ? this.scanCache.get(file).summary : null;
-                        if (!p) { const full = parse(this.history(file, agent), agent); p = { nativeId: full.nativeId, cwd: full.cwd, title: full.records.filter(r => r.value?.type === 'custom-title').at(-1)?.value?.customTitle, firstUser: full.messages.find(m => m.role === 'user')?.text.slice(0, 100), count: full.messages.filter(m => m.role !== 'tool').length, source: full.meta?.source, sidechain: full.records.find(r => ['user', 'assistant'].includes(r.value?.type))?.value?.isSidechain === true, warnings: full.warnings, errors: full.errors.length }; this.scanCache.set(file, { stamp, summary: p }); }
+                        if (!p) { const full = parse(this.history(file, agent), agent); p = { nativeId: full.nativeId, cwd: full.cwd, title: full.records.filter(r => r.value?.type === 'custom-title').at(-1)?.value?.customTitle, firstUser: full.messages.find(m => m.role === 'user')?.text.slice(0, 100), count: full.messages.filter(m => m.role !== 'tool').length, source: full.meta?.source, threadSource:full.meta?.thread_source, sidechain: full.records.find(r => ['user', 'assistant'].includes(r.value?.type))?.value?.isSidechain === true, warnings: full.warnings, errors: full.errors.length }; this.scanCache.set(file, { stamp, summary: p }); }
                         if (p.errors) { errors.push({ file:path.basename(file), message:'Native record is still being written.' }); continue; }
                         if (!p.nativeId)
                             continue;
                         if (canonicalPaths.has(p.nativeId) && canonicalPaths.get(p.nativeId) !== path.resolve(file)) continue;
                         const info = provenance.get(p.nativeId) || {};
-                        const excluded = sessionExclusion({ agent, source: info.source, threadSource: info.threadSource }) || sessionExclusion({ agent, source: p.source, sidechain: p.sidechain, chats: p.count });
+                        const excluded = sessionExclusion({ showScheduled, agent, source: info.source, threadSource: info.threadSource }) || sessionExclusion({ showScheduled, agent, source: p.source, threadSource:p.threadSource, sidechain: p.sidechain, chats: p.count });
                         const nativeTitle = titles.get(p.nativeId) || p.title;
-                        const item = { key: hash(file), agent, nativeId: p.nativeId, cwd: indexed?.cwd || p.cwd || '', cwdAvailable: !(indexed?.cwd || p.cwd) || fs.existsSync(indexed?.cwd || p.cwd), title: nativeTitle || p.firstUser || 'Untitled session', messages: p.count, updatedAt: stat.mtime.toISOString(), managed: instances.some(i => i.file === file || i.agent === agent && i.nativeId === p.nativeId), warnings: p.warnings, excluded, source: info.source ?? p.source, archived: dir === 'archived_sessions' || archivedIds.has(p.nativeId) };
+                        const scheduled = [sessionExclusion({agent,source:info.source,threadSource:info.threadSource}),sessionExclusion({agent,source:p.source,threadSource:p.threadSource})].includes('scheduled');
+                        const item = { scheduled, key: hash(file), agent, nativeId: p.nativeId, cwd: indexed?.cwd || p.cwd || '', cwdAvailable: !(indexed?.cwd || p.cwd) || fs.existsSync(indexed?.cwd || p.cwd), title: nativeTitle || p.firstUser || 'Untitled session', messages: p.count, updatedAt: stat.mtime.toISOString(), managed: instances.some(i => i.file === file || i.agent === agent && i.nativeId === p.nativeId), warnings: p.warnings, excluded, source: info.source ?? p.source, archived: dir === 'archived_sessions' || archivedIds.has(p.nativeId) };
                         this.observations.set(file, item);
                         if (excluded) continue;
                         this.catalog.set(item.key, { ...item, file });
@@ -126,7 +128,7 @@ export class Native {
             const displayTitle = String(name || item.title).trim() || 'Untitled session';
             const b = this.store.branch(projectId, displayTitle, item.agent, raw, { cwd: item.cwd, agent: item.agent, nativeId: item.nativeId, client: 'unknown', operation: 'import', requiresAuxiliary });
             b.contentUpdatedAt = item.updatedAt;
-            b.archived = !!item.archived;
+            b.archived = !!item.archived; b.scheduled = !!item.scheduled;
             this.store.put('branch', b);
             const instances = this.store.instances();
             instances.push({ id: id(), branchId: b.id, agent: b.agent, root: this.roots[b.agent], nativeId: item.nativeId, file: item.file, cwd: item.cwd, cwdAvailable: item.cwdAvailable, desired: observe && !item.archived, applied: !item.archived, baseRevision: b.head, baseline: null, historyResolved: true, observedHash: hash(physical), adopted: true, title: b.name, excluded: false, requiresAuxiliary });
@@ -145,6 +147,7 @@ export class Native {
             if (current && current.file !== instance.file && instance.applied) { instance.file = current.file; this.observedStats.delete(instance.id); }
             const observed = current || this.observations.get(instance.file); if (!observed) continue;
             const branch = this.store.get('branch', instance.branchId), patch = {};
+            if(observed.scheduled!==undefined && !!branch.scheduled!==observed.scheduled)patch.scheduled=observed.scheduled;
             if ((branch.excluded || null) !== observed.excluded) { patch.excluded = observed.excluded; metadataChanged = true; }
             if (observed.cwdAvailable !== undefined && instance.cwdAvailable !== observed.cwdAvailable) { instance.cwdAvailable = observed.cwdAvailable; metadataChanged = true; }
             if (instance.excluded !== !!observed.excluded) { instance.excluded = !!observed.excluded; metadataChanged = true; }
@@ -173,7 +176,7 @@ export class Native {
     }
     setActive(branchId, cwd, desired) {
         const b = this.store.get('branch', branchId);
-        assert(!b.excluded, 'Agent-owned or empty records are not managed as sessions.');
+        assert(!b.excluded || b.excluded==='scheduled' && preferences(this.store).showScheduledSessions, 'Agent-owned or empty records are not managed as sessions.');
         assert(!desired || !b.archived, '请先恢复归档分支');
         if (desired) {
             assert(typeof cwd === 'string' && path.isAbsolute(cwd) && fs.existsSync(cwd) && fs.statSync(cwd).isDirectory(), '目标必须是本机存在的绝对工程目录');
@@ -211,7 +214,7 @@ export class Native {
                 if (!i.missing && (this.observedStats.get(i.id) || i.observedStamp) === stamp) continue;
                 const raw = this.read(i.file);
                 i.missing = false;
-                if (hash(raw) === i.observedHash && (!i.adopted || i.historyResolved)) { this.observedStats.set(i.id, stamp); i.observedStamp=stamp; i.summaryJson=JSON.stringify(this.store.summary(i.baseRevision,i.agent)); i.summaryRevision=i.baseRevision; i.summaryVersion=1; continue; }
+                if (hash(raw) === i.observedHash && (!i.adopted || i.historyResolved)) { this.observedStats.set(i.id, stamp); i.observedStamp=stamp; i.summaryJson=JSON.stringify(this.store.summary(i.baseRevision,i.agent)); i.summaryRevision=i.baseRevision; i.summaryVersion=2; continue; }
                 const p = parse(raw, i.agent);
                 if (p.errors.length) {
                     i.pending = '等待完整轮次';
@@ -231,7 +234,7 @@ export class Native {
                 if(logical===raw)this.store.rememberSummary(b.head,i.agent,p);
                 const summary=this.store.summary(b.head,i.agent);
                 if(b.excluded==='empty' && !summary.excluded){this.store.put('branch',metadata(b,{excluded:null}));i.excluded=false;}
-                i.summaryJson=JSON.stringify(summary);i.summaryRevision=b.head;i.summaryVersion=1;i.observedStamp=stamp;
+                i.summaryJson=JSON.stringify(summary);i.summaryRevision=b.head;i.summaryVersion=2;i.observedStamp=stamp;
                 i.baseline = i.adopted || raw === logical ? null : raw;
                 i.observedHash = hash(raw);
                 i.historyResolved = true; i.pending = p.complete ? null : '等待完整轮次'; this.observedStats.set(i.id, stamp);

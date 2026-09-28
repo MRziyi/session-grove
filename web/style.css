@@ -1259,3 +1259,10 @@ dialog::backdrop {
 @media(max-width:600px){.device-tag span{display:none}.row-tags{gap:5px}.row-meta{gap:5px}}
 
 .native-notice{display:flex;align-items:center;gap:12px;margin:10px 24px;padding:8px 12px;background:#fff7e8;border:1px solid #ebdbb7;border-radius:7px;font-size:12px;color:#806127}.native-notice[hidden]{display:none}.native-notice button{margin-left:auto;font-size:12px}
+
+/* Compact provenance pills and operation feedback. */
+.tool-tag,.device-tag,.mixed-tag{border-radius:999px;padding:2px 6px;border:1px solid #dce5ed;background:#eef3f7;font-size:10px;line-height:1.3}.tool-tag{background:#eaf5f0;border-color:#d2e6df}.tool-tag.claude{background:#faf0e8;border-color:#eedacb}.tool-tag.compact{padding:2px 3px}.row-meta{font-size:11px;gap:6px}.row-tags{gap:4px}.row-date{font-size:11px}
+.banner-actions button[data-operation=running]>.icon{animation:operation-spin 1s linear infinite}.banner-actions button[data-operation=success]>.icon{color:#81dfb1}.banner-actions button[data-operation=error]>.icon{color:#ffc66d}.banner-actions button[data-operation=running] .button-countdown{visibility:hidden}
+@keyframes operation-spin{to{transform:rotate(360deg)}}
+@media(prefers-reduced-motion:reduce){.banner-actions button[data-operation=running]>.icon{animation:operation-spin 3s linear infinite}}
+.setup-hint{font-size:12px;padding:9px;background:#e8f3ee;border-radius:6px;color:#316d55}.record-pages{display:flex;align-items:center;justify-content:center;gap:12px;font-size:11px}.record-pages button{font-size:11px}.record-detail{content-visibility:auto}
