@@ -15,7 +15,7 @@ const debuggerBase = process.argv[3] || 'http://127.0.0.1:9228';
 const mockFiles=new Map();
 const mock=http.createServer(async(req,res)=>{const key=req.url,chunks=[];for await(const c of req)chunks.push(c);const etag=mockFiles.has(key)?'"'+createHash('sha256').update(mockFiles.get(key)).digest('hex')+'"':null;
 if(req.method==='MKCOL'){res.writeHead(201);return res.end();}
-if(req.method==='PUT'){if(req.headers['if-none-match']==='*'&&mockFiles.has(key)||req.headers['if-match']&&req.headers['if-match']!==etag){res.writeHead(412);return res.end();}mockFiles.set(key,Buffer.concat(chunks));res.writeHead(201);return res.end();}
+if(req.method==='PUT'){await new Promise(r=>setTimeout(r,30));if(req.headers['if-none-match']==='*'&&mockFiles.has(key)||req.headers['if-match']&&req.headers['if-match']!==etag){res.writeHead(412);return res.end();}mockFiles.set(key,Buffer.concat(chunks));res.writeHead(201);return res.end();}
 if(req.method==='DELETE'){for(const k of mockFiles.keys())if(k===key||key.endsWith('/')&&k.startsWith(key))mockFiles.delete(k);res.writeHead(204);return res.end();}
 if(req.method==='PROPFIND'){res.writeHead(207);return res.end('<D:multistatus xmlns:D="DAV:">'+[...mockFiles.keys()].filter(k=>k.startsWith(key)&&!k.slice(key.length).includes('/')).map(k=>'<D:response><D:href>'+k+'</D:href></D:response>').join('')+'</D:multistatus>');}
 if(mockFiles.has(key)){if(req.headers['if-none-match']===etag){res.writeHead(304);return res.end();}res.writeHead(200,{ETag:etag});return res.end(mockFiles.get(key));}res.writeHead(404);res.end();});
@@ -60,8 +60,8 @@ assert.ok(await evaluate('[...document.querySelectorAll("[data-scope]")].some(e=
 assert.ok(await evaluate('document.querySelector(".nav-footer").getBoundingClientRect().height <= 44'));
 assert.ok(await evaluate('document.querySelector(".row-tags .tool-tag") && document.querySelector(".row-tags .device-tag")'));
 const countdown = await evaluate('document.querySelector("#collect .button-countdown").textContent'); await new Promise(r=>setTimeout(r,1300));assert.notEqual(await evaluate('document.querySelector("#collect .button-countdown").textContent'),countdown);
-assert.equal(await evaluate('document.querySelectorAll(".banner-actions button").length'), 3);
-assert.equal(await evaluate('!!document.querySelector("#upload") || !!document.querySelector(".banner #language")'), false);
+assert.equal(await evaluate('document.querySelectorAll(".banner-actions button").length'), 5);
+assert.equal(await evaluate('!!document.querySelector(".banner #language")'), false);
 fs.mkdirSync('test-results', { recursive: true });
 const screenshot = async name => { const result = await call('Page.captureScreenshot', { format: 'png' }); fs.writeFileSync('test-results/' + name + '.png', Buffer.from(result.data, 'base64')); };
 assert.equal(await evaluate('document.querySelector("#collect").click();document.querySelector("#collect").dataset.operation'), 'running');
@@ -214,7 +214,10 @@ assert.ok(await evaluate('document.querySelector(".setup-hint")'));
 await evaluate('document.querySelector("#dialog-close").click();document.querySelector("#sync").click()');await wait('document.querySelector("#sync").dataset.operation==="success"');
 await evaluate('document.querySelector("#sync").click()');await wait('document.querySelector("#toast").textContent==="Already up to date"');
 await evaluate('document.querySelector("#settings").click()');await wait('document.querySelector("#modify-encryption")');
-const clockValues=new Set();for(let i=0;i<15;i++){clockValues.add(await evaluate('document.querySelector("#sync .button-countdown")?.textContent'));await new Promise(r=>setTimeout(r,200));}assert.ok(clockValues.size>1,'Sync clock must advance while Settings is open');
+const clockValues=new Set();for(let i=0;i<15;i++){clockValues.add(await evaluate('document.querySelector("#upload .button-countdown")?.textContent'));await new Promise(r=>setTimeout(r,200));}assert.ok(clockValues.size>1,'Sync clock must advance while Settings is open');
+await evaluate('document.querySelector("#dialog-close").click();document.querySelector("#sync-menu-toggle").click();document.querySelector("#upload").click()');await wait('!document.querySelector("#transfer-progress").hidden');assert.ok(await evaluate('document.querySelector("#transfer-progress progress")'));await wait('document.querySelector("#toast").textContent==="Upload complete"');
+assert.equal(await evaluate('!!document.querySelector("#upload .button-countdown")'),false);assert.equal(await evaluate('document.querySelector("#upload").disabled'),true);
+await evaluate('document.querySelector("#settings").click()');await wait('document.querySelector("#modify-encryption")');
 await evaluate('document.querySelector("#modify-encryption").click()');await wait('document.querySelector("#confirm-encryption")');
 await evaluate('{ const el=document.querySelector("[name=passphrase]");el.focus();el.value="";delete el.dataset.stored;el.dispatchEvent(new Event("input",{bubbles:true}));document.querySelector("#confirm-encryption").click(); }');
 await wait('document.querySelector("#modify-encryption")&&document.querySelector(".setting-warning")');

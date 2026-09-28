@@ -32,7 +32,7 @@ Grove manages the session library. **Codex and Claude Code remain where you actu
 3. Open a tree. Click a start chat and an end chat to select a continuous range, then **Combine** it under a useful title. **Dissolve** returns a range to Pending.
 4. Select any graph Node to **Rename** it. Naming a Pending segment turns it into a saved Node. **Fork** appears when that Node ends at a complete agent turn.
 5. Select a session's endpoint to **Activate**, **Deactivate**, or **Archive** that path. Archived paths disappear from the in-use graph and remain complete in Archived. Other branches stay visible.
-6. Continue chatting in the agent. New chats extend Pending automatically. Organizing Nodes triggers cloud publication; **Sync** can also publish the Pending you have not organized yet.
+6. Continue chatting in the agent. New chats extend Pending automatically. Organizing Nodes triggers cloud publication; **Upload changes** can also publish the Pending you have not organized yet.
 
 A Fork adds a selectable empty endpoint. If the selected Node contains an unfinished turn, the confirmation identifies the chats excluded at the last completed checkpoint. The new path inherits its compaction choices.
 
@@ -66,13 +66,13 @@ WebDAV is optional. Enter your server address, account and password; Grove adds 
 
 Filing work, naming Nodes and other organization changes upload automatically. Local sessions refresh every **1 minute** by default. A **15-minute** fallback uploads changed projects, including unfinished Pending. Every upload captures local updates first; an unchanged library makes no scheduled cloud request. Both intervals can be changed or disabled in Settings.
 
-**Sync** sends outstanding project changes—including unfinished Pending—and checks the cloud directory. The hover text shows the last upload and directory-check times. Native Active choices stay local to each device. On a new installation, nothing is imported automatically: click **Update** once to enable local reading; configure WebDAV and click **Sync** once to enable cloud synchronization. Existing encrypted vaults ask for their current passphrase, with an explicit Unlock button. After that, cloud reads follow startup, focus and explicit navigation with freshness checks; ordinary page refreshes do not poll WebDAV. Sync and Update show live countdowns and spin for actual manual or automatic work, followed by a brief green check or error indicator. An unchanged manual Sync reports “Already up to date” without uploading. Ticking countdowns makes no server request and pauses when the page is hidden.
+**Download** checks the cloud directory without publishing local work. Its adjacent menu contains **Upload changes**, the upload countdown and transfer progress. Local changes start the automatic-upload countdown; it stops when everything is published. The hover text shows recent upload/check times. Native Active choices stay local to each device. On a new installation, click **Update** once to enable local reading; configure WebDAV and click **Download** once to enable cloud access. Existing encrypted vaults ask for their current passphrase and an explicit Unlock. Later startup, focus and navigation check remote freshness; ordinary page refreshes do not poll WebDAV. Active transfers spin, then show a brief success/error mark; unchanged downloads report “Already up to date”. Countdown ticks make no server request.
 
 The library retains original session records. Node edits organize those records rather than rewriting the conversation. Cloud content is encrypted when you enable encryption; a yellow status identifies unencrypted storage. Saved credentials and the optional passphrase live in owner-only local files so `pnpm dev` can reconnect. This is not macOS Keychain storage.
 
 ## Current scope
 
-**0.8.1 · experimental · macOS first.** Same-agent branching and cross-device continuation are supported; Claude-to-Codex conversion is not.
+**0.8.2 · experimental · macOS first.** Same-agent branching and cross-device continuation are supported; Claude-to-Codex conversion is not.
 
 **Context fidelity has limits.** Supported materialization preserves recorded tool calls/results, reasoning and instructions instead of rebuilding a conversation from visible prose. Codex paginated forks resolve their recorded prefix references and remain paginated on activation. Native New branch and Grove Fork have been compared at the same checkpoint, including tool/reasoning records and native projected items. Missing history segments still block context changes. Dynamic client instructions, opaque compaction and external assets prevent a promise of identical model requests. See the [requirements and fidelity audit](docs/requirements-audit.md).
 
@@ -104,3 +104,7 @@ Session Grove 用项目和分支图管理 Claude Code 与 Codex 的会话。你�
 Design references: [codex-session-sync](https://github.com/shonngithub/codex-session-sync), [claude-sync](https://github.com/tawanorg/claude-sync), and [Chronicle](https://github.com/geekmuse/chronicle).
 
 [MIT License](LICENSE)
+
+### Download first, upload when changed
+
+**Download** checks the cloud directory without publishing local changes. Open its adjacent arrow menu (or hover) for **Upload changes**. Automatic uploads remain enabled: the fallback countdown starts only when local content is dirty and disappears once published. Organizing Nodes still queues an upload. The transfer panel shows the current stage and completed record count, with a stage ETA once enough work has completed; preparation and index publication use an indeterminate progress bar. Opening the app, returning to its window and navigating projects check for remote updates, with cached reads and lazy transcript downloads.

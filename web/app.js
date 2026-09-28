@@ -8,6 +8,8 @@ const icons = {
     codex: '<path d="m4 6 6 6-6 6m9 0h7"/>',
     claude: '<path fill="currentColor" stroke="none" d="m4.7144 15.9555 4.7174-2.6471.079-.2307-.079-.1275h-.2307l-.7893-.0486-2.6956-.0729-2.3375-.0971-2.2646-.1214-.5707-.1215-.5343-.7042.0546-.3522.4797-.3218.686.0608 1.5179.1032 2.2767.1578 1.6514.0972 2.4468.255h.3886l.0546-.1579-.1336-.0971-.1032-.0972L6.973 9.8356l-2.55-1.6879-1.3356-.9714-.7225-.4918-.3643-.4614-.1578-1.0078.6557-.7225.8803.0607.2246.0607.8925.686 1.9064 1.4754 2.4893 1.8336.3643.3035.1457-.1032.0182-.0728-.164-.2733-1.3539-2.4467-1.445-2.4893-.6435-1.032-.17-.6194c-.0607-.255-.1032-.4674-.1032-.7285L6.287.1335 6.6997 0l.9957.1336.419.3642.6192 1.4147 1.0018 2.2282 1.5543 3.0296.4553.8985.2429.8318.091.255h.1579v-.1457l.1275-1.706.2368-2.0947.2307-2.6957.0789-.7589.3764-.9107.7468-.4918.5828.2793.4797.686-.0668.4433-.2853 1.8517-.5586 2.9021-.3643 1.9429h.2125l.2429-.2429.9835-1.3053 1.6514-2.0643.7286-.8196.85-.9046.5464-.4311h1.0321l.759 1.1293-.34 1.1657-1.0625 1.3478-.8804 1.1414-1.2628 1.7-.7893 1.36.0729.1093.1882-.0183 2.8535-.607 1.5421-.2794 1.8396-.3157.8318.3886.091.3946-.3278.8075-1.967.4857-2.3072.4614-3.4364.8136-.0425.0304.0486.0607 1.5482.1457.6618.0364h1.621l3.0175.2247.7892.522.4736.6376-.079.4857-1.2142.6193-1.6393-.3886-3.825-.9107-1.3113-.3279h-.1822v.1093l1.0929 1.0686 2.0035 1.8092 2.5075 2.3314.1275.5768-.3218.4554-.34-.0486-2.2039-1.6575-.85-.7468-1.9246-1.621h-.1275v.17l.4432.6496 2.3436 3.5214.1214 1.0807-.17.3521-.6071.2125-.6679-.1214-1.3721-1.9246L14.38 17.959l-1.1414-1.9428-.1397.079-.674 7.2552-.3156.3703-.7286.2793-.6071-.4614-.3218-.7468.3218-1.4753.3886-1.9246.3157-1.53.2853-1.9004.17-.6314-.0121-.0425-.1397.0182-1.4328 1.9672-2.1796 2.9446-1.7243 1.8456-.4128.164-.7164-.3704.0667-.6618.4008-.5889 2.386-3.0357 1.4389-1.882.929-1.0868-.0062-.1579h-.0546l-6.3385 4.1164-1.1293.1457-.4857-.4554.0608-.7467.2307-.2429 1.9064-1.3114Z"/>',
     studio: '<rect x="3" y="6" width="18" height="12" rx="3"/><path d="M4 10h16M6 14h2m2 0h2"/><circle cx="18" cy="14" r=".5"/>',
+    download: '<path d="M12 3v12m-5-5 5 5 5-5M4 17v4h16v-4"/>',
+    upload: '<path d="M12 16V4m-5 5 5-5 5 5M4 17v4h16v-4"/>',
     check: '<path d="m5 12 4 4L19 6"/>',
     alert: '<path d="m12 3 10 18H2Z"/><path d="M12 9v5m0 3v.1"/>',
     desktop: '<rect x="3" y="3" width="18" height="13" rx="2"/><path d="M12 16v5m-5 0h10"/>',
@@ -38,7 +40,7 @@ let clockTimer = null, modalVersion = 0;
 const operations = {}, operationTimers = {}, seenOperations={};
 let activityGroups=[];
 function showOperation(kind, value) {
-    const signature=value.id+':'+value.state; if(seenOperations[kind]===signature)return;seenOperations[kind]=signature;
+    const signature=value.id+':'+value.state+':'+JSON.stringify(value.progress||null); if(seenOperations[kind]===signature)return;seenOperations[kind]=signature;
     if (value.finishedAt && Date.now() - value.finishedAt > 3500) return;
     operations[kind] = value;
     if(value.status && state.data){ if(kind==='sync')state.data.cloud=value.status;else state.data.update={...state.data.update,...value.status}; }
@@ -99,9 +101,11 @@ async function run(fn, activity = null) {
 }
 function button(id, label, fn) { const el = $(id); if (el) { el.textContent = t(label); el.onclick = fn; el.disabled = working || ['syncing','migrating'].includes(state.data?.cloud?.phase); } }
 function translateBanner() {
-    for (const [id, glyph, label] of [['sync', 'sync', 'Sync'], ['collect', 'refresh', 'Update'], ['settings', 'settings', 'Settings']]) {
+    for (const [id, glyph, label] of [['sync', 'download', 'Download'], ['collect', 'refresh', 'Update'], ['settings', 'settings', 'Settings']]) {
         const el = $('#' + id); el.dataset.glyph= glyph; el.innerHTML = `${icon(glyph)}<span class="button-label">${t(label)}</span>`; el.title = t(label); el.setAttribute('aria-label', t(label));
     }
+    $('#upload').innerHTML=icon('upload')+'<span class="button-label">'+t('Upload changes')+'</span>';
+    $('#sync-menu-toggle').title=t('Upload and transfer details');$('#sync-menu-toggle').setAttribute('aria-label',t('Upload and transfer details'));
     $('#about').textContent = t('About'); $('#information').title = t('Information'); $('#information').setAttribute('aria-label', t('Information'));
     $('#search-icon').innerHTML = icon('search'); $('#search').placeholder = t('Search title or content…'); $('#search').setAttribute('aria-label', t('Search title or content…'));
     $('#back').innerHTML = icon('back'); $('#back').title = t('Back to list'); $('#back').setAttribute('aria-label', t('Back to list'));
@@ -123,32 +127,45 @@ function renderCloudStatus(){const d=state.data;
     $('#collect').title=t('Last local update: {time}',{time:date(d.update?.lastRunAt)});
     const phase = state.uiBusy === 'sync' ? 'syncing' : d.cloud.phase, labels = { unconfigured: '', migrating: 'Updating settings…', locked: 'Sync locked', queued: 'Upload queued', syncing: 'Syncing…', synced: 'Synced', retrying: 'Retrying', failed: 'Sync failed', local: 'Local changes' };
     $('#cloud-status').textContent = t(labels[phase] || ''); $('#cloud-status').title = d.cloud.error ? errorText(d.cloud.error) : '';
-    for(const [kind,id,glyph] of [['sync','sync','sync'],['update','collect','refresh']]) {
+    for(const [kind,id,glyph] of [['sync','sync','download'],['update','collect','refresh']]) {
         const op=operations[kind], busy=op?.state==='running'; const el=$('#'+id);
         el.dataset.operation=op?.state||''; el.setAttribute('aria-busy',String(busy));
-        const name=op?.state==='success'?'check':op?.state==='error'?'alert':glyph;
+        const name=op?.state==='success'?'check':op?.state==='error'?'alert':kind==='sync'&&op?.state==='running'&&op.direction&&op.direction!=='pull'?'upload':glyph;
         if(el.dataset.glyph!==name){el.querySelector('.icon')?.remove();el.insertAdjacentHTML('afterbegin',icon(name));el.dataset.glyph=name;}
     }
+    const transfer=operations.sync; $('#sync .button-label').textContent=t(transfer?.state==='running'&&transfer.direction ? transfer.direction==='pull'?'Downloading…':'Uploading…':'Download');
+    renderTransfer();
     renderCountdowns();
     const busy = working || operations.update?.state==='running' || operations.sync?.state==='running' || ['syncing','migrating'].includes(d.cloud.phase);
-    $$('#sync,#collect,.actions button,button[data-compaction],#deactivate-archived').forEach(el=>el.disabled=busy);
+    $$('#sync,#collect,#upload,.actions button,button[data-compaction],#deactivate-archived').forEach(el=>el.disabled=busy);
+    $('#upload').disabled=busy || !d.cloud.dirty || !d.cloud.configured || !d.cloud.unlocked;
+    $('#upload').title=t(d.cloud.dirty?'Publish local changes, including Pending.':'No local changes to upload.');
     $('#collect').setAttribute('aria-busy',String(state.uiBusy==='update'||operations.update?.state==='running'));
     const updateLabel=$('#collect .button-label');if(updateLabel)updateLabel.textContent=t(state.uiBusy==='update'?'Updating…':'Update');
     $('#sync').setAttribute('aria-busy',String(phase==='syncing'||operations.sync?.state==='running'));
     $('#sync').title = t('Last upload: {time}', { time: date(d.cloud.lastUpload) }) + '\n' + t('Last cloud check: {time}', { time: date(d.cloud.lastCheck) });
-    if(d.cloud.configured && d.cloud.unlocked && !d.cloud.started) { $('#sync').title=t('Ready. Click Sync once to load the cloud directory and enable automatic sync.'); $('#cloud-status').textContent=t('Ready · click Sync'); }
+    if(d.cloud.configured && d.cloud.unlocked && !d.cloud.started) { $('#sync').title=t('Ready. Click Download once to load the cloud directory and enable automatic sync.'); $('#cloud-status').textContent=t('Ready · click Download'); }
     const ticking = !document.hidden && (d.update?.nextRunAt || d.cloud?.nextRunAt);
     if(ticking && !clockTimer) clockTimer=setInterval(renderCountdowns,1000);
     if(!ticking && clockTimer){clearInterval(clockTimer);clockTimer=null;}
 
 }
 
+function renderTransfer() {
+    const value=operations.sync || state.data.cloud.operation, p=value?.progress, box=$('#transfer-progress');
+    box.hidden=!p || value.state!=='running';
+    $('#sync-control').classList.toggle('transferring',!box.hidden);
+    if(box.hidden)return;
+    if(state.progressOpened!==value.id){state.progressOpened=value.id;setSyncMenu(true);}
+    const total=p.total, count=p.completed||0;
+    box.innerHTML=`<span>${t(p.phase)}</span><progress ${total?'max="'+total+'" value="'+count+'"':''}></progress><small>${total?count+' / '+total+' · '+Math.floor(count/total*100)+'%':''}${p.etaSeconds!==null?' · '+t('About {time} remaining in this stage',{time:Math.floor(p.etaSeconds/60)+':'+String(p.etaSeconds%60).padStart(2,'0')}):' · '+t('Estimating…')}</small>`;
+}
 function renderCountdowns() {
     if (!state.data || document.hidden) return;
-    for (const [id, deadline] of [['sync', state.data.cloud?.nextRunAt], ['collect', state.data.update?.nextRunAt]]) {
+    for (const [id, deadline] of [['upload', state.data.cloud?.nextRunAt], ['collect', state.data.update?.nextRunAt]]) {
         const button = $('#'+id); let counter = button.querySelector('.button-countdown');
         if (!deadline) { counter?.remove(); continue; }
-        if (!counter) { counter=document.createElement('span');counter.className='button-countdown';counter.setAttribute('aria-hidden','true');counter.title=t(id==='sync'?'Next automatic sync check; uploads only changes.':'Next local session update.');button.append(counter); }
+        if (!counter) { counter=document.createElement('span');counter.className='button-countdown';counter.setAttribute('aria-hidden','true');counter.title=t(id==='upload'?'Next automatic sync check; uploads only changes.':'Next local session update.');button.append(counter); }
         const seconds=Math.max(0,Math.ceil((deadline-Date.now())/1000)),value=seconds ? Math.floor(seconds/60)+':'+String(seconds%60).padStart(2,'0') : '0:00';
         if(counter.textContent!==value)counter.textContent=value;
     }
@@ -201,7 +218,7 @@ function renderList() {
     button('#archive-items','Archive',()=>modal('Archive selected sessions', `<p>${t('Archive {count} selected trees and sessions?',{count:selected.length})}</p>`,async()=>{await api('/manage','POST',{action:'archive',itemIds:[...state.selected]});state.selected.clear();},'Archive'));
     button('#move-items', 'Move to project', () => moveDialog([...state.selected]));
     button('#deactivate-items', 'Deactivate', () => run(() => api('/manage', 'POST', { action: 'deactivate', itemIds: [...state.selected], agent: state.scope.slice(7) })));
-    $('#session-list').innerHTML = groups().map(g => `${state.scope===INBOX?`<details class="list-group time-group" data-time-group="${g.id}" ${!g.collapsed||state.expandedGroups.has(g.id)||g.items.some(i=>state.selected.has(i.id))?'open':''}><summary>${esc(g.name)}<span>${g.items.length}</span></summary>`:'<section class="list-group">'}${!currentProject() ? `<h2>${esc(g.name)}${state.scope === 'archived' && state.data.projects.find(p => p.id === g.id)?.archived ? `<button class="restore-project" data-project="${esc(g.id)}">${t('Restore project')}</button>` : ''}</h2>` : ''}${(state.scope===INBOX && g.collapsed && !state.expandedGroups.has(g.id) && !g.items.some(i=>state.selected.has(i.id)) ? [] : g.items).map(i => `<article class="session-row ${state.selected.has(i.id) ? 'checked' : ''}" data-item="${esc(i.id)}"><button class="row-open" data-open="${esc(i.id)}">${icon(i.kind)}<span class="row-text"><span class="row-title">${esc(i.name)} ${cloudMark(i)}</span><span class="row-meta">${itemMeta(i)} ${sourceTags(i)}</span></span><time class="row-date" datetime="${esc(i.updatedAt)}">${date(i.updatedAt)}</time></button>${state.scope === 'archived' ? '' : `<input type="checkbox" data-select="${esc(i.id)}" aria-label="${esc(t('Select {name}', { name: i.name }))}" ${state.selected.has(i.id) ? 'checked' : ''} ${mode !== null && mode !== !!i.projectId && state.scope !== 'archived' ? 'disabled' : ''}>`}</article>`).join('')}${state.scope===INBOX?'</details>':'</section>'}`).join('') || `<p class="empty">${t(state.query ? 'No matching sessions' : state.scope.startsWith('active:') ? 'Click Update to read local sessions, or configure WebDAV and click Sync to load the cloud directory.' : 'No sessions here.')}</p>`;
+    $('#session-list').innerHTML = groups().map(g => `${state.scope===INBOX?`<details class="list-group time-group" data-time-group="${g.id}" ${!g.collapsed||state.expandedGroups.has(g.id)||g.items.some(i=>state.selected.has(i.id))?'open':''}><summary>${esc(g.name)}<span>${g.items.length}</span></summary>`:'<section class="list-group">'}${!currentProject() ? `<h2>${esc(g.name)}${state.scope === 'archived' && state.data.projects.find(p => p.id === g.id)?.archived ? `<button class="restore-project" data-project="${esc(g.id)}">${t('Restore project')}</button>` : ''}</h2>` : ''}${(state.scope===INBOX && g.collapsed && !state.expandedGroups.has(g.id) && !g.items.some(i=>state.selected.has(i.id)) ? [] : g.items).map(i => `<article class="session-row ${state.selected.has(i.id) ? 'checked' : ''}" data-item="${esc(i.id)}"><button class="row-open" data-open="${esc(i.id)}">${icon(i.kind)}<span class="row-text"><span class="row-title">${esc(i.name)} ${cloudMark(i)}</span><span class="row-meta">${itemMeta(i)} ${sourceTags(i)}</span></span><time class="row-date" datetime="${esc(i.updatedAt)}">${date(i.updatedAt)}</time></button>${state.scope === 'archived' ? '' : `<input type="checkbox" data-select="${esc(i.id)}" aria-label="${esc(t('Select {name}', { name: i.name }))}" ${state.selected.has(i.id) ? 'checked' : ''} ${mode !== null && mode !== !!i.projectId && state.scope !== 'archived' ? 'disabled' : ''}>`}</article>`).join('')}${state.scope===INBOX?'</details>':'</section>'}`).join('') || `<p class="empty">${t(state.query ? 'No matching sessions' : state.scope.startsWith('active:') ? 'Click Update to read local sessions, or configure WebDAV and click Download to load the cloud directory.' : 'No sessions here.')}</p>`;
     $$('[data-time-group]').forEach(el=>el.ontoggle=()=>{if(el.open){state.expandedGroups.add(el.dataset.timeGroup);if(!el.querySelector('.session-row'))renderList();}else{state.expandedGroups.delete(el.dataset.timeGroup);if(el.dataset.timeGroup==='older')el.querySelectorAll('.session-row').forEach(row=>row.remove());}});
     $$('[data-open]').forEach(el => el.onclick = () => openTree(el.dataset.open));
     $$('[data-select]').forEach(el => el.onchange = () => { el.checked ? state.selected.add(el.dataset.select) : state.selected.delete(el.dataset.select); renderList(); });
@@ -535,7 +552,7 @@ async function settings(options = {}) {
           ${!edit ? `<section class="settings-card"><div class="settings-section-heading"><h3>${t('Encryption')}</h3>${!editKey ? `<span class="${c.encrypted ? 'setting-ok' : 'setting-warning'}">${c.encrypted ? '✓ ' + t('Encrypted') : '⚠ ' + t('Not encrypted')}</span><button type="button" id="modify-encryption">${t('Modify')}</button>` : ''}</div>
             ${c.needsCurrentPassphrase ? `<div class="secret-row">${password('Current passphrase', 'currentPassphrase', false)}<button type="button" id="unlock-vault" class="primary" hidden>${t('Unlock vault')}</button></div><p class="dialog-copy">${t('This cloud vault is encrypted. Enter its existing passphrase to connect. Encryption can be changed afterward.')}</p>` : `<div class="secret-row">${password('Passphrase (optional)', 'passphrase', c.hasPassphrase, !editKey)}${editKey ? `<button type="button" id="confirm-encryption" class="primary">${t(c.hasPassphrase ? 'Keep encryption' : 'Continue without encryption')}</button>` : ''}</div>
             ${editKey ? `<p class="dialog-copy">${c.encryptionReady ? t('Pause sync on other devices while changing the vault. Other devices must reconnect afterward.') + '<br>' : ''}${t('Use at least 12 characters, or leave empty for no content encryption. Other devices need the same passphrase.')}</p>` : ''}`}
-            ${c.encryptionReady && !state.data.cloud.started ? `<p class="setup-hint">${t('Ready. Close Settings and click Sync once to load the cloud directory and enable automatic sync.')}</p>` : ''}
+            ${c.encryptionReady && !state.data.cloud.started ? `<p class="setup-hint">${t('Ready. Close Settings and click Download once to load the cloud directory and enable automatic sync.')}</p>` : ''}
             <div id="settings-progress" role="status" hidden></div>
           </section>` : ''}
           <section class="settings-card"><h3>${t('Automatic updates')}</h3><div class="timer-row"><label><input type="checkbox" name="showScheduledSessions" ${p.showScheduledSessions?'checked':''}>${t('Show scheduled and background sessions')}</label></div><p class="dialog-copy">${t('Use Update after changing this filter. Native files are never deleted.')}</p>
@@ -588,7 +605,7 @@ async function settings(options = {}) {
     } catch(e) { toast(e.message); }
 }
 function information() {
-    modal('Information', `<h3>${t('When can I use each action?')}</h3><ul class="action-guide"><li>${t('Update reads local agent sessions. Sync publishes local changes, including Pending, and checks the cloud directory.')}</li><li>${t('Move belongs to the session list. Select items before choosing a project.')}</li><li>${t('In a transcript, select a start and end to Combine or Dissolve a continuous range.')}</li><li>${t('Select a graph node to Rename it. Naming Pending makes it a saved node.')}</li><li>${t('Fork appears only at a completed turn. Activate, Deactivate and Archive belong to a complete session endpoint.')}</li><li>${t('Archived shows only archived paths with their prefixes. Restore returns a path to its project without activating it.')}</li></ul><p class="dialog-copy">${t('Token counts are estimates. Local configuration and recorded usage inform activation warnings; unknown limits are not guessed.')}</p><p class="dialog-copy">${t('Close running agents before changing native activation. Browsing and organization remain available.')}</p><h3>${t('Diagnostics')}</h3><p class="dialog-copy">${t('Logs contain timings, operation types and error references; no conversation text, passwords, URLs or working paths.')}</p><button type="button" id="download-diagnostics">${t('Download diagnostics')}</button>${(state.data.plan?.pendingRecovery||[]).map(id=>`<button type="button" data-recover="${esc(id)}">${t('Recover interrupted operation')}</button>`).join('')}${state.data.conflicts.map((c,i)=>`<div class="conflict">${t('Conflict')}: ${esc(c.local.name)}<button type="button" data-conflict="${i}" data-choice="local">${t('Keep local')}</button><button type="button" data-conflict="${i}" data-choice="remote">${t('Use remote')}</button></div>`).join('')}`,null);
+    modal('Information', `<h3>${t('When can I use each action?')}</h3><ul class="action-guide"><li>${t('Update reads local sessions. Download checks the cloud; Upload changes publishes local work, including Pending.')}</li><li>${t('Move belongs to the session list. Select items before choosing a project.')}</li><li>${t('In a transcript, select a start and end to Combine or Dissolve a continuous range.')}</li><li>${t('Select a graph node to Rename it. Naming Pending makes it a saved node.')}</li><li>${t('Fork appears only at a completed turn. Activate, Deactivate and Archive belong to a complete session endpoint.')}</li><li>${t('Archived shows only archived paths with their prefixes. Restore returns a path to its project without activating it.')}</li></ul><p class="dialog-copy">${t('Token counts are estimates. Local configuration and recorded usage inform activation warnings; unknown limits are not guessed.')}</p><p class="dialog-copy">${t('Close running agents before changing native activation. Browsing and organization remain available.')}</p><h3>${t('Diagnostics')}</h3><p class="dialog-copy">${t('Logs contain timings, operation types and error references; no conversation text, passwords, URLs or working paths.')}</p><button type="button" id="download-diagnostics">${t('Download diagnostics')}</button>${(state.data.plan?.pendingRecovery||[]).map(id=>`<button type="button" data-recover="${esc(id)}">${t('Recover interrupted operation')}</button>`).join('')}${state.data.conflicts.map((c,i)=>`<div class="conflict">${t('Conflict')}: ${esc(c.local.name)}<button type="button" data-conflict="${i}" data-choice="local">${t('Keep local')}</button><button type="button" data-conflict="${i}" data-choice="remote">${t('Use remote')}</button></div>`).join('')}`,null);
     $('#download-diagnostics').onclick=async()=>{try{const report=await api('/diagnostics'),url=URL.createObjectURL(new Blob([JSON.stringify(report,null,2)],{type:'application/json'})),link=document.createElement('a');link.href=url;link.download='session-grove-diagnostics.json';link.click();setTimeout(()=>URL.revokeObjectURL(url),1000);}catch(e){$('#dialog-error').textContent=e.message;}};
     $$('[data-conflict]').forEach(el=>el.onclick=()=>run(async()=>{await api('/conflicts/resolve','POST',{index:Number(el.dataset.conflict),choice:el.dataset.choice});$('#dialog').close();}));
     $$('[data-recover]').forEach(el=>el.onclick=()=>run(async()=>{await api('/recover','POST',{id:el.dataset.recover});$('#dialog').close();}));
@@ -598,10 +615,17 @@ function about() {
 }
 async function sync(direction) {
     if (!state.data.cloud.configured || !state.data.cloud.unlocked) return settings();
-    return run(async () => { const r=await api('/sync', 'POST', { direction }); toast(t(r?.published || r?.uploaded || r?.remoteChanged ? 'Sync complete' : 'Already up to date')); }, 'sync');
+    return run(async () => { const r=await api('/sync', 'POST', { direction }); toast(t(r?.published || r?.uploaded || r?.remoteChanged ? direction==='pull'?'Download complete':'Upload complete' : 'Already up to date')); }, 'sync');
 }
 $('#about').onclick = about; $('#information').onclick = information;
-$('#sync').onclick = () => sync('both'); $('#settings').onclick = () => settings();
+$('#sync').onclick = () => sync('pull');
+$('#upload').onclick = () => sync('push');
+const setSyncMenu=open=>{$('#sync-menu').hidden=!open;$('#sync-menu-toggle').setAttribute('aria-expanded',String(open));};
+$('#sync-menu-toggle').onclick=()=>setSyncMenu($('#sync-menu').hidden);
+$('#sync-control').onmouseenter=()=>setSyncMenu(true);
+$('#sync-control').onmouseleave=()=>{if(!$('#sync-control').contains(document.activeElement))setSyncMenu(false);};
+document.addEventListener('click',e=>{if(!e.target.closest('#sync-control'))setSyncMenu(false);});
+$('#sync-control').onkeydown=e=>{if(e.key==='Escape'){setSyncMenu(false);$('#sync-menu-toggle').focus();}}; $('#settings').onclick = () => settings();
 $('#collect').onclick = () => run(async () => { const r = await api('/collect', 'POST', {}); if (r.errors?.length) toast(r.errors.map(e => errorText(e.message)).join('\n')); else toast(t('Refresh complete · {updates} updated · {discovered} discovered', { updates: r.updates.length, discovered: r.discovered })); }, 'update');
 $('#search').oninput = e => { state.query = e.target.value; state.selected.clear(); clearTimeout(searchTimer); searchTimer = setTimeout(() => refresh().catch(e => toast(e.message)), 180); };
 $('#back').onclick = () => { state.tree = null; clearRange(); render(); };

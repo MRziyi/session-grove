@@ -5,7 +5,7 @@
   <title>Session Grove</title><link rel="stylesheet" href="/style.css">
 </head>
 <body>
-  <header class="banner"><a class="brand" href="/">Session Grove</a><span id="demo-badge"></span><div class="banner-actions"><span id="cloud-status" role="status"></span><button id="sync"></button><button id="collect"></button><button id="settings"></button></div></header>
+  <header class="banner"><a class="brand" href="/">Session Grove</a><span id="demo-badge"></span><div class="banner-actions"><span id="cloud-status" role="status"></span><div id="sync-control" class="sync-control"><div class="sync-buttons"><button id="sync"></button><button id="sync-menu-toggle" aria-expanded="false" aria-controls="sync-menu">▾</button></div><div id="sync-menu" class="sync-menu" hidden><button id="upload"></button><div id="transfer-progress" role="status" hidden></div></div></div><button id="collect"></button><button id="settings"></button></div></header>
   <div id="layout" class="layout">
     <aside class="navigation"><nav id="navigation" aria-label="Navigation"></nav><footer class="nav-footer"><button id="about">About</button><button id="information" aria-label="Information">ⓘ</button></footer></aside>
     <aside id="session-rail" class="session-rail" hidden></aside>

@@ -293,7 +293,7 @@ export function createApp({ root, roots, guard, demo = false }) {
             updateOperation = { ...updateOperation, state: r.errors.length ? 'error' : 'success', finishedAt: Date.now() };
             return r;
         } catch(e) { updateOperation = { ...updateOperation, state: 'error', finishedAt: Date.now() }; throw e; }
-        finally { configureCapture(); operation('update', {...updateOperation,status:{nextRunAt:nextCaptureAt,lastRunAt:lastCaptureAt,started:true}}); }
+        finally { autoSync.reconcileTimer(); configureCapture(); operation('update', {...updateOperation,status:{nextRunAt:nextCaptureAt,lastRunAt:lastCaptureAt,started:true}}); }
     }
     function configureCapture() {
         clearTimeout(interval); nextCaptureAt = null;

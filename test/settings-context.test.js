@@ -59,7 +59,7 @@ test('settings reveal encryption after verification, persist a private key, and 
 });
 test('fallback captures first, uploads changed Pending, and sends no requests when unchanged or disabled',async t=>{
  const e=await fixture(t),a=e.device('a'),auto=new AutoSync(a.store,()=>e.config);t.after(()=>auto.close());auto.unlock('synthetic-timer-key');
- assert.equal(preferences(a.store).localUpdateMinutes,1);assert.equal(auto.interval._idleTimeout,15*60000);
+ assert.equal(preferences(a.store).localUpdateMinutes,1);assert.equal(auto.interval,null);
  const p=a.store.project('Work'),b=a.store.branch(p.id,'Main','codex',codexSample('/work',[['one','two']]));await auto.flush('push');
  e.requests.length=0;await auto.fallback();assert.equal(e.requests.length,0);
  let captures=0;auto.beforeUpload=()=>{captures++;if(captures===1)a.store.ingest(b.id,a.store.raw(b.head)+codexTurn('Pending','done').map(v=>JSON.stringify(v)+'\n').join(''),b.head,{});};

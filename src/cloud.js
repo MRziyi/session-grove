@@ -65,7 +65,12 @@ export class Cloud {
             return { ...chosen, count: rows.every(p => Array.isArray(p.treeIds)) ? new Set(rows.flatMap(p => p.treeIds)).size : Math.max(...rows.map(p => p.count || 0)) };
         });
     }
+    report(phase, completed=0, total=null, startedAt=Date.now()) {
+        const elapsed=(Date.now()-startedAt)/1000;
+        this.onProgress?.({phase,completed,total,etaSeconds:total && completed>0 && elapsed>=1 ? Math.ceil(elapsed/completed*(total-completed)) : null});
+    }
     async catalog(passphrase) {
+        this.report('Checking cloud directory');
         const connection = await this.connect(passphrase);
         const current = await connection.rootDav.get('vault.json');
         if (!current?.equals(connection.vaultBytes)) { this.lock(); throw new Error('Cloud encryption settings changed. Reconnect in Settings.'); }
@@ -151,13 +156,16 @@ export class Cloud {
             const bytes = c.legacyGraphs[version.ref] ? null : await dav.get('trees/' + version.ref + '.bin');
             const graph = c.legacyGraphs[version.ref] || (bytes && unseal(bytes, key));
             assert(graph && digest(graph) === version.ref && graph.branches.some(b => b.id === treeId), 'Invalid cloud tree manifest.');
-            const objects = {};
-            await mapConcurrent([...new Set(graph.revisions.flatMap(r => r.refs))], async h => {
+            const objects = {}, exists=this.store.db.prepare('SELECT 1 FROM objects WHERE hash=?');
+            const missing=[...new Set(graph.revisions.flatMap(r=>r.refs))].filter(h=>!exists.get(h));
+            let received=0;const started=Date.now();this.report('Downloading records',0,missing.length,started);
+            await mapConcurrent(missing, async h => {
                 assert(/^[a-f0-9]{64}$/.test(h), 'Invalid transcript reference.');
-                if (this.store.db.prepare('SELECT 1 FROM objects WHERE hash=?').get(h)) return;
                 const blob = await dav.get('objects/' + h + '.bin'); assert(blob, 'Cloud transcript is incomplete.');
                 objects[h] = unseal(blob, key); assert(typeof objects[h] === 'string' && hash(objects[h]) === h, 'Transcript integrity check failed.');
+                this.report('Downloading records',++received,missing.length,started);
             });
+            this.report('Applying downloaded changes');
             this.store.merge(graph, objects); loaded.push(version.ref);
             c.loaded[treeId] = loaded; this.save(c);
         }
@@ -177,9 +185,12 @@ export class Cloud {
         for (const id of treeIds) await this.hydrate(id, passphrase);
         assert(!(this.store.local('conflicts') || []).length, 'Resolve sync conflicts before uploading.');
         const c = this.cache(), replacements = new Map(), fingerprints = {};
+        const graphs=new Map(treeIds.map(id=>[id,treeSnapshot(this.store,id)]));
+        const known=new Set(c.uploadedObjects||[]), pending=new Set([...graphs.values()].filter(Boolean).flatMap(g=>g.revisions.flatMap(r=>r.refs)).filter(h=>!known.has(h)));
+        const transferStarted=Date.now();let transferred=0;this.report('Uploading records',0,pending.size,transferStarted);
         let uploaded = 0;
         for (const id of treeIds) {
-            const graph = treeSnapshot(this.store, id); if (!graph) continue;
+            const graph = graphs.get(id); if (!graph) continue;
             const ref = digest(graph), previous = this.items().find(i => i.id === id);
             if (c.ack[id] === ref && previous?.versions.length === 1) continue;
             const sent = new Set(c.uploadedObjects || []);
@@ -188,6 +199,7 @@ export class Cloud {
                 const body = this.store.db.prepare('SELECT body FROM objects WHERE hash=?').get(h)?.body; assert(typeof body === 'string', 'Missing local transcript.');
                 if (await dav.put('objects/' + h + '.bin', seal(body, key), true)) uploaded++;
                 sent.add(h);
+                if(pending.delete(h))this.report('Uploading records',++transferred,transferred+pending.size,transferStarted);
             });
             c.uploadedObjects = [...sent];
             await dav.put('trees/' + ref + '.bin', seal(graph, key), true);
@@ -197,6 +209,7 @@ export class Cloud {
             fingerprints[id] = ref;
         }
         if (!replacements.size) return { uploaded: 0, published: 0 };
+        this.report('Publishing project indexes');
         const ownProjects = new Map((c.heads[this.store.device.id + '.bin']?.projects || c.ownProjects || []).map(p => [p.id, p]));
         for (const projectId of projectIds) {
             const project = (projectId === INBOX_ID ? inboxProject() : this.store.all('project').find(p => p.id === projectId)) || this.summaries().find(p => p.id === projectId); if (!project) continue;
@@ -216,6 +229,7 @@ export class Cloud {
         const head = { schema: 4, deviceId: this.store.device.id, at: now(), projects: [...ownProjects.values()] };
         // Publication point: every referenced immutable dependency is already durable.
         assert((await rootDav.get('vault.json'))?.equals(vaultBytes) && !await rootDav.get('migration.json'), 'Cloud settings changed before publication.');
+        this.report('Publishing cloud directory');
         await dav.put('heads/' + this.store.device.id + '.bin', seal(head, key));
         c.heads[this.store.device.id + '.bin'] = head; c.ownProjects = head.projects;
         c.locations ||= {};

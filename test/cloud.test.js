@@ -139,7 +139,7 @@ test('cached page refreshes and repeated opens make no remote requests; fallback
     const env = await setup(t), { pass, config, requests } = env, a = env.device('a');
     const project = a.store.project('Event sync'), item = branch(a.store, project.id, 'Main');
     const auto = new AutoSync(a.store, () => config); t.after(() => auto.close()); auto.unlock(pass);
-    await auto.flush('both', true); assert.equal(auto.interval._idleTimeout, 15 * 60 * 1000);
+    await auto.flush('both', true); assert.equal(auto.interval,null);assert.equal(auto.status().nextRunAt,null);
     requests.length = 0;
     for (let i = 0; i < 25; i++) { await auto.openProject(project.id); await auto.openTree(item.id); await auto.checkCatalog(); }
     assert.equal(requests.length, 0);
@@ -188,4 +188,15 @@ test('cloud cache writes remain durable after a cached object is edited in place
 
 test('vault caches stay independent when settings migration reuses the old cache',async t=>{
  const e=await setup(t),a=e.device('independent-cache');a.store.local('cloud:old',{ack:{root:'before'}});a.store.local('cloud:new',a.store.local('cloud:old'));const next=a.store.local('cloud:new');next.ack.root='after';a.store.local('cloud:new',next);assert.equal(a.store.local('cloud:old').ack.root,'before');assert.equal(a.store.local('cloud:new').ack.root,'after');
+});
+
+test('upload timer starts only with dirty content, survives status reads, and stops after publication; pull never uploads',async t=>{
+ const e=await setup(t),a=e.device('timer'),auto=new AutoSync(a.store,()=>e.config);t.after(()=>auto.close());auto.unlock(e.pass);
+ assert.equal(auto.status().nextRunAt,null);assert.equal(auto.interval,null);
+ const p=a.store.project('Timer'),b=branch(a.store,p.id,'Main');const deadline=auto.status().nextRunAt;assert.ok(deadline>Date.now());assert.equal(auto.interval._idleTimeout,15*60000);assert.equal(auto.status().nextRunAt,deadline);
+ await auto.flush('push',true);assert.equal(auto.status().nextRunAt,null);assert.equal(auto.interval,null);
+ append(a.store,b,'Local only');const uploadAt=auto.status().nextRunAt;assert.ok(uploadAt);e.requests.length=0;await auto.flush('pull',true);assert.equal(auto.status().nextRunAt,uploadAt);assert.equal(e.requests.filter(([m])=>m==='PUT').length,0);assert.equal(auto.status().dirty,true);
+ const progress=[];auto.onOperation=op=>{if(op.progress)progress.push({...op.progress});};await auto.flush('push',true);
+ assert.ok(progress.some(p=>p.phase==='Uploading records'&&p.total>0&&p.completed===p.total));assert.ok(progress.some(p=>p.phase==='Publishing cloud directory'));assert.equal(auto.status().nextRunAt,null);
+ let eta;auto.cloud.onProgress=p=>eta=p;auto.cloud.report('Uploading records',40,100,Date.now()-10000);assert.ok(eta.etaSeconds>=15&&eta.etaSeconds<=16);
 });
