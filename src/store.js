@@ -1,3 +1,4 @@
+import { claudeTitle } from './claude-title.js';
 import { sessionExclusion, backgroundKind } from './session-kind.js';
 import { supportedHistory } from './codex-history.js';
 import { INBOX_ID, inboxProject, cloudProjectId } from './inbox.js';
@@ -35,8 +36,8 @@ export class Store {
         this.entityWrite = this.db.prepare('INSERT INTO entities VALUES (?,?,?) ON CONFLICT(id) DO UPDATE SET body=excluded.body WHERE entities.kind=excluded.kind');
         this.localRead = this.db.prepare('SELECT body FROM local WHERE key=?');
         this.localWrite = this.db.prepare('INSERT OR REPLACE INTO local VALUES (?,?)');
-        this.summaryRead = this.db.prepare('SELECT body FROM summaries WHERE id=? AND agent=? AND version=4');
-        this.summaryWrite = this.db.prepare('INSERT OR REPLACE INTO summaries VALUES (?,?,4,?)');
+        this.summaryRead = this.db.prepare('SELECT body FROM summaries WHERE id=? AND agent=? AND version=5');
+        this.summaryWrite = this.db.prepare('INSERT OR REPLACE INTO summaries VALUES (?,?,5,?)');
         initializeOrganization(this);
     }
     invalidate() { this.version++; this.memoCache.clear(); this.graphCache=null; }
@@ -73,10 +74,11 @@ export class Store {
     rememberSummary(revisionId,agent,p) {
         const key=agent+':'+revisionId, chats = p.messages.filter(m => m.role !== 'tool').length;
         const firstHuman = p.records.find(r => r.value?.type === 'user' && !r.value.isMeta)?.value;
-        const provenance = {agent,source:p.meta?.source,threadSource:p.meta?.thread_source,sidechain:agent==='claude'&&p.records.find(r=>['user','assistant'].includes(r.value?.type))?.value?.isSidechain===true,originKind:firstHuman?.origin?.kind,sessionKind:p.records.find(r=>r.value?.sessionKind)?.value.sessionKind};
-        const value = { chats, firstUser:(()=>{const v=p.messages.find(m=>m.role==='user')?.text;return v===undefined?undefined:JSON.parse(JSON.stringify(v.slice(0,100)));})(), complete: p.complete && !p.errors.length, external: p.warnings.some(w=>w.includes('外部附件')), nativeId:p.nativeId, cwd:p.cwd, mode:p.meta?.history_mode, forkedFrom:p.meta?.forked_from_id || p.meta?.forkedFromId, forkOrdinal:p.meta?.forked_from_ordinal_exclusive, forkEnd:p.meta?.forked_from_ordinal_exclusive == null ? -1 : p.records.findIndex(r=>r.value?.ordinal >= p.meta.forked_from_ordinal_exclusive), supported:supportedHistory(p),
+        const title = agent === 'claude' ? claudeTitle(p.records) : null;
+        const provenance = {initialization: title?.initialization,agent,source:p.meta?.source,threadSource:p.meta?.thread_source,sidechain:agent==='claude'&&p.records.find(r=>['user','assistant'].includes(r.value?.type))?.value?.isSidechain===true,originKind:firstHuman?.origin?.kind,sessionKind:p.records.find(r=>r.value?.sessionKind)?.value.sessionKind};
+        const value = { chats, nativeTitle: title?.title, firstUser:title?.prompt || (()=>{const v=p.messages.find(m=>m.role==='user')?.text;return v===undefined?undefined:JSON.parse(JSON.stringify(v.slice(0,100)));})(), complete: p.complete && !p.errors.length, external: p.warnings.some(w=>w.includes('外部附件')), nativeId:p.nativeId, cwd:p.cwd, mode:p.meta?.history_mode, forkedFrom:p.meta?.forked_from_id || p.meta?.forkedFromId, forkOrdinal:p.meta?.forked_from_ordinal_exclusive, forkEnd:p.meta?.forked_from_ordinal_exclusive == null ? -1 : p.records.findIndex(r=>r.value?.ordinal >= p.meta.forked_from_ordinal_exclusive), supported:supportedHistory(p),
             lastActivity: p.messages.reduce((latest,m)=>typeof m.timestamp==='string'&&Number.isFinite(Date.parse(m.timestamp))&&(!latest||Date.parse(m.timestamp)>Date.parse(latest))?m.timestamp:latest,null) || p.meta?.timestamp || null,
-            background: backgroundKind(provenance), titleSource: p.records.some(r=>r.value?.type==='custom-title')?'custom':p.records.some(r=>r.value?.type==='ai-title')?'automatic':'first-prompt',
+            background: backgroundKind(provenance), titleSource: title?.titleSource || 'first-prompt',
             excluded:sessionExclusion({...provenance,chats}) };
         if(this.summaryCache.size >= 4096) this.summaryCache.delete(this.summaryCache.keys().next().value);
         this.summaryCache.set(key,value); if (!revisionId.startsWith('scan:')) this.summaryWrite.run(revisionId, agent, JSON.stringify(value)); return value;

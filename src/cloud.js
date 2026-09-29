@@ -145,6 +145,14 @@ export class Cloud {
             return { ...chosen, versions, cloudState: versions.every(v => (c.loaded[chosen.id] || []).includes(v.ref)) ? 'cached' : localIds.has(chosen.id) ? 'update' : 'cloud' };
         });
     }
+    saveDirectory({ onlyIfMissing = false } = {}) {
+        this.useSavedCache();
+        if (!this.cacheKey) return;
+        const c = this.cache();
+        if (onlyIfMissing && c.directorySnapshot) return;
+        c.directorySnapshot = { projects: this.summaries(), items: this.items(), at: now() };
+        this.save(c);
+    }
     dirtyIds() {
         this.useSavedCache(); const ack = this.cache().ack;
         return this.store.syncCollections().items.filter(i => this.store.memo('fingerprint:' + i.id, () => digest(treeSnapshot(this.store, i.id))) !== ack[i.id]).map(i => i.id);
@@ -152,7 +160,9 @@ export class Cloud {
     async transferPlan(passphrase) {
         await this.catalog(passphrase);
         for (const p of this.summaries()) await this.project(p.id, passphrase);
-        const c = this.cache(), downloads = this.items().filter(i => i.versions.some(v => !(c.loaded[i.id] || []).includes(v.ref))), missing = new Set();
+        this.saveDirectory();
+        const localIds = new Set(this.store.all('branch').map(b => b.id));
+        const c = this.cache(), downloads = this.items().filter(i => localIds.has(i.id) && i.versions.some(v => !(c.loaded[i.id] || []).includes(v.ref))), missing = new Set();
         const exists = this.store.db.prepare('SELECT 1 FROM objects WHERE hash=?');
         for (const item of downloads) for (const version of item.versions) {
             if ((c.loaded[item.id] || []).includes(version.ref)) continue;
@@ -253,22 +263,22 @@ export class Cloud {
         return { uploaded, published: replacements.size };
     }
     decorate(data) {
-        this.useSavedCache(); const remote = this.items(), dirty = new Set(this.dirtyIds()), projects = new Map(this.summaries().map(p => [p.id, p]));
+        this.useSavedCache(); const directory = this.cache().directorySnapshot, remote = directory?.items || this.items(), summaries = directory?.projects || this.summaries(), dirty = new Set(this.dirtyIds()), projects = new Map(summaries.map(p => [p.id, p]));
         for (const p of data.projects) {
             const remote = projects.get(p.id);
             projects.set(p.id, remote?.metaAncestors?.includes(p.metaVersion) ? remote : { ...remote, ...p });
         }
         const items = new Map(remote.map(i => [i.id, { ...i, projectId: i.projectId === INBOX_ID ? null : i.projectId }]));
         for (const i of data.items) {
-            const r = remote.find(r => r.id === i.id), newer = r?.cloudState === 'update' && !dirty.has(i.id);
-            const chosen = newer ? r : i;
-            items.set(i.id, { ...chosen, projectId: chosen.projectId === INBOX_ID ? null : chosen.projectId, cloudState: dirty.has(i.id) ? 'local' : r?.cloudState || 'local' });
+            const r = remote.find(r => r.id === i.id);
+            const chosen = i;
+            items.set(i.id, { ...chosen, projectId: chosen.projectId === INBOX_ID ? null : chosen.projectId, cloudState: dirty.has(i.id) ? 'local' : 'cached', remoteUpdate: r?.cloudState === 'update' });
         }
-        const inboxIds = new Set(this.projectRefs().filter(p => p.id === INBOX_ID).flatMap(p => p.treeIds || []));
+        const inboxIds = new Set(summaries.filter(p => p.id === INBOX_ID).flatMap(p => p.treeIds || []));
         for (const i of data.items) { if (!i.projectId && !i.archived) inboxIds.add(i.id); else inboxIds.delete(i.id); for (const id of i.sessionIds || []) if (id !== i.id) inboxIds.delete(id); }
         projects.set(INBOX_ID, { ...projects.get(INBOX_ID), ...inboxProject(), count: inboxIds.size });
         const show = preferences(this.store).showScheduledSessions;
-        return { ...data, projects: [...projects.values()].filter(p=>show||!p.background&&p.id!==BACKGROUND_PROJECT), items: [...items.values()].filter(i=>show||i.projectId!==BACKGROUND_PROJECT), cloudProjects: this.summaries() };
+        return { ...data, projects: [...projects.values()].filter(p=>show||!p.background&&p.id!==BACKGROUND_PROJECT), items: [...items.values()].filter(i=>show||i.projectId!==BACKGROUND_PROJECT), cloudProjects: summaries };
     }
     listing(scope, query) {
         const dirty = new Set(this.dirtyIds());
@@ -284,7 +294,7 @@ export class Cloud {
             if (!sessions.length) return [];
             const matching = sessions.filter(s => !q || s.name.toLocaleLowerCase().includes(q) || branches.has(s.id) && this.store.parsed(branches.get(s.id).head, s.agent).messages.some(m => m.text.toLocaleLowerCase().includes(q)));
             if (!matching.length && !i.name.toLocaleLowerCase().includes(q)) return [];
-            return [{ ...i, agents:[...new Set(sessions.map(s=>s.agent))], origin:[...sessions].sort((a,b)=>b.updatedAt.localeCompare(a.updatedAt))[0]?.origin || i.origin, sessions, sessionIds: sessions.map(s => s.id), name: sessions.find(s => s.id === i.id)?.name || sessions[0].name, kind: sessions.length > 1 ? 'tree' : 'session', visibleSessionIds: sessions.map(s => s.id), matchedSessionIds: matching.map(s => s.id), visibleCount: sessions.length, groupId: i.projectId, groupName: project?.name }];
+            return [{ ...i, agents:[...new Set(sessions.map(s=>s.agent))], origin:[...sessions].sort((a,b)=>b.updatedAt.localeCompare(a.updatedAt))[0]?.origin || i.origin, sessions, sessionIds: sessions.map(s => s.id), name: sessions.find(s => s.id === i.id)?.name || sessions[0].name, kind: sessions.length > 1 ? 'tree' : 'session', visibleSessionIds: sessions.map(s => s.id), matchedSessionIds: matching.map(s => s.id), visibleCount: sessions.length, updatedAt: sessions.map(s=>s.updatedAt).sort().at(-1) || i.updatedAt, groupId: i.projectId, groupName: project?.name }];
         });
         const latest = new Map(); for (const i of items) latest.set(i.groupId, [latest.get(i.groupId) || '', i.updatedAt].sort().at(-1));
         items.sort((a, b) => latest.get(b.groupId).localeCompare(latest.get(a.groupId)) || String(a.groupId).localeCompare(String(b.groupId)) || b.updatedAt.localeCompare(a.updatedAt));

@@ -21,7 +21,7 @@ Session Grove gives that work a structure:
 - **See the branch and read its context together.** The Transcript and Graph stay side by side, with color bands connecting the actual chats to your logical Nodes.
 - **Choose which context to continue with.** Use a recorded compaction result or restore the recorded history before it. The graph shows which earlier Nodes are superseded; choices apply when you activate or explicitly apply the context.
 - **Keep only useful sessions active.** Activate the path you want in your agent. Archive a finished path without losing its shared prefix or cluttering the tree you are still using.
-- **Pick up on another Mac.** Named projects and Ungrouped sync through your WebDAV storage. Open a project to get its list; open a tree to download its context when needed.
+- **Pick up on another Mac.** Named projects and Ungrouped sync through your WebDAV storage. Sync refreshes the saved directory; open a cloud-only tree to download and keep its context locally.
 
 Grove manages the session library. **Codex and Claude Code remain where you actually talk to the agent.** It does not replace their editor integrations or send model requests on your behalf.
 
@@ -65,7 +65,7 @@ npm works too: `npm run demo`, `npm run dev`, and `npm test`. The interface defa
 
 WebDAV is optional. Enter your server address, account and password; Grove adds its own **/Session-Grove/** folder. Verify the connection, then optionally set a content-encryption passphrase. Saved secrets remain visibly masked. Changing the connection or encryption settings runs a verified migration with progress.
 
-Filing work, naming Nodes and other organization changes upload automatically. Local sessions refresh every **1 minute** by default. A **15-minute** fallback uploads changed projects, including unfinished Pending. Every upload captures local updates first; an unchanged library makes no scheduled cloud request. Both intervals can be changed or disabled in Settings.
+Filing work, naming Nodes and other organization changes upload automatically. Local sessions refresh every **1 minute** by default. A **15-minute** countdown starts after the first detected local change and uploads changed projects, including unfinished Pending. Every upload captures local updates first; an unchanged library makes no scheduled cloud request. Both intervals can be changed or disabled in Settings.
 
 **Sync** pulls remote changes before pushing local work. Large transfers require a preview confirmation and show an exclusive progress dialog with direction, counts and ETA. The banner shows compact progress; there is no upload dropdown. Automatic sync remains dirty-only, native Active choices remain local to each device, and completed verified packs are reused after interruption.
 
@@ -73,7 +73,7 @@ The library retains original session records. Node edits organize those records 
 
 ## Current scope
 
-**0.10.0 · experimental · macOS first.** Same-agent branching, cross-device continuation and full/lean cross-agent context conversion are supported.
+**0.11.0 · experimental · macOS first.** Same-agent branching, cross-device continuation and full/lean cross-agent context conversion are supported.
 
 **Context fidelity has limits.** Supported materialization preserves recorded tool calls/results, reasoning and instructions instead of rebuilding a conversation from visible prose. Codex paginated forks resolve their recorded prefix references and remain paginated on activation. Native New branch and Grove Fork have been compared at the same checkpoint, including tool/reasoning records and native projected items. Missing history segments still block context changes. Dynamic client instructions, opaque compaction and external assets prevent a promise of identical model requests. See the [requirements and fidelity audit](docs/requirements-audit.md).
 
@@ -117,3 +117,7 @@ Use `pnpm start`, `pnpm status`, and `pnpm stop`. Ctrl+C stops a foreground serv
 ### Unified workspace (0.10)
 
 One Sync action previews Pull/Push and shows exclusive progress for large transfers. Projects form a continuous grouped list with five-row previews, scroll-linked navigation, collapsible panes and an adjustable reading split. Background sessions use native provenance. Verified record packs reduce cloud requests; **other devices need 0.10 to read newly packed data**. See [design, compatibility and checks](docs/0.10-workspace-and-sync.md).
+
+### Local copies and explicit Pull (0.11)
+
+Browsing uses a saved directory. Only cloud-only sessions show a cloud icon; opening one downloads and retains it locally. Sync refreshes the directory and previously downloaded trees, then pushes local changes. Automatic Push starts only after local edits and does not refresh the browsing directory. Older projects collapse together (7/15/30/60 days), context modes show token estimates, and transcript selection preserves scrolling. See [rules and validation](docs/0.11-local-copies.md).

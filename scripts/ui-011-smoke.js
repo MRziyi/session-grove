@@ -1,0 +1,60 @@
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import http from 'node:http';
+import assert from 'node:assert/strict';
+import { once } from 'node:events';
+import { createApp } from '../src/server.js';
+import { codexSample, claudeSample } from '../src/demo.js';
+const root=fs.mkdtempSync(path.join(os.tmpdir(),'grove-ui011-')),objects=new Map();
+const dav=http.createServer(async(req,res)=>{const key=req.url,chunks=[];for await(const c of req)chunks.push(c);if(req.method==='MKCOL'){res.writeHead(201);return res.end();}if(req.method==='PUT'){await new Promise(r=>setTimeout(r,8));if(req.headers['if-none-match']==='*'&&objects.has(key)){res.writeHead(412);return res.end();}objects.set(key,Buffer.concat(chunks));res.writeHead(201);return res.end();}if(req.method==='PROPFIND'){res.writeHead(207);return res.end('<d:multistatus xmlns:d="DAV:">'+[...objects.keys()].filter(k=>k.startsWith(key)&&!k.slice(key.length).includes('/')).map(k=>'<d:response><d:href>'+k+'</d:href></d:response>').join('')+'</d:multistatus>');}if(objects.has(key)){res.writeHead(200);return res.end(objects.get(key));}res.writeHead(404);res.end();});
+dav.listen(0,'127.0.0.1');await once(dav,'listening');
+fs.writeFileSync(path.join(root,'webdav.json'),JSON.stringify({url:'http://127.0.0.1:'+dav.address().port+'/dav',verified:true,encryptionReady:true,encrypted:false}),{mode:0o600});fs.writeFileSync(path.join(root,'sync-key.txt'),'\n',{mode:0o600});
+const app=createApp({root,roots:{codex:path.join(root,'codex'),claude:path.join(root,'claude')},guard:()=>{},demo:true}),projects=[];
+for(let i=0;i<20;i++){const p=app.store.project('Project '+String(i).padStart(2,'0'));projects.push(p);for(let j=0;j<7;j++){const agent=i===0&&j===0?'claude':'codex',raw=(agent==='claude'?claudeSample:codexSample)(root,Array.from({length:5},(_,k)=>[`Question ${i}/${j}/${k}`,'Answer '+k]));const b=app.store.branch(p.id,'Session '+j,agent,raw);app.store.put('branch',{...b,contentUpdatedAt:new Date(Date.now()-i*86400000-j*1000).toISOString()});}}
+const bgId='00000000-0000-4000-8000-000000000002';app.store.put('project',{id:bgId,name:'Scheduled & background',background:true,createdAt:new Date().toISOString()});const bg=app.store.branch(bgId,'Background task','codex',codexSample(root,[['Task','Done']]));app.store.put('branch',{...bg,background:'scheduled',excluded:'scheduled'});
+app.store.local('localUpdateStarted',false);app.server.listen(0,'127.0.0.1');await once(app.server,'listening');
+const base='http://127.0.0.1:'+app.server.address().port,debug=process.argv[2]||'http://127.0.0.1:9231';
+const page=await(await fetch(debug+'/json/new?'+base,{method:'PUT'})).json(),ws=new WebSocket(page.webSocketDebuggerUrl);await once(ws,'open');let serial=0;const pending=new Map(),errors=[];
+ws.onmessage=e=>{const m=JSON.parse(e.data);if(m.id){const p=pending.get(m.id);pending.delete(m.id);m.error?p.reject(m.error):p.resolve(m.result);}if(m.method==='Runtime.exceptionThrown')errors.push(m.params.exceptionDetails.exception?.description||m.params.exceptionDetails.text);};
+const call=(method,params={})=>new Promise((resolve,reject)=>{const id=++serial;pending.set(id,{resolve,reject});ws.send(JSON.stringify({id,method,params}));});
+const evaluate=async expression=>{const r=await call('Runtime.evaluate',{expression,awaitPromise:true,returnByValue:true});if(r.exceptionDetails)throw Error(r.exceptionDetails.exception?.description||r.exceptionDetails.text);return r.result.value;};
+async function wait(expression){for(let n=0;n<400;n++){try{if(await evaluate(expression))return;}catch{}await new Promise(r=>setTimeout(r,50));}throw Error('Timed out: '+expression+' errors: '+errors.join(';'));}
+try{
+await call('Runtime.enable');await call('Page.enable');await call('Emulation.setDeviceMetricsOverride',{width:1512,height:982,deviceScaleFactor:1,mobile:false});await wait('document.querySelectorAll("[data-scope]").length>20');
+await evaluate('localStorage.setItem("grove-language","zh")');await call('Page.reload');await wait('document.querySelectorAll("[data-scope]").length>20');
+assert.equal(await evaluate('document.querySelector("#sync-menu-toggle")'),null);assert.equal(await evaluate('document.querySelector("#sync").dataset.glyph'),'sync');assert.equal(await evaluate('document.querySelector("#sync .button-label").textContent'),'同步');
+await evaluate(`[...document.querySelectorAll('[data-scope]')].find(e=>e.dataset.scope===${JSON.stringify(projects[0].id)}).click()`);await wait('document.querySelectorAll("[data-project-group]").length===20');
+assert.equal(await evaluate('document.querySelectorAll("[data-project-group]")[0].querySelectorAll(".session-row").length'),5);
+await evaluate('document.querySelector("[data-expand-project]").click()');assert.equal(await evaluate('document.querySelectorAll("[data-project-group]")[0].querySelectorAll(".session-row").length'),7);
+assert.equal(await evaluate('document.querySelector(".tool-tag.claude").textContent.trim()'),'Claude');
+const fixed=await evaluate('[...document.querySelectorAll(".nav-group:not(.project-directory)")].map(e=>e.getBoundingClientRect().top)');await evaluate('document.querySelector(".project-directory-scroll").scrollTop=9999');assert.deepEqual(await evaluate('[...document.querySelectorAll(".nav-group:not(.project-directory)")].map(e=>e.getBoundingClientRect().top)'),fixed);
+await evaluate('document.querySelectorAll("[data-project-group]")[8].scrollIntoView({block:"start"})');await wait(`document.querySelector('[data-scope="${projects[8].id}"]').classList.contains('selected')`);
+await new Promise(r=>setTimeout(r,500));assert.ok(await evaluate('Math.abs(document.querySelectorAll("[data-project-group]")[8].querySelector("h2").getBoundingClientRect().top-document.querySelector("#session-list").getBoundingClientRect().top)<2'));
+await evaluate('document.querySelector("[data-open]").click()');await wait('document.querySelectorAll("[data-chat]").length>0');
+await evaluate('document.querySelector("[data-chat]").click()');assert.equal(await evaluate('document.querySelectorAll("[data-chat]:checked").length'),1);await evaluate('document.querySelector("[data-chat]").click()');assert.equal(await evaluate('document.querySelectorAll("[data-chat]:checked").length'),0);
+await evaluate('document.querySelector("#toggle-navigation").click();document.querySelector("#toggle-rail").click()');assert.ok(await evaluate('document.querySelector("#layout").classList.contains("nav-collapsed")&&document.querySelector("#layout").classList.contains("rail-collapsed")'));
+const width=await evaluate('document.querySelector(".transcript-panel").getBoundingClientRect().width');await evaluate('document.querySelector("#ribbon-lane").dispatchEvent(new KeyboardEvent("keydown",{key:"ArrowRight",bubbles:true}))');assert.ok(await evaluate('document.querySelector(".transcript-panel").getBoundingClientRect().width')>width);
+// Count both conversion choices before allowing activation; use the custom select.
+await evaluate('document.querySelector("[data-node]").click()');await wait('!!document.querySelector("#convert-session")');
+await evaluate('document.querySelector("#convert-session").click()');await wait('document.querySelector("[name=mode] option").textContent.includes("tokens")');
+assert.ok(await evaluate('[...document.querySelector("[name=mode]").options].every(o=>/≈ [0-9,]+ tokens/.test(o.textContent))'));
+assert.ok(await evaluate('document.querySelector("[name=mode]").hidden&&!!document.querySelector("[name=mode]").closest(".select-control")'));
+await evaluate('document.querySelector("#dialog-close").click();document.querySelector("#information").click()');
+assert.ok(await evaluate('document.querySelectorAll("#dialog-content>details").length>=4&&document.querySelectorAll("#dialog-content>details[open]").length===0'));
+await evaluate('document.querySelector("#dialog-close").click();document.querySelector("#settings").click()');await wait('!!document.querySelector("[name=showScheduledSessions]")');
+await evaluate('document.querySelector("[name=showScheduledSessions]").click()');await wait('document.querySelector("[name=showScheduledSessions]").checked&&!document.querySelector("[name=showScheduledSessions]").disabled');
+await evaluate('document.querySelector("#dialog-close").click();document.querySelector("#settings").click()');await wait('document.querySelector("[name=showScheduledSessions]").checked');
+assert.equal(app.store.local('preferences').showScheduledSessions,true);
+await evaluate('document.querySelector("[name=showScheduledSessions]").click()');await wait('!document.querySelector("[name=showScheduledSessions]").checked&&!document.querySelector("[name=showScheduledSessions]").disabled');
+await evaluate('document.querySelector("[name=inactiveProjectDays]").value="7";document.querySelector("[name=inactiveProjectDays]").dispatchEvent(new Event("change"))');await wait('document.querySelector("[name=inactiveProjectDays]").value==="7"&&!document.querySelector("[name=inactiveProjectDays]").disabled');
+await evaluate('document.querySelector("#dialog-close").click();document.querySelector("#back").click()');await wait('document.querySelectorAll("[data-older-projects]").length===2');
+assert.ok(await evaluate('document.querySelectorAll("[data-project-group]").length<20'));
+await evaluate('document.querySelector("[data-older-projects]").click()');assert.equal(await evaluate('document.querySelectorAll("[data-project-group]").length'),20);
+assert.ok(await evaluate('[...document.querySelectorAll("[data-older-projects]")].every(e=>e.getAttribute("aria-expanded")==="true")'));
+await evaluate('document.querySelector("[data-older-projects]").click()');assert.ok(await evaluate('document.querySelectorAll("[data-project-group]").length<20'));
+await evaluate('document.querySelector("#sync").click()');await wait('!document.querySelector("#sync-confirm").hidden');assert.ok(await evaluate('document.querySelector("#sync-detail").textContent.includes("Pull")&&document.querySelector("#sync-detail").textContent.includes("Push")'));
+const shot=await call('Page.captureScreenshot',{format:'png'});fs.writeFileSync('test-results/ui011-sync.png',Buffer.from(shot.data,'base64'));
+await evaluate('document.querySelector("#sync-confirm").click()');await wait('document.querySelector("#sync-detail").textContent.includes("Push")');await wait('document.querySelector("#sync-detail").textContent.includes("同步完成")');await evaluate('document.querySelector("#sync-cancel").click()');
+assert.equal(app.autoSync.status().dirty,false);assert.deepEqual(errors,[]);console.log('UI 0.11 passed: conversion token choices, custom select, collapsed information, immediate persistent preferences, mirrored inactive groups; unified sync/large confirmation/progress, 20 continuous project groups, five-row limits, scrollspy, pinned navigation, Claude tag, selection toggle, collapsible panes and resize.');
+}catch(e){console.error(e);throw e;}finally{await fetch(debug+'/json/close/'+page.id);ws.close();app.server.closeAllConnections();await new Promise(r=>app.close(r));dav.close();await once(dav,'close');fs.rmSync(root,{recursive:true,force:true});}

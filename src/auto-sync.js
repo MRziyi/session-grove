@@ -34,7 +34,8 @@ export class AutoSync {
     }
     async fallback() {
         if (this.store.local('syncStarted') === false || !preferences(this.store).autoUploadEnabled || this.running || this.closed || !this.readConfig()?.url || this.passphrase === null || this.retryAt > Date.now()) return;
-        return this.flush('push');
+        await this.beforeUpload?.();
+        return this.flush('push', false, true);
     }
     async prepareSync() {
         assert(this.passphrase !== null && this.readConfig()?.url, 'Configure WebDAV and unlock project sync first.');
@@ -77,13 +78,12 @@ export class AutoSync {
     lock() { this.queuedAt = null; this.passphrase = null; this.cloud.lock(); clearTimeout(this.timer); clearTimeout(this.retryTimer); clearTimeout(this.interval);this.interval=null;this.nextFallbackAt=null; }
     schedule(ids = this.cloud.dirtyIds()) {
         if (this.closed) return;
-        for (const id of ids) this.queue.add(id);
+        const dirty = new Set(this.cloud.dirtyIds());
+        this.queue = new Set([...this.queue, ...ids].filter(id => dirty.has(id)));
         this.store.local('uploadQueue', [...this.queue]);
-        if (this.store.local('syncStarted') === false) return;
-        clearTimeout(this.timer);
-        this.queuedAt = Date.now() + Math.max(2000, this.retryAt - Date.now());
-        this.timer = setTimeout(() => { this.queuedAt = null; this.flush('queued').catch(() => {}); }, Math.min(2147483647, Math.max(2000, this.retryAt - Date.now())));
-        this.timer.unref();
+        // One countdown starts at the first detected local change. Repeated
+        // scans neither reset it nor create a second two-second upload timer.
+        this.reconcileTimer(dirty.size > 0);
     }
     async exclusive(fn, allowMigration = false, direction = 'pull', manual = false) {
         if (this.closed) throw new Error('Server is stopping.');
@@ -102,7 +102,8 @@ export class AutoSync {
         if (!explicit && this.store.local('syncStarted') === false) return null;
         if (direction === 'queued' && !this.queue.size) return { published: 0, uploaded: 0 };
         if (explicit && this.rateLimitUntil > Date.now()) throw new Error('Provider requested a pause. Try again after ' + new Date(this.rateLimitUntil).toLocaleTimeString());
-        if (this.closed || !explicit && (this.migrating || this.retryAt > Date.now())) return null;
+        if (this.closed || !explicit && (this.migrating || this.needsReview || !preferences(this.store).autoUploadEnabled || this.retryAt > Date.now())) return null;
+        if (!explicit && direction !== 'pull' && !this.cloud.dirtyIds().length) return { published: 0, uploaded: 0 };
         if (!this.readConfig()?.url || this.passphrase === null) {
             if (explicit) throw new Error('Configure WebDAV and unlock project sync first.');
             return null;
@@ -123,7 +124,7 @@ export class AutoSync {
             }
             assert(['push', 'both', 'queued'].includes(direction), 'Unknown sync direction.');
             if (direction !== 'both' && !this.cloud.dirtyIds().length) return { published: 0, uploaded: 0 };
-            if (!this.run) await this.cloud.connect(this.passphrase);
+            if (!this.run) { await this.cloud.connect(this.passphrase); if (!explicit) this.cloud.saveDirectory({ onlyIfMissing: true }); }
             const catalogVersion = () => JSON.stringify(Object.entries(this.cloud.cache().heads).sort(([a],[b])=>a.localeCompare(b)).map(([name,{etag,...head}])=>[name,head]));
             const beforeCatalog = catalogVersion();
             if (direction === 'both' && !this.run) await this.cloud.catalog(this.passphrase);
@@ -154,13 +155,12 @@ export class AutoSync {
             if (!last || Date.now() - new Date(last).getTime() >= maxAge) await this.cloud.catalog(this.passphrase);
         }).catch(() => {});
     }
-    async openProject(projectId, query = '', { check = false } = {}) {
+    async openProject(projectId, query = '') {
         if (this.store.local('syncStarted') === false || this.passphrase === null || !this.readConfig()?.url) {
             const refs = this.cloud.projectRefs().filter(p => p.id === projectId);
             assert(!refs.length || refs.some(p => this.cloud.cache().indexes[p.index]), 'Unlock sync to download this project.');
             return;
         }
-        if (check) await this.checkCatalog();
         const refs = this.cloud.projectRefs().filter(p => p.id === projectId);
         const missing = refs.some(p => !this.cloud.cache().indexes[p.index]);
         if (!missing && !query.trim()) return;
@@ -174,13 +174,14 @@ export class AutoSync {
             // A cached project remains available offline; status retains the network error.
         });
     }
-    async openTree(treeId, { check = false } = {}) {
+    async openTree(treeId) {
         const local = this.store.all('branch').find(b => b.id === treeId);
+        // Local materialization is durable. Remote updates are applied by Sync.
+        if (local) return;
         if (this.store.local('syncStarted') === false || this.passphrase === null || !this.readConfig()?.url) {
             assert(this.store.all('branch').some(b => b.id === treeId), this.passphrase !== null && this.readConfig()?.url && this.store.local('syncStarted') === false ? 'Click Sync once to enable cloud reads.' : 'Unlock sync to download this session.'); return;
         }
-        if (check) await this.checkCatalog();
-        const projectId = local ? cloudProjectId(local.projectId) : this.cloud.items().find(i => i.id === treeId)?.projectId;
+        const projectId = this.cloud.items().find(i => i.id === treeId)?.projectId;
         if (projectId) await this.openProject(projectId);
         const item = this.cloud.items().find(i => i.id === treeId);
         if (!item || item.versions.every(v => (this.cloud.cache().loaded[treeId] || []).includes(v.ref))) return;

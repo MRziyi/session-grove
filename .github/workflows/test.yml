@@ -13,4 +13,6 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '24'
-      - run: npm test
+      - run: npm install --global pnpm@10.13.1
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm test

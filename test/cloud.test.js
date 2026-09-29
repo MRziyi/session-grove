@@ -166,13 +166,13 @@ test('legacy manifests are indexed without raw downloads and remain reachable af
     await c.cloud.project(q.id, pass); await c.cloud.hydrate(other.id, pass);
     assert.equal(c.store.treeGraph(other.id).chatCount, 2);
 });
-test('remote archives update cached list projections without fetching bodies or flagging a local upload', async t => {
+test('remote archives wait for an explicit pull before changing local list projections', async t => {
     const env = await setup(t), { pass, requests } = env, a = env.device('a'), b = env.device('b');
     const p = a.store.project('Archive'), item = branch(a.store, p.id, 'History');
     await a.cloud.publish([item.id], pass); await b.cloud.catalog(pass); await b.cloud.project(p.id, pass); await b.cloud.hydrate(item.id, pass);
     a.store.edit(item.id, { archived: true }); await a.cloud.publish([item.id], pass); requests.length = 0;
     await b.cloud.catalog(pass); await b.cloud.project(p.id, pass);
-    assert.equal(b.cloud.listing(p.id).itemCount, 0); assert.equal(b.cloud.listing('archived').itemCount, 1);
+    assert.equal(b.cloud.listing(p.id).itemCount, 1); assert.equal(b.cloud.listing('archived').itemCount, 0);
     assert.deepEqual(b.cloud.dirtyIds(), []); assert.ok(!requests.some(([m, p]) => m === 'GET' && /\/(trees|objects)\//.test(p)));
 });
 test('cached page refreshes and repeated opens make no remote requests; fallback is fifteen minutes', async t => {
@@ -220,7 +220,7 @@ test('Ungrouped is a shared lazy inbox, moves both ways, and never copies device
     assert.equal(b.cloud.listing(INBOX_ID).items.find(i=>i.id===loose.id).origin.model,'Mac Studio');
     const project=b.store.project('Focused work');b.store.moveItems({itemIds:[loose.id],projectId:project.id});await b.cloud.publish([loose.id],e.pass);
     await a.cloud.catalog(e.pass);await a.cloud.project(project.id,e.pass);await a.cloud.project(INBOX_ID,e.pass);
-    assert.equal(a.cloud.listing(project.id).itemCount,1);assert.equal(a.cloud.listing(INBOX_ID).itemCount,1);await a.cloud.hydrate(loose.id,e.pass);assert.equal(a.store.get('branch',loose.id).projectId,project.id);
+    assert.equal(a.cloud.listing(project.id).itemCount,0);assert.equal(a.cloud.listing(INBOX_ID).itemCount,2);await a.cloud.hydrate(loose.id,e.pass);assert.equal(a.cloud.listing(project.id).itemCount,1);assert.equal(a.cloud.listing(INBOX_ID).itemCount,1);assert.equal(a.store.get('branch',loose.id).projectId,project.id);
     a.store.moveItems({itemIds:[loose.id],projectId:INBOX_ID});await a.cloud.publish([loose.id],e.pass);await b.cloud.catalog(e.pass);await b.cloud.project(INBOX_ID,e.pass);await b.cloud.hydrate(loose.id,e.pass);assert.equal(b.store.get('branch',loose.id).projectId,null);
     assert.equal(b.cloud.listing(INBOX_ID).itemCount,2);assert.equal(b.store.instances().length,0);
     a.store.edit(loose.id,{archived:true});await a.cloud.publish([loose.id],e.pass);await b.cloud.catalog(e.pass);await b.cloud.project(INBOX_ID,e.pass);await b.cloud.hydrate(loose.id,e.pass);assert.equal(b.cloud.listing(INBOX_ID).itemCount,1);assert.equal(b.cloud.listing('archived').itemCount,1);
@@ -249,4 +249,47 @@ test('upload timer starts only with dirty content, survives status reads, and st
  const progress=[];auto.onOperation=op=>{if(op.progress)progress.push({...op.progress});};await auto.flush('push',true);
  assert.ok(progress.some(p=>p.phase==='Uploading records'&&p.total>0&&p.completed===p.total));assert.ok(progress.some(p=>p.phase==='Publishing cloud directory'));assert.equal(auto.status().nextRunAt,null);
  let eta;auto.cloud.onProgress=p=>eta=p;auto.cloud.report('Uploading records',40,100,Date.now()-10000);assert.ok(eta.etaSeconds>=15&&eta.etaSeconds<=16);
+});
+
+test('Sync keeps unopened trees cloud-only; opening caches once, remote changes require Sync',async t=>{
+ const e=await setup(t),a=e.device('source'),b=e.device('reader');
+ const p=a.store.project('On demand'),first=branch(a.store,p.id,'Read me'),other=branch(a.store,p.id,'Leave online');
+ await a.cloud.publish([first.id,other.id],e.pass);
+ const auto=new AutoSync(b.store,()=>e.config);t.after(()=>auto.close());auto.unlock(e.pass);
+ const plan=await auto.prepareSync();assert.deepEqual(plan.downloadIds,[]);assert.equal(auto.listing('projects').items.length,2);
+ auto.startSync(plan.id,true);await auto.syncJob;assert.equal(b.store.all('branch').length,0);
+ assert.ok(auto.listing('projects').items.every(i=>i.cloudState==='cloud'));
+ await auto.openTree(first.id);assert.equal(auto.listing('projects').items.find(i=>i.id===first.id).cloudState,'cached');
+ e.requests.length=0;for(let i=0;i<3;i++){await auto.openTree(first.id,{check:true});auto.listing('projects');auto.status();}assert.equal(e.requests.length,0);assert.equal(auto.status().nextRunAt,null);
+ append(a.store,first,'Changed remotely');await a.cloud.publish([first.id],e.pass);const before=b.store.get('branch',first.id).head;
+ e.requests.length=0;await auto.openTree(first.id,{check:true});assert.equal(e.requests.length,0);assert.equal(b.store.get('branch',first.id).head,before);
+ const next=await auto.prepareSync();assert.deepEqual(next.downloadIds,[first.id]);auto.startSync(next.id,true);await auto.syncJob;
+ assert.notEqual(b.store.get('branch',first.id).head,before);assert.equal(b.store.all('branch').length,1);assert.equal(auto.status().dirty,false);assert.equal(auto.status().nextRunAt,null);
+});
+test('local changes start one stable countdown; disabled auto Push and empty schedules stay idle',async t=>{
+ const e=await setup(t),a=e.device('timer'),auto=new AutoSync(a.store,()=>e.config);t.after(()=>auto.close());auto.unlock(e.pass);
+ auto.schedule([]);assert.equal(auto.status().nextRunAt,null);
+ const b=branch(a.store,null,'New');auto.schedule([b.id]);const at=auto.status().nextRunAt;
+ auto.schedule([b.id]);assert.equal(auto.status().nextRunAt,at);assert.equal(auto.timer,undefined);
+ const {savePreferences}=await import('../src/preferences.js');savePreferences(a.store,{autoUploadEnabled:false});auto.configureTimer();auto.schedule([b.id]);
+ assert.equal(auto.status().nextRunAt,null);e.requests.length=0;await auto.flush('queued');assert.equal(e.requests.length,0);
+});
+
+test('automatic Push checks concurrency without refreshing the browsing directory',async t=>{
+ const e=await setup(t),a=e.device('writer'),b=e.device('other');
+ const p=a.store.project('Work'),local=branch(a.store,p.id,'Local');await a.cloud.publish([local.id],e.pass);
+ const auto=new AutoSync(a.store,()=>e.config);t.after(()=>auto.close());auto.unlock(e.pass);
+ const plan=await auto.prepareSync();auto.startSync(plan.id,true);await auto.syncJob;
+ const remote=branch(b.store,null,'New elsewhere');await b.cloud.publish([remote.id],e.pass);
+ append(a.store,local,'Local edit');await auto.flush('push');
+ assert.equal(auto.listing('projects').items.some(i=>i.id===remote.id),false);
+ const next=await auto.prepareSync();assert.equal(auto.listing('projects').items.some(i=>i.id===remote.id),true);assert.equal(next.downloadIds.includes(remote.id),false);
+});
+
+test('showing background records is a view preference, not permission to upload all of them',async t=>{
+ const e=await setup(t),a=e.device('background');const b=branch(a.store,null,'Scheduled');a.store.put('branch',{...b,background:'scheduled',excluded:'scheduled'});
+ const {savePreferences}=await import('../src/preferences.js');assert.deepEqual(a.cloud.dirtyIds(),[]);
+ savePreferences(a.store,{showScheduledSessions:true});assert.equal(a.store.collections().items.length,1);assert.deepEqual(a.cloud.dirtyIds(),[]);
+ a.store.put('branch',{...a.store.get('branch',b.id),backgroundManaged:true,archived:true});assert.deepEqual(a.cloud.dirtyIds(),[b.id]);
+ savePreferences(a.store,{showScheduledSessions:false});assert.deepEqual(a.cloud.dirtyIds(),[b.id]);
 });

@@ -1,3 +1,4 @@
+import { claudeTitle } from './claude-title.js';
 import { preferences } from './preferences.js';
 import { readCodexHistory, codexFiles } from './codex-history.js';
 import fs from 'node:fs';
@@ -34,7 +35,7 @@ export class Native {
         // references that revision instead of duplicating the whole log in local state.
         const instances = store.instances(); let compacted = false;
         for (const i of instances) {
-            if (i.summaryVersion === 4 && i.summaryRevision === i.baseRevision && i.summaryJson) { try { store.summaryCache.set(i.agent+':'+i.baseRevision,JSON.parse(i.summaryJson)); } catch {} }
+            if (i.summaryVersion === 5 && i.summaryRevision === i.baseRevision && i.summaryJson) { try { store.summaryCache.set(i.agent+':'+i.baseRevision,JSON.parse(i.summaryJson)); } catch {} }
             if (i.adopted && i.baseline) { i.baseline=null; compacted=true; }
             else if (i.baseline && i.baseRevision && i.baseline === store.raw(i.baseRevision)) { i.baseline = null; compacted = true; }
         }
@@ -92,18 +93,18 @@ export class Native {
                         if (namedId && canonicalPaths.has(namedId) && canonicalPaths.get(namedId) !== path.resolve(file)) continue;
                         const stat = fs.statSync(file), stamp = `${stat.ino}:${stat.size}:${stat.mtimeMs}:${stat.ctimeMs}`;
                         const known = instances.find(i => i.agent === agent && (i.file === file || i.nativeId === indexed?.id));
-                        const saved = known?.summaryVersion === 4 && known.observedStamp === stamp && this.store.summary(known.baseRevision,agent);
-                        let p = saved ? { nativeId:known.nativeId,cwd:known.cwd,count:saved.chats,firstUser:saved.firstUser,title:known.title,background:saved.background,source:indexed?.source,warnings:[],errors:0 } : this.scanCache.get(file)?.stamp === stamp ? this.scanCache.get(file).summary : null;
-                        if (!p) { const full = parse(this.history(file, agent), agent); p = { nativeId: full.nativeId, cwd: full.cwd, title: full.records.filter(r => r.value?.type === 'custom-title').at(-1)?.value?.customTitle || full.records.filter(r => r.value?.type === 'ai-title').at(-1)?.value?.aiTitle, storedSummary: this.store.rememberSummary('scan:' + hash(file) + ':' + stamp, agent, full), firstUser: full.messages.find(m => m.role === 'user')?.text.slice(0, 100), count: full.messages.filter(m => m.role !== 'tool').length, source: full.meta?.source, threadSource:full.meta?.thread_source, sidechain: full.records.find(r => ['user', 'assistant'].includes(r.value?.type))?.value?.isSidechain === true, originKind: full.records.find(r => r.value?.type === 'user' && !r.value.isMeta)?.value?.origin?.kind, sessionKind: full.records.find(r=>r.value?.sessionKind)?.value.sessionKind, warnings: full.warnings, errors: full.errors.length }; this.scanCache.set(file, { stamp, summary: p }); }
+                        const saved = known?.summaryVersion === 5 && known.observedStamp === stamp && this.store.summary(known.baseRevision,agent);
+                        let p = saved ? { nativeId:known.nativeId,cwd:known.cwd,count:saved.chats,firstUser:saved.firstUser,title:agent==='claude'?saved.nativeTitle:known.title,background:saved.background,initialization:saved.background==='background',source:indexed?.source,warnings:[],errors:0 } : this.scanCache.get(file)?.stamp === stamp ? this.scanCache.get(file).summary : null;
+                        if (!p) { const full = parse(this.history(file, agent), agent); p = { nativeId: full.nativeId, cwd: full.cwd, title: agent === 'claude' ? claudeTitle(full.records).title : null, initialization: agent === 'claude' && claudeTitle(full.records).initialization, storedSummary: this.store.rememberSummary('scan:' + hash(file) + ':' + stamp, agent, full), firstUser: full.messages.find(m => m.role === 'user')?.text.slice(0, 100), count: full.messages.filter(m => m.role !== 'tool').length, source: full.meta?.source, threadSource:full.meta?.thread_source, sidechain: full.records.find(r => ['user', 'assistant'].includes(r.value?.type))?.value?.isSidechain === true, originKind: full.records.find(r => r.value?.type === 'user' && !r.value.isMeta)?.value?.origin?.kind, sessionKind: full.records.find(r=>r.value?.sessionKind)?.value.sessionKind, warnings: full.warnings, errors: full.errors.length }; this.scanCache.set(file, { stamp, summary: p }); }
                         if (p.errors) { errors.push({ file:path.basename(file), message:'Native record is still being written.' }); continue; }
                         if (!p.nativeId)
                             continue;
                         if (canonicalPaths.has(p.nativeId) && canonicalPaths.get(p.nativeId) !== path.resolve(file)) continue;
                         const info = provenance.get(p.nativeId) || {};
-                        const excluded = sessionExclusion({ showScheduled, agent, source: info.source, threadSource: info.threadSource }) || sessionExclusion({ showScheduled, agent, source: p.source, threadSource:p.threadSource, sidechain: p.sidechain, originKind: p.originKind, sessionKind: p.sessionKind, chats: p.count });
+                        const excluded = sessionExclusion({ showScheduled, agent, source: info.source, threadSource: info.threadSource }) || sessionExclusion({ showScheduled, agent, source: p.source, threadSource:p.threadSource, sidechain: p.sidechain, originKind: p.originKind, sessionKind: p.sessionKind, initialization:p.initialization, chats: p.count });
                         const nativeTitle = titles.get(p.nativeId) || p.title;
                         const scheduled = [sessionExclusion({agent,source:info.source,threadSource:info.threadSource}),sessionExclusion({agent,source:p.source,threadSource:p.threadSource})].includes('scheduled');
-                        const background = p.background || backgroundKind({agent,source: info.source ?? p.source, threadSource: info.threadSource ?? p.threadSource, sidechain:p.sidechain,originKind:p.originKind,sessionKind:p.sessionKind});
+                        const background = p.background || backgroundKind({agent,source: info.source ?? p.source, threadSource: info.threadSource ?? p.threadSource, sidechain:p.sidechain,originKind:p.originKind,sessionKind:p.sessionKind, initialization:p.initialization});
                         const item = { background, scheduled, key: hash(file), agent, nativeId: p.nativeId, cwd: indexed?.cwd || p.cwd || '', cwdAvailable: !(indexed?.cwd || p.cwd) || fs.existsSync(indexed?.cwd || p.cwd), title: nativeTitle || p.firstUser || 'Untitled session', messages: p.count, updatedAt: stat.mtime.toISOString(), managed: instances.some(i => i.file === file || i.agent === agent && i.nativeId === p.nativeId), warnings: p.warnings, excluded, source: info.source ?? p.source, archived: dir === 'archived_sessions' || archivedIds.has(p.nativeId) };
                         this.observations.set(file, item);
                         if (excluded) continue;
@@ -138,7 +139,7 @@ export class Native {
             const cached = this.scanCache.get(item.file);
             if (cached?.stamp === stamp && cached.summary.storedSummary) this.store.summaryCache.set(item.agent + ':' + b.head, cached.summary.storedSummary);
             const summary = this.store.summary(b.head, item.agent);
-            instances.push({ summaryVersion: 4, summaryRevision: b.head, summaryJson: JSON.stringify(summary), observedStamp: stamp, ...(sidecarDir ? { auxiliaryStamp: auxiliaryStamp(sidecarDir) } : {}), id: id(), branchId: b.id, agent: b.agent, root: this.roots[b.agent], nativeId: item.nativeId, file: item.file, cwd: item.cwd, cwdAvailable: item.cwdAvailable, desired: observe && !item.archived, applied: !item.archived, baseRevision: b.head, baseline: null, historyResolved: true, observedHash: hash(physical), adopted: true, title: b.name, excluded: false, requiresAuxiliary });
+            instances.push({ summaryVersion: 5, summaryRevision: b.head, summaryJson: JSON.stringify(summary), observedStamp: stamp, ...(sidecarDir ? { auxiliaryStamp: auxiliaryStamp(sidecarDir) } : {}), id: id(), branchId: b.id, agent: b.agent, root: this.roots[b.agent], nativeId: item.nativeId, file: item.file, cwd: item.cwd, cwdAvailable: item.cwdAvailable, desired: observe && !item.archived, applied: !item.archived, baseRevision: b.head, baseline: null, historyResolved: true, observedHash: hash(physical), adopted: true, title: b.name, excluded: false, requiresAuxiliary });
             this.store.local('instances', instances);
             return b;
         });
@@ -247,10 +248,10 @@ export class Native {
                     }
                 }
                 const stat = fs.statSync(i.file), stamp = `${stat.ino}:${stat.size}:${stat.mtimeMs}:${stat.ctimeMs}`;
-                if (!i.missing && i.summaryVersion === 4 && i.summaryRevision === i.baseRevision && (this.observedStats.get(i.id) || i.observedStamp) === stamp) continue;
+                if (!i.missing && i.summaryVersion === 5 && i.summaryRevision === i.baseRevision && (this.observedStats.get(i.id) || i.observedStamp) === stamp) continue;
                 const raw = this.read(i.file);
                 i.missing = false;
-                if (hash(raw) === i.observedHash && (!i.adopted || i.historyResolved)) { this.observedStats.set(i.id, stamp); i.observedStamp=stamp; i.summaryJson=JSON.stringify(this.store.summary(i.baseRevision,i.agent)); i.summaryRevision=i.baseRevision; i.summaryVersion=4; continue; }
+                if (hash(raw) === i.observedHash && (!i.adopted || i.historyResolved)) { this.observedStats.set(i.id, stamp); i.observedStamp=stamp; i.summaryJson=JSON.stringify(this.store.summary(i.baseRevision,i.agent)); i.summaryRevision=i.baseRevision; i.summaryVersion=5; continue; }
                 const p = parse(raw, i.agent);
                 if (p.errors.length) {
                     i.pending = '等待完整轮次';
@@ -284,7 +285,7 @@ export class Native {
                 if(logical===raw)this.store.rememberSummary(b.head,i.agent,p);
                 const summary=this.store.summary(b.head,i.agent);
                 if(b.excluded==='empty' && !summary.excluded){this.store.put('branch',metadata(b,{excluded:null}));i.excluded=false;}
-                i.summaryJson=JSON.stringify(summary);i.summaryRevision=b.head;i.summaryVersion=4;i.observedStamp=stamp;
+                i.summaryJson=JSON.stringify(summary);i.summaryRevision=b.head;i.summaryVersion=5;i.observedStamp=stamp;
                 i.baseline = i.adopted || raw === logical ? null : raw;
                 i.observedHash = hash(raw);
                 i.historyResolved = true; i.pending = p.complete ? null : '等待完整轮次'; this.observedStats.set(i.id, stamp);

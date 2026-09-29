@@ -10,7 +10,7 @@ import { rootOf, treeMembers } from './organization.js';
 // Native threads, collection rows, and logical nodes are distinct projections.
 export const isActive = i => i.applied && !i.missing && !i.excluded && i.cwdAvailable !== false;
 export function visibleSession(store, b, forSync = false) {
-    const show = preferences(store).showScheduledSessions || forSync && b.backgroundManaged;
+    const show = forSync ? !!b.backgroundManaged : preferences(store).showScheduledSessions;
     if ((b.scheduled || b.background) && !show) return false;
     if (b.synthetic || b.excluded && !(show && ['scheduled', 'agent-owned', 'background'].includes(b.excluded))) return false;
     const excluded=store.summary(b.head,b.agent).excluded;

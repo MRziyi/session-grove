@@ -1276,3 +1276,16 @@ dialog::backdrop {
 @media(max-width:600px){.transfer-inline{display:none}.layout.detail{--nav-width:32px;--rail-width:32px}.layout.detail #navigation,.layout.detail .nav-footer,.layout.detail #rail-content{display:none}.layout.detail .navigation,.layout.detail .session-rail{padding:4px}.editor{display:flex;flex-direction:column}#ribbon-lane{display:none}.graph-controls{gap:1px}.graph-controls button{padding:4px}.project-group>h2{top:0}}
 
 .layout:not(.detail) #toggle-navigation{display:none}.project-directory-scroll{scrollbar-gutter:stable}#session-list{scroll-behavior:smooth}#toggle-rail{background:#f5f8fa;border-radius:4px}
+
+/* Sticky project headers meet the toolbar; no content leaks above them. */
+#session-list { padding-top:0; }
+.project-group { scroll-margin-top:0; }
+.project-group>h2 { border-radius:0 0 6px 6px; }
+.older-projects-toggle { width:100%; display:flex; gap:8px; align-items:center; border:0; background:#e3eaf1; color:#516a80; text-align:left; padding:11px; border-radius:6px; font-size:12px; }
+.older-projects-toggle span { margin-left:auto; }
+.older-projects { margin-top:18px; }
+#dialog-content>details { margin:10px 0; padding:12px; border:1px solid var(--border); border-radius:8px; }
+#dialog-content>details>summary { cursor:pointer; font-weight:600; }
+.field .select-control { width:100%; min-width:0; }
+.field .select-trigger { width:100%; }
+#transcripts { overflow-anchor:none; }

@@ -2,7 +2,8 @@
 // https://github.com/openai/codex/blob/main/codex-rs/protocol/src/protocol.rs
 // Session provenance, not prompt text or title length, determines whether a
 // native record belongs in the user's conversation manager.
-export function backgroundKind({ agent, source, threadSource, sidechain = false, originKind, sessionKind }) {
+export function backgroundKind({ agent, source, threadSource, sidechain = false, originKind, sessionKind, initialization = false }) {
+    if (initialization) return 'background';
     if (typeof source === 'string' && source.trim().startsWith('{')) { try { source = JSON.parse(source); } catch {} }
     if (sidechain || source && typeof source === 'object' && ('subagent' in source || 'sub_agent' in source)) return 'agent-owned';
     if (typeof source === 'string' && /^sub[_-]?agent/i.test(source)) return 'agent-owned';

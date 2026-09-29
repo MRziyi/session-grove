@@ -1,5 +1,7 @@
 # Sync policy
 
+Current behavior: see [0.11 local copies and explicit Pull](0.11-local-copies.md). Startup, focus, navigation and search no longer trigger cloud reads. The versioned sections below describe historical behavior.
+
 ## First use and operation feedback (0.8.1)
 
 A new library begins empty. Local discovery and its one-minute timer start after the first explicit Update. WebDAV verification/connection creates only configuration/protocol metadata, never publishes local history or reads cloud project indexes. The first explicit Sync enables cloud catalog reads, lazy hydration, operation-triggered uploads and the 15-minute fallback. Sync does not implicitly opt a fresh device into importing its native history. These onboarding choices persist across restarts. Upgrades retain previously initialized libraries.

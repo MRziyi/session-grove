@@ -13,3 +13,8 @@ export function selectRange(start, end, index, shift = false) {
     if (start === null || end !== null && !shift) return { start: index, end: null };
     return { start, end: index };
 }
+
+export function inactiveProject(updatedAt, days = 30, at = Date.now()) {
+    const stamp = Date.parse(updatedAt);
+    return Number.isFinite(stamp) && stamp < at - days * 86400000;
+}

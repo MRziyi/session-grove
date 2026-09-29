@@ -1,4 +1,4 @@
-import { projectGroups, selectRange } from './library-view.js';
+import { projectGroups, selectRange, inactiveProject } from './library-view.js';
 import { markdown } from './markdown.js';
 import { enhanceSelect } from './select.js';
 import { t, locale, setLocale, errorText } from './i18n.js';
@@ -70,7 +70,8 @@ const camera = { x: 0, y: 0, zoom: 1, width: 0, height: 0, rootX: 0, newView: tr
 const compactNumber = n => new Intl.NumberFormat(locale() === 'zh' ? 'zh-CN' : 'en-US', { notation: 'compact', maximumFractionDigits: 1 }).format(n);
 const tokenLabel = n => t('≈ {count} tokens', { count: compactNumber(n.tokens?.recordedEstimate ?? n.tokens?.estimate ?? 0) });
 const tokenHint = () => t('Rough estimate of recorded message and tool text. Excludes hidden instructions, encrypted content and images; not live context usage.');
-const cloudMark = item => `<span class="cloud-mark ${item.cloudState || 'local'}" title="${esc(t(({ cloud: 'Stored in cloud · download on open', update: 'Cloud update available', cached: 'Cached locally · cloud synced', local: 'Local changes · not uploaded yet' })[item.cloudState || 'local']))}">${icon('cloud')}</span>`;
+const cloudMark = item => item.cloudState === 'cloud' ? `<span class="cloud-mark cloud" title="${esc(t('Stored in cloud · download on open'))}">${icon('cloud')}</span>` : '';
+
 const date = value => value ? new Date(value).toLocaleString(locale() === 'zh' ? 'zh-CN' : 'en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : t('Never');
 const currentProject = () => state.data.projects.find(p => p.id === state.scope);
 const route = () => state.tree?.paths.find(p => p.branchId === state.branchId);
@@ -114,7 +115,7 @@ async function run(fn, activity = null) {
 }
 function button(id, label, fn) { const el = $(id); if (el) { el.textContent = t(label); el.onclick = fn; el.disabled = working || ['syncing','migrating'].includes(state.data?.cloud?.phase); } }
 function translateBanner() {
-    for (const [id, glyph, label] of [['sync', 'refresh', 'Sync'], ['collect', 'refresh', 'Update'], ['settings', 'settings', 'Settings']]) {
+    for (const [id, glyph, label] of [['sync', 'sync', 'Sync'], ['collect', 'refresh', 'Update'], ['settings', 'settings', 'Settings']]) {
         const el = $('#' + id); el.dataset.glyph= glyph; el.innerHTML = `${icon(glyph)}<span class="button-label">${t(label)}</span>`; el.title = t(label); el.setAttribute('aria-label', t(label));
     }
     $('#about').textContent = t('About'); $('#information').title = t('Information'); $('#information').setAttribute('aria-label', t('Information'));
@@ -127,14 +128,17 @@ function translateBanner() {
 function renderNavigation() {
     const d = state.data, directoryScroll = $('.project-directory-scroll')?.scrollTop || 0;
     const selectedScope = state.scope === PROJECTS ? state.projectFocus : state.scope;
-    const entry = (scope, name, count, css = '') => `<button class="nav-entry ${css} ${selectedScope === scope ? 'selected' : ''}" data-scope="${esc(scope)}" ${selectedScope === scope ? 'aria-current="page"' : ''}><span class="nav-name">${esc(name)}${!scope.startsWith('active:') && scope !== 'archived' ? `<span class="cloud-mark" title="${t('Project sync')}">${icon('cloud')}</span>` : ''}</span><span class="count">${count}</span></button>`;
+    const entry = (scope, name, count, css = '') => `<button class="nav-entry ${css} ${selectedScope === scope ? 'selected' : ''}" data-scope="${esc(scope)}" ${selectedScope === scope ? 'aria-current="page"' : ''}><span class="nav-name">${esc(name)}</span><span class="count">${count}</span></button>`;
     const projectTimes = new Map(projectGroups(d.items.filter(i=>!i.archived).map(i=>({...i,updatedAt:i.sessions.filter(s=>!s.archived).map(s=>s.updatedAt).sort().at(-1)||i.updatedAt})), d.projects).map(g=>[g.id,g.updatedAt]));
     const projects = d.projects.filter(p => !p.archived && (p.builtin || d.items.some(i => i.projectId === p.id && !i.archived) || p.count > 0));
     const archivedProjects = d.projects.filter(p => p.archived && (d.items.some(i => i.projectId === p.id) || p.index));
     const archivedSessions = d.items.filter(i => !archivedProjects.some(p => p.id === i.projectId)).reduce((n, i) => n + i.sessions.filter(s => s.archived).length, 0);
-    $('#navigation').innerHTML = `<section class="nav-group"><h2 class="nav-label">${t('Current Active')}</h2>${entry('active:codex', 'Codex', d.activeCounts.codex, 'codex')}${entry('active:claude', 'Claude', d.activeCounts.claude, 'claude')}</section><section class="nav-group project-directory"><h2 class="nav-label">${t('Projects')}</h2><div class="project-directory-scroll">${projects.sort((a,b) => (projectTimes.get(b.id)||'').localeCompare(projectTimes.get(a.id)||'') || a.name.localeCompare(b.name)).map(p => entry(p.id, p.builtin ? t('Ungrouped') : p.name==='Scheduled & background'?t(p.name):p.name, Math.max(p.count || 0, d.items.filter(i => i.projectId === p.id && !i.archived).length))).join('') || `<p class="nav-empty">${t('No projects yet')}</p>`}</div></section><section class="nav-group"><h2 class="nav-label">${t('Archived')}</h2>${entry('archived', t('Archived items'), archivedProjects.length + archivedSessions)}</section>`;
+    const directory = rows => rows.sort((a,b) => (projectTimes.get(b.id)||'').localeCompare(projectTimes.get(a.id)||'') || a.name.localeCompare(b.name)).map(p => entry(p.id, p.builtin ? t('Ungrouped') : p.name==='Scheduled & background'?t(p.name):p.name, Math.max(p.count || 0, d.items.filter(i => i.projectId === p.id && !i.archived).length))).join('');
+    const recent = projects.filter(p=>!isInactive(projectTimes.get(p.id))), older = projects.filter(p=>isInactive(projectTimes.get(p.id)));
+    $('#navigation').innerHTML = `<section class="nav-group"><h2 class="nav-label">${t('Current Active')}</h2>${entry('active:codex', 'Codex', d.activeCounts.codex, 'codex')}${entry('active:claude', 'Claude', d.activeCounts.claude, 'claude')}</section><section class="nav-group project-directory"><h2 class="nav-label">${t('Projects')}</h2><div class="project-directory-scroll">${directory(recent)}${older.length?olderToggle(older.length)+(state.olderProjects?directory(older):''):''}</div></section><section class="nav-group"><h2 class="nav-label">${t('Archived')}</h2>${entry('archived', t('Archived items'), archivedProjects.length + archivedSessions)}</section>`;
     $('.project-directory-scroll').scrollTop = directoryScroll;
     $$('[data-scope]').forEach(el => el.onclick = () => navigate(el.dataset.scope));
+    bindOlderProjects();
     renderCloudStatus();
 }
 
@@ -182,6 +186,9 @@ function sourceTags(item) {
     return `<span class="row-tags">${toolTags(item.agents || item.sessions?.map(s=>s.agent) || [item.agent])}${o?`<span class="device-tag" title="${esc(t(o.observed?'Imported on {device}':'Last conversation update on {device}',{device:o.name}))}">${icon(type)}<span>${esc(o.model||o.name)}</span></span>`:''}</span>`;
 }
 
+function isInactive(updatedAt) { return inactiveProject(updatedAt, state.data.preferences?.inactiveProjectDays || 30); }
+function olderToggle(count) { return `<button type="button" class="older-projects-toggle" data-older-projects aria-expanded="${!!state.olderProjects}">${state.olderProjects?'▾':'▸'} ${t('Older projects')} <span>${count}</span></button>`; }
+function bindOlderProjects() { $$('[data-older-projects]').forEach(el=>el.onclick=()=>{state.olderProjects=!state.olderProjects;renderNavigation();renderList();}); }
 let projectObserver;
 function focusProject(id, scroll = true) {
     state.projectFocus = id;
@@ -195,7 +202,7 @@ async function navigate(scope) {
     if(project && state.scope===PROJECTS && !state.tree && !state.query){focusProject(focus);return;}
     ++requestId; opening=false;state.scope=project?PROJECTS:scope;state.projectFocus=focus;state.tree=null;state.list={items:[],sessionCount:0};state.query='';state.selected.clear();clearRange();$('#search').value='';
     render();$('#session-list').innerHTML=`<p class="empty">${t('Loading project index…')}</p>`;
-    try {await refresh({checkCloud:true});if(project&&focus)focusProject(focus);}catch(e){toast(e.message);}
+    try {await refresh();if(project&&focus)focusProject(focus);}catch(e){toast(e.message);}
 }
 function title() { if(state.scope === PROJECTS) return t('Projects'); if(state.scope === INBOX) return t('Ungrouped'); return state.scope === 'active:codex' ? t('Active Codex Sessions') : state.scope === 'active:claude' ? t('Active Claude Code Sessions') : state.scope === 'archived' ? t('Archived') : currentProject()?.name || t('Projects'); }
 function groups() {
@@ -232,7 +239,10 @@ function renderList() {
     button('#restore-items','Restore',()=>restore({itemIds:[...state.selected]}));
     button('#deactivate-items','Deactivate',()=>run(()=>api('/manage','POST',{action:'deactivate',itemIds:[...state.selected],agent:state.scope.slice(7)})));
     const row=i=>`<article class="session-row ${state.selected.has(i.id)?'checked':''}" data-item="${esc(i.id)}"><button class="row-open" data-open="${esc(i.id)}">${icon(i.kind)}<span class="row-text"><span class="row-title">${esc(i.name)} ${cloudMark(i)}</span><span class="row-meta">${itemMeta(i)} ${sourceTags(i)}</span></span><time class="row-date">${date(i.updatedAt)}</time></button>${state.scope==='archived'?'':`<input type="checkbox" data-select="${esc(i.id)}" aria-label="${esc(t('Select {name}',{name:i.name}))}" ${state.selected.has(i.id)?'checked':''}>`}</article>`;
-    $('#session-list').innerHTML=groups().map(g=>{const limited=state.scope===PROJECTS&&!state.query&&g.items.length>5,expanded=state.expandedProjects.has(g.id)||g.items.some(i=>state.selected.has(i.id));const shown=limited&&!expanded?g.items.slice(0,5):g.items;return `<section class="list-group project-group" data-project-group="${esc(g.id||INBOX)}"><h2>${esc(g.name==='Scheduled & background'?t(g.name):g.name)}<span>${g.items.length}</span></h2>${shown.map(row).join('')}${limited?`<button class="show-project" data-expand-project="${esc(g.id)}">${t(expanded?'Show fewer':'Show all {count}',{count:g.items.length})}</button>`:''}</section>`;}).join('')||`<p class="empty">${t(state.query?'No matching sessions':'No sessions here.')}</p>`;
+    const groupHtml = g=>{const limited=state.scope===PROJECTS&&!state.query&&g.items.length>5,expanded=state.expandedProjects.has(g.id)||g.items.some(i=>state.selected.has(i.id));const shown=limited&&!expanded?g.items.slice(0,5):g.items;return `<section class="list-group project-group" data-project-group="${esc(g.id||INBOX)}"><h2>${esc(g.name==='Scheduled & background'?t(g.name):g.name)}<span>${g.items.length}</span></h2>${shown.map(row).join('')}${limited?`<button class="show-project" data-expand-project="${esc(g.id)}">${t(expanded?'Show fewer':'Show all {count}',{count:g.items.length})}</button>`:''}</section>`;};
+    const allGroups = groups(), older = state.scope===PROJECTS&&!state.query ? allGroups.filter(g=>isInactive(g.updatedAt)) : [], olderIds = new Set(older.map(g=>g.id));
+    $('#session-list').innerHTML = allGroups.filter(g=>!olderIds.has(g.id)).map(groupHtml).join('') + (older.length ? `<section class="older-projects">${olderToggle(older.length)}${state.olderProjects?older.map(groupHtml).join(''):''}</section>` : '') || `<p class="empty">${t(state.query?'No matching sessions':'No sessions here.')}</p>`;
+    bindOlderProjects();
     $$('[data-open]').forEach(el=>el.onclick=()=>openTree(el.dataset.open));
     $$('[data-select]').forEach(el=>el.onchange=()=>{el.checked?state.selected.add(el.dataset.select):state.selected.delete(el.dataset.select);renderList();});
     $$('[data-expand-project]').forEach(el=>el.onclick=()=>{const id=el.dataset.expandProject;state.expandedProjects.has(id)?state.expandedProjects.delete(id):state.expandedProjects.add(id);renderList();});
@@ -250,12 +260,13 @@ async function openTree(id) {
     opening = true; state.tree = null; render(); $('#main').setAttribute('aria-busy', 'true');
     const label = $(`[data-item="${id}"] .row-meta`); if (label) label.textContent = t('Loading context…');
     try {
-        const tree = await api('/trees/' + encodeURIComponent(id) + '?view=' + view + '&check=1');
+        const tree = await api('/trees/' + encodeURIComponent(id) + '?view=' + view);
         if (ticket !== requestId || state.scope !== scope) return;
         if (tree.view !== view || tree.paths.some(p => view === 'archived' ? !p.archived && !tree.projectArchived : p.archived || tree.projectArchived)) throw new Error(t('The view changed. Please open the session again.'));
         if (!tree.paths.length) { state.tree = null; render(); return; }
         state.tree = tree;
-        state.branchId = [...(item?.matchedSessionIds || []), ...(item?.visibleSessionIds || [])].find(id => tree.paths.some(p => p.branchId === id)) || tree.paths[0].branchId;
+        state.branchId = (state.query ? tree.paths.find(p => item?.matchedSessionIds?.includes(p.branchId)) : null)?.branchId || tree.paths.find(p=>p.branchId===tree.id)?.branchId || [...tree.paths].sort((a,b)=>b.nodeIds.length-a.nodeIds.length)[0].branchId;
+        for (const list of [state.list.items,state.data.items]) { const cached=list.find(i=>i.id===id); if(cached)cached.cloudState='cached'; }
         state.nodeId = null; state.compactionId = null; clearRange(); state.expanded.clear(); camera.x = 0; camera.y = 0; camera.zoom = 1; camera.newView = true; render();
     } catch (e) { if (ticket === requestId) { toast(e.message); state.tree = null; render(); } }
     finally { if (ticket === requestId) { opening = false; $('#main').removeAttribute('aria-busy'); } }
@@ -306,7 +317,7 @@ function renderDetailActions() {
     button('#apply-context', 'Apply context', () => activateDialog(p, 'Apply context'));
     button('#combine', 'Combine', combineDialog);
     button('#dissolve', 'Dissolve', () => run(async () => { await saveOrganization('dissolve'); clearRange(); }));
-    button('#clear-selection', 'Clear', () => { clearRange(); renderDetail(); });
+    button('#clear-selection', 'Clear', () => { clearRange(); updateRangeSelection(); renderDetailActions(); renderGraph(); });
     button('#toggle-active', p.active ? 'Deactivate' : 'Activate', () => p.active ? run(() => api('/manage', 'POST', { action: 'deactivate', branchIds: [p.branchId] })) : activateDialog(p));
     button('#restore-session', 'Restore', () => restore({ branchIds: [p.branchId] }));
     button('#fork', 'Fork', forkDialog);
@@ -377,19 +388,22 @@ function renderTranscript() {
     };
     $$('[data-activity]').forEach(el=>el.addEventListener('toggle',()=>{if(el.open && !el.dataset.loaded){const group=activityGroups[Number(el.dataset.activity)];el.querySelector('.activity-body').innerHTML=activityEntries(group.entries,group.p);el.dataset.loaded='true';scheduleRibbons();}}));
     $$('#transcripts details').forEach(el=>el.addEventListener('toggle',scheduleRibbons));
-    $('#range-hint').hidden = state.scope === 'archived';
-    $('#range-hint').textContent = state.rangeStart === null ? t('Select a start, then an end.') : state.rangeEnd === null ? t('Start: {number} · select the end', { number: state.rangeStart + 1 }) : t('Selected chats {start}–{end}', { start: Math.min(state.rangeStart, state.rangeEnd) + 1, end: Math.max(state.rangeStart, state.rangeEnd) + 1 });
+    updateRangeSelection();
     $$('[data-chat]').forEach(el => el.onclick = e => {
-        e.preventDefault();
         const index = p.messages.findIndex(m => m.id === el.dataset.chat);
         const range=selectRange(state.rangeStart,state.rangeEnd,index,e.shiftKey); state.rangeStart=range.start;state.rangeEnd=range.end;
         const end = state.rangeEnd ?? state.rangeStart;
         state.chats = state.rangeStart===null?new Set():new Set(p.messages.slice(Math.min(state.rangeStart, end), Math.max(state.rangeStart, end) + 1).map(m => m.id));
         state.nodeId = null; state.compactionId = null;
-        const top = $('#transcripts').scrollTop; renderTranscript(); $('#transcripts').scrollTop = top; renderDetailActions(); renderGraph();
+        updateRangeSelection(); renderDetailActions(); renderGraph();
     });
     $$('[data-expand]').forEach(el => el.onclick = () => { const top = $('#transcripts').scrollTop; state.expanded.has(el.dataset.expand) ? state.expanded.delete(el.dataset.expand) : state.expanded.add(el.dataset.expand); renderTranscript(); $('#transcripts').scrollTop = top; scheduleRibbons(); });
     $$('[data-focus-node]').forEach(el => el.onclick = () => selectNode(el.dataset.focusNode, false));
+}
+function updateRangeSelection() {
+    $('#range-hint').hidden = state.scope === 'archived';
+    $('#range-hint').textContent = state.rangeStart === null ? t('Select a start, then an end.') : state.rangeEnd === null ? t('Start: {number} · select the end', { number: state.rangeStart + 1 }) : t('Selected chats {start}–{end}', { start: Math.min(state.rangeStart, state.rangeEnd) + 1, end: Math.max(state.rangeStart, state.rangeEnd) + 1 });
+    for (const el of $$('[data-chat]')) { const checked = state.chats.has(el.dataset.chat); el.checked = checked; el.closest('.chat').classList.toggle('checked', checked); }
 }
 function renderGraph() {
     const nodes = state.tree.nodes, p = route(), positions = new Map(), byNode = new Map(nodes.map(n=>[n.id,n]));
@@ -403,7 +417,7 @@ function renderGraph() {
     nodes.filter(n => !n.parentIds.length).forEach(place);
     const width = Math.max(180, lane * 174), height = Math.max(160, ...nodes.map(n => n.depth * 116 + 110));
     camera.width = width; camera.height = height; camera.rootX = (positions.get(nodes.find(n => !n.parentIds.length)?.id)?.x || 0) + 74;
-    if (camera.newView) { camera.x = $('#graph-scroll').clientWidth / 2 - camera.rootX; camera.y = 8; camera.newView = false; }
+    if (camera.newView) { const view = $('#graph-scroll'); camera.zoom = Math.max(.02, Math.min(1, (view.clientWidth-32)/width, (view.clientHeight-32)/height)); camera.x = (view.clientWidth-width*camera.zoom)/2; camera.y = (view.clientHeight-height*camera.zoom)/2; camera.newView = false; }
     $('#graph').style.width = `${width}px`; $('#graph').style.height = `${height}px`;
     $('#graph').innerHTML = `<svg class="graph-edges" width="${width}" height="${height}" aria-hidden="true">${state.tree.edges.map(e => { const a = positions.get(e.from), b = positions.get(e.to), n = byNode.get(e.to), color = palette[n.color][0]; return `<path d="M${a.x + 74},${a.y + 80} C${a.x + 74},${a.y + 102} ${b.x + 74},${b.y - 25} ${b.x + 74},${b.y}" fill="none" stroke="${color}" stroke-width="2" ${n.pending ? 'stroke-dasharray="4 4"' : ''}/>`; }).join('')}</svg>${nodes.map(n => { const pos = positions.get(n.id); return `<button class="graph-node ${mutedNode(n, p) ? 'context-muted' : ''} ${n.pending ? 'pending' : ''} ${n.id === state.nodeId ? 'selected' : ''} ${p.nodeIds.includes(n.id) ? '' : 'dimmed'}" data-node="${esc(n.id)}" style="${style(n)};left:${pos.x}px;top:${pos.y}px" aria-pressed="${n.id === state.nodeId}"><span class="node-tools">${toolTags(n.agents || [p.agent],true)}</span><span class="node-title">${esc(nodeName(n))}</span><span class="node-meta">${t('{count} chats', { count: n.count })} · <span title="${esc(tokenHint())}">${tokenLabel(n)}</span></span>${n.endBranchIds.some(id => state.tree.paths.find(p => p.branchId === id)?.active) ? `<span class="end-label">${t('Active')}</span>` : ''}</button>`; }).join('')}`;
     for (const e of p.context?.compactions || []) {
@@ -423,7 +437,9 @@ function selectNode(id, scrollTranscript = true) {
     const n = state.tree.nodes.find(n => n.id === id);
     if (!n.branchIds.includes(state.branchId)) { state.branchId = n.branchIds.find(id => !state.tree.paths.find(p => p.branchId === id).archived) || n.branchIds[0]; state.chats.clear(); }
     clearRange(); state.compactionId = null; state.nodeId = id;
-    const top = $('#transcripts').scrollTop; renderDetail();
+    const top = $('#transcripts').scrollTop;
+    // Focusing a caption must not destroy transcript layout and its scroll anchor.
+    if (!scrollTranscript) { renderDetailActions(); renderGraph(); } else renderDetail();
     if (scrollTranscript) $(`[data-segment="${id}"]`)?.scrollIntoView({ block: 'start', behavior: 'smooth' });
     else { $('#transcripts').scrollTop = top; revealNode(id); }
     scheduleRibbons();
@@ -449,7 +465,7 @@ function applyCamera() {
     if (!state.tree) return;
     $('#graph').style.transform = `translate(${camera.x}px, ${camera.y}px) scale(${camera.zoom})`;
     const view = $('#graph-scroll');
-    view.style.backgroundSize = `${18 * camera.zoom}px ${18 * camera.zoom}px`;
+    view.style.backgroundSize = `${Math.max(12, 18 * camera.zoom)}px ${Math.max(12, 18 * camera.zoom)}px`;
     view.style.backgroundPosition = `${camera.x}px ${camera.y}px`;
     $('#zoom-label').textContent = Math.round(camera.zoom * 100) + '%';
     $('#zoom-out').disabled = camera.zoom <= .02; $('#zoom-in').disabled = camera.zoom >= 1.75;
@@ -465,9 +481,10 @@ function resetCamera() {
 }
 function revealNode(id) {
     const el = $(`[data-node="${id}"]`); if (!el) return;
+    camera.zoom = Math.max(.85, camera.zoom); applyCamera();
     const view = $('#graph-scroll').getBoundingClientRect(), rect = el.getBoundingClientRect();
-    if (rect.left < view.left || rect.right > view.right) camera.x += view.left + (view.width - rect.width) / 2 - rect.left;
-    if (rect.top < view.top || rect.bottom > view.bottom) camera.y += view.top + (view.height - rect.height) / 2 - rect.top;
+    camera.x += view.left + (view.width - rect.width) / 2 - rect.left;
+    camera.y += view.top + (view.height - rect.height) / 2 - rect.top;
     applyCamera();
 }
 async function refresh({ checkCloud = false } = {}) {
@@ -536,25 +553,38 @@ async function activateDialog(p, actionLabel = 'Activate') {
         $('[name=cwd]').oninput = () => { checked = null; $('#activation-budget').textContent = ''; $('#dialog-submit').textContent = t('Check & activate'); };
     } catch (e) { toast(e.message); }
 }
+const contextCopy = mode => t(mode === 'full' ? 'Full history embeds the exact original JSONL as historical context. Foreign tools are not replayed.' : 'Lean keeps conversation text and tool calls. Long read-only outputs are shortened; errors, writes and other shell output stay complete. Thinking and transport metadata remain in the source.');
 async function conversionDialog(p) {
     try {
         const d = await api('/branches/' + p.branchId), target = p.agent === 'claude' ? 'codex' : 'claude';
-        let preview = null, checkedOptions = '';
-        modal('Activate as…', `<p>${esc(p.agent)} → ${esc(target)}</p>${field('Working directory', 'cwd', d.cwd)}<label class="field">${t('Context mode')}<select name="mode"><option value="lean">${t('Lean context')}</option><option value="full">${t('Full history')}</option></select></label><p class="dialog-copy">${t('The source stays intact. A separate session is created in the target agent.')}</p><div id="conversion-preview" role="status"></div>`, async form => {
-            const options = { branchId: p.branchId, target, mode: form.get('mode'), cwd: form.get('cwd') }, key = JSON.stringify(options);
-            if (!preview || key !== checkedOptions) {
-                preview = await api('/conversion-check', 'POST', options); checkedOptions = key;
-                $('#conversion-preview').innerHTML = `<p>≈ ${compactNumber(preview.estimated)} tokens (${t('Source')}: ≈ ${compactNumber(preview.originalEstimated)})</p><p>${t('Shortened outputs')}: ${preview.stats.shortenedOutputs} · ${t('Omitted records')}: ${preview.stats.omittedRecords}</p><p class="dialog-copy">${t(options.mode === 'full' ? 'Full history embeds the exact original JSONL as historical context. Foreign tools are not replayed.' : 'Lean keeps conversation text and tool calls. Long read-only outputs are shortened; errors, writes and other shell output stay complete. Thinking and transport metadata remain in the source.')}</p>${preview.budget.risk ? `<p class="warning">${t('Context may be near its limit: about {used} tokens, planning limit {limit}.', { used: compactNumber(preview.estimated), limit: compactNumber(preview.budget.window || preview.budget.compactAt) })}</p>` : ''}<p class="dialog-copy">${t('Cross-agent continuation changes the model and runtime; it is not a native fork.')}</p>`;
-                $('#dialog-submit').textContent = t(preview.budget.risk ? 'Activate anyway' : 'Activate');
-                return false;
-            }
-            const result = await api('/convert', 'POST', { ...options, fingerprint: preview.fingerprint, contextAcknowledgement: preview.budget.fingerprint });
-            state.tree = null; state.branchId = result.branch.id; state.itemId = result.branch.id;
-            toast(t('Open the active continuation from your agent’s session list.'));
-        }, 'Preview context');
-        for (const element of $$('[name=mode],[name=cwd]')) element.onchange = () => { preview = null; $('#conversion-preview').textContent = ''; $('#dialog-submit').textContent = t('Preview context'); };
-    } catch (e) { toast(e.message); }
+        let previews = {}, checkedCwd = null, generation = 0, timer;
+        modal('Activate as…', `<p>${p.agent==='claude'?'Claude':'Codex'} → ${target==='claude'?'Claude':'Codex'}</p>${field('Working directory', 'cwd', d.cwd)}<p class="dialog-copy">${t('Uses the source working directory. If it moved or is missing on this device, choose its current local folder. Project files are not downloaded with the session.')}</p><label class="field">${t('Context mode')}<select name="mode" aria-label="${t('Context mode')}"><option value="lean">${t('Lean context')} · ${t('Estimating…')}</option><option value="full">${t('Full history')} · ${t('Estimating…')}</option></select></label><p class="dialog-copy">${t('The source stays intact. A separate session is created in the target agent.')}</p><div id="conversion-preview" role="status"></div>`, async form => {
+            const mode=form.get('mode'), cwd=form.get('cwd'), preview=previews[mode];
+            if(!preview || checkedCwd!==cwd){await estimate();return false;}
+            const result=await api('/convert','POST',{branchId:p.branchId,target,mode,cwd,fingerprint:preview.fingerprint,contextAcknowledgement:preview.budget.fingerprint});
+            state.tree=null;state.branchId=result.branch.id;state.itemId=result.branch.id;toast(t('Open the active continuation from your agent’s session list.'));
+        }, 'Activate');
+        const ticket=modalVersion, select=$('[name=mode]'), cwd=$('[name=cwd]');
+        enhanceSelect(select);
+        function show(){
+            const preview=previews[select.value]; $('#dialog-submit').disabled=!preview || checkedCwd!==cwd.value;
+            $('#conversion-preview').innerHTML=`<p class="dialog-copy">${contextCopy(select.value)}</p>${preview?`<p>≈ ${preview.estimated.toLocaleString()} tokens · ${t('Shortened outputs')}: ${preview.stats.shortenedOutputs} · ${t('Omitted records')}: ${preview.stats.omittedRecords}</p>${preview.budget.risk?`<p class="warning">${t('Context may be near its limit: about {used} tokens, planning limit {limit}.',{used:compactNumber(preview.estimated),limit:compactNumber(preview.budget.window||preview.budget.compactAt)})}</p>`:''}`:''}<p class="dialog-copy">${t('Counts estimate packaged text, not exact model billing or live context. Target instructions and files may add tokens.')}</p><p class="dialog-copy">${t('Cross-agent continuation changes the model and runtime; it is not a native fork.')}</p>`;
+            $('#dialog-submit').textContent=t(preview?.budget.risk?'Activate anyway':'Activate');
+        }
+        async function estimate(){
+            const turn=++generation, directory=cwd.value;previews={};show();
+            try{const values=await Promise.all(['lean','full'].map(mode=>api('/conversion-check','POST',{branchId:p.branchId,target,mode,cwd:directory})));
+                if(ticket!==modalVersion||turn!==generation||!$('#dialog').open)return;
+                checkedCwd=directory;previews=Object.fromEntries(values.map(v=>[v.mode,v]));
+                for(const option of select.options)option.textContent=t(option.value==='lean'?'Lean context':'Full history')+' · ≈ '+previews[option.value].estimated.toLocaleString()+' tokens';
+                enhanceSelect(select);show();
+            }catch(e){if(ticket===modalVersion&&turn===generation)$('#dialog-error').textContent=e.message;}
+        }
+        select.onchange=show;cwd.oninput=()=>{generation++;previews={};show();clearTimeout(timer);timer=setTimeout(estimate,350);};
+        await estimate();
+    } catch(e){toast(e.message);}
 }
+
 function saveOrganization(action, name) { return api('/trees/' + state.tree.id, 'POST', { version: state.tree.version, pathId: state.branchId, chatIds: [...state.chats], action, name }); }
 function combineDialog() {
     const p = route(), positions = p.messages.map((m, i) => state.chats.has(m.id) ? i : -1).filter(i => i >= 0);
@@ -591,8 +621,9 @@ async function settings(options = {}) {
             ${c.encryptionReady && !state.data.cloud.started ? `<p class="setup-hint">${t('Ready. Close Settings and click Sync to review cloud synchronization.')}</p>` : ''}
             <div id="settings-progress" role="status" hidden></div>
           </section>` : ''}
-          <section class="settings-card"><h3>${t('Automatic updates')}</h3><div class="timer-row"><label><input type="checkbox" name="showScheduledSessions" ${p.showScheduledSessions?'checked':''}>${t('Show scheduled and background sessions')}</label></div><p class="dialog-copy">${t('Use Update after changing this filter. Native files are never deleted.')}</p>
-            ${[['localUpdate', 'Read local sessions', p.localUpdateEnabled, p.localUpdateMinutes], ['autoUpload', 'Periodic upload fallback', p.autoUploadEnabled, p.autoUploadMinutes]].map(([key,label,on,minutes]) => `<div class="timer-row"><label><input type="checkbox" name="${key}Enabled" ${on ? 'checked' : ''}>${t(label)}</label><label class="timer-interval"><input type="number" name="${key}Minutes" value="${minutes}" min="1" max="1440" ${!on ? 'disabled' : ''}><span>${t('minutes')}</span></label></div>`).join('')}
+          <section class="settings-card"><h3>${t('Automatic updates')}</h3><div class="timer-row"><label><input type="checkbox" name="showScheduledSessions" ${p.showScheduledSessions?'checked':''}>${t('Show scheduled and background sessions')}</label></div><p class="dialog-copy">${t('Changes save immediately. Native files are never deleted.')}</p>
+            <label class="field">${t('Collapse inactive projects after')}<select name="inactiveProjectDays" aria-label="${t('Collapse inactive projects after')}">${[[7,'One week'],[15,'Half a month'],[30,'One month'],[60,'Two months']].map(([days,label])=>`<option value="${days}" ${days===p.inactiveProjectDays?'selected':''}>${t(label)}</option>`).join('')}</select></label>
+            ${[['localUpdate', 'Read local sessions', p.localUpdateEnabled, p.localUpdateMinutes], ['autoUpload', 'Automatically upload local changes', p.autoUploadEnabled, p.autoUploadMinutes]].map(([key,label,on,minutes]) => `<div class="timer-row"><label><input type="checkbox" name="${key}Enabled" ${on ? 'checked' : ''}>${t(label)}</label><label class="timer-interval"><input type="number" name="${key}Minutes" value="${minutes}" min="1" max="1440" ${!on ? 'disabled' : ''}><span>${t('minutes')}</span></label></div>`).join('')}
             <p class="dialog-copy">${t('Every upload reads local sessions first. No changes means no scheduled cloud request.')}</p><button type="button" id="save-timers" hidden>${t('Save preferences')}</button>
           </section>${c.recoverable && c.job?.state !== 'running' ? `<button type="button" id="recover-settings">${t('Recover settings change')}</button>` : ''}`, null);
         $('#dialog-cancel').textContent = t('Close');
@@ -634,14 +665,16 @@ async function settings(options = {}) {
         }
         if(c.job?.state==='running') trackJob().catch(e=>$('#dialog-error').textContent=e.message);
         if($('#recover-settings')) $('#recover-settings').onclick=e=>busy(e.currentTarget,async()=>{await api('/settings/recover','POST',{});await refresh();await settings();});
-        const timers = () => ({showScheduledSessions:$('[name=showScheduledSessions]').checked, ...Object.fromEntries(['localUpdate','autoUpload'].flatMap(k=>[[k+'Enabled',$(`[name=${k}Enabled]`).checked],[k+'Minutes',Number($(`[name=${k}Minutes]`).value)]]))});
-        const validateTimers=()=>{const v=timers();for(const k of ['localUpdate','autoUpload']) $(`[name=${k}Minutes]`).disabled=!v[k+'Enabled'];$('#save-timers').hidden=JSON.stringify(v)===JSON.stringify(p)||Object.entries(v).some(([k,n])=>k.endsWith('Minutes')&&(!Number.isInteger(n)||n<1||n>1440));};
+        const timers = () => ({inactiveProjectDays:Number($('[name=inactiveProjectDays]').value),showScheduledSessions:$('[name=showScheduledSessions]').checked, ...Object.fromEntries(['localUpdate','autoUpload'].flatMap(k=>[[k+'Enabled',$(`[name=${k}Enabled]`).checked],[k+'Minutes',Number($(`[name=${k}Minutes]`).value)]]))});
+        const validateTimers=()=>{const v=timers();for(const k of ['localUpdate','autoUpload']) $(`[name=${k}Minutes]`).disabled=!v[k+'Enabled'];$('#save-timers').hidden=Object.entries(v).every(([key,value])=>p[key]===value)||Object.entries(v).some(([k,n])=>k.endsWith('Minutes')&&(!Number.isInteger(n)||n<1||n>1440));};
+        enhanceSelect($('[name=inactiveProjectDays]'));
+        for(const el of $$('[name=showScheduledSessions],[name=inactiveProjectDays]')) el.onchange=async()=>{el.disabled=true;try{await api('/settings/timers','POST',el.type==='checkbox'?{showScheduledSessions:el.checked}:{inactiveProjectDays:Number(el.value)});await refresh();await settings(options);}catch(e){$('#dialog-error').textContent=e.message;el.disabled=false;}};
         $$('.timer-row input').forEach(el=>el.addEventListener('input',validateTimers));validateTimers();
         $('#save-timers').onclick=e=>busy(e.currentTarget,async()=>{await api('/settings/timers','POST',timers());await refresh();await settings(options);});
     } catch(e) { toast(e.message); }
 }
 function information() {
-    modal('Information', `<h3>${t('When can I use each action?')}</h3><ul class="action-guide"><li>${t('Update reads local sessions. Sync pulls remote changes before pushing local work, including Pending.')}</li><li>${t('Move belongs to the session list. Select items before choosing a project.')}</li><li>${t('In a transcript, select a start and end to Combine or Dissolve a continuous range.')}</li><li>${t('Select a graph node to Rename it. Naming Pending makes it a saved node.')}</li><li>${t('Fork appears only at a completed turn. Activate, Deactivate and Archive belong to a complete session endpoint.')}</li><li>${t('Archived shows only archived paths with their prefixes. Restore returns a path to its project without activating it.')}</li></ul><p class="dialog-copy">${t('Token counts are estimates. Local configuration and recorded usage inform activation warnings; unknown limits are not guessed.')}</p><p class="dialog-copy">${t('Close running agents before changing native activation. Browsing and organization remain available.')}</p><h3>${t('Diagnostics')}</h3><p class="dialog-copy">${t('Logs contain timings, operation types and error references; no conversation text, passwords, URLs or working paths.')}</p><button type="button" id="download-diagnostics">${t('Download diagnostics')}</button>${(state.data.plan?.pendingRecovery||[]).map(id=>`<button type="button" data-recover="${esc(id)}">${t('Recover interrupted operation')}</button>`).join('')}${state.data.conflicts.map((c,i)=>`<div class="conflict">${t('Conflict')}: ${esc(c.local.name)}<button type="button" data-conflict="${i}" data-choice="local">${t('Keep local')}</button><button type="button" data-conflict="${i}" data-choice="remote">${t('Use remote')}</button></div>`).join('')}`,null);
+    modal('Information', `<details><summary>${t('When can I use each action?')}</summary><ul class="action-guide"><li>${t('Update reads local sessions. Sync pulls remote changes before pushing local work, including Pending.')}</li><li>${t('Move belongs to the session list. Select items before choosing a project.')}</li><li>${t('In a transcript, select a start and end to Combine or Dissolve a continuous range.')}</li><li>${t('Select a graph node to Rename it. Naming Pending makes it a saved node.')}</li><li>${t('Fork appears only at a completed turn. Activate, Deactivate and Archive belong to a complete session endpoint.')}</li><li>${t('Archived shows only archived paths with their prefixes. Restore returns a path to its project without activating it.')}</li></ul><p class="dialog-copy">${t('Token counts are estimates. Local configuration and recorded usage inform activation warnings; unknown limits are not guessed.')}</p><p class="dialog-copy">${t('Close running agents before changing native activation. Browsing and organization remain available.')}</p></details><details><summary>${t('Sync and local copies')}</summary><p>${t('Browsing uses the saved directory. Cloud icons mean the session is not on this device. Open it once to download and keep it locally. Sync refreshes the directory and downloaded sessions; unopened sessions remain cloud-only. Local edits start an automatic Push countdown.')}</p></details><details><summary>${t('Context mode')}</summary><p><strong>${t('Lean context')}</strong> — ${contextCopy('lean')}</p><p><strong>${t('Full history')}</strong> — ${contextCopy('full')}</p><p>${t('Counts estimate packaged text, not exact model billing or live context. Target instructions and files may add tokens.')}</p></details><details><summary>${t('Diagnostics')}</summary><p class="dialog-copy">${t('Logs contain timings, operation types and error references; no conversation text, passwords, URLs or working paths.')}</p><button type="button" id="download-diagnostics">${t('Download diagnostics')}</button></details>${(state.data.plan?.pendingRecovery||[]).map(id=>`<button type="button" data-recover="${esc(id)}">${t('Recover interrupted operation')}</button>`).join('')}${state.data.conflicts.map((c,i)=>`<div class="conflict">${t('Conflict')}: ${esc(c.local.name)}<button type="button" data-conflict="${i}" data-choice="local">${t('Keep local')}</button><button type="button" data-conflict="${i}" data-choice="remote">${t('Use remote')}</button></div>`).join('')}`,null);
     $('#download-diagnostics').onclick=async()=>{try{const report=await api('/diagnostics'),url=URL.createObjectURL(new Blob([JSON.stringify(report,null,2)],{type:'application/json'})),link=document.createElement('a');link.href=url;link.download='session-grove-diagnostics.json';link.click();setTimeout(()=>URL.revokeObjectURL(url),1000);}catch(e){$('#dialog-error').textContent=e.message;}};
     $$('[data-conflict]').forEach(el=>el.onclick=()=>run(async()=>{await api('/conflicts/resolve','POST',{index:Number(el.dataset.conflict),choice:el.dataset.choice});$('#dialog').close();}));
     $$('[data-recover]').forEach(el=>el.onclick=()=>run(async()=>{await api('/recover','POST',{id:el.dataset.recover});$('#dialog').close();}));
@@ -698,7 +731,7 @@ $('#graph-scroll').addEventListener('wheel', e => {
     if (e.ctrlKey || e.metaKey) zoom(Math.exp(-e.deltaY * .008), e.clientX - rect.left, e.clientY - rect.top);
     else { camera.x -= e.deltaX; camera.y -= e.deltaY; applyCamera(); }
 }, { passive: false });
-window.addEventListener('focus', () => { if (!state.data || working || opening || $('#sync-dialog').open) return; api('/cloud/check', 'POST', {}).then(() => refresh()).catch(() => {}); });
+// Window focus never performs remote I/O; Sync explicitly refreshes the cloud directory.
 window.addEventListener('resize', () => scheduleRibbons());
 try {
     const boot = await (await fetch('/api/bootstrap')).json(); if (boot.error) throw new Error(errorText(boot.error));

@@ -47,7 +47,7 @@ export function createApp({ root, roots, guard, demo = false }) {
     const operation = (kind, value) => { for (const res of streams) res.write('event: operation\ndata: ' + JSON.stringify({kind, ...value}) + '\n\n'); };
     autoSync.onOperation = value => operation('sync', {...value, status:autoSync.status()});
     const timing = () => ({ appVersion: VERSION, serverNow: Date.now(), stateVersion: diagnostics.startedAt + ':' + store.version + ':' + store.cloudVersion, update: { nextRunAt: nextCaptureAt, lastRunAt: lastCaptureAt, started: !!store.local('localUpdateStarted'), operation: updateOperation } });
-    const snapshot = () => autoSync.decorate(store.snapshot());
+    const snapshot = () => ({ ...autoSync.decorate(store.snapshot()), preferences: preferences(store) });
     const server = http.createServer(async (req, res) => {
         const started = performance.now(), requestId = id().slice(0, 8);
         const beforeManagement = req.method !== 'GET' && /^\/api\/(trees|move|manage|projects|branches|conflicts)(?:\/|$)/.test(req.url) ? management() : null;
@@ -67,7 +67,6 @@ export function createApp({ root, roots, guard, demo = false }) {
                 return send(200, webAssets.get(file), file.endsWith('.css') ? 'text/css' : file.endsWith('.js') ? 'text/javascript' : 'text/html; charset=utf-8');
             }
             if (req.method === 'GET' && route === '/api/bootstrap') {
-                if (autoSync.passphrase !== null) autoSync.checkCatalog(5 * 60 * 1000).catch(() => {});
                 return send(200, { token, demo, ...snapshot(), ...timing(), roots: native.roots, cloud: autoSync.status(), lastSync: store.local('lastSync'), plan: native.plan() });
             }
             const supplied = Buffer.from(req.headers['x-grove-token'] || '');
@@ -109,12 +108,10 @@ export function createApp({ root, roots, guard, demo = false }) {
             if (req.method === 'POST' && route === '/api/settings/verify') return send(200, await settings.verify(body));
             if (req.method === 'POST' && route === '/api/settings/confirm') return send(202, settings.start(body));
             if (req.method === 'POST' && route === '/api/settings/recover') return send(200, await settings.recover());
-            if (req.method === 'POST' && route === '/api/settings/timers') return send(200, settings.timers(body));
+            if (req.method === 'POST' && route === '/api/settings/timers') { const previous = preferences(store).showScheduledSessions, saved = settings.timers(body); if (saved.showScheduledSessions && !previous) await captureLocal(); return send(200, saved); }
             if (req.method === 'GET' && route === '/api/list') {
-                const check = url.searchParams.get('check') === '1';
                 const scope = url.searchParams.get('scope') || 'active:codex', query = url.searchParams.get('q') || '';
-                if (['archived','projects'].includes(scope)) for (const p of autoSync.cloud.summaries()) await autoSync.openProject(p.id, query, { check });
-                else if (!scope.startsWith('active:')) await autoSync.openProject(scope, query, { check });
+                // Browsing and search use the saved directory and local transcripts only.
                 return send(200, autoSync.listing(scope, query));
             }
             const tree = route.match(/^\/api\/trees\/([^/]+)$/);

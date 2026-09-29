@@ -9,3 +9,9 @@ test('clicking the same single chat twice clears it; shift still extends ranges'
     assert.deepEqual(selectRange(3,null,3),{start:null,end:null});assert.deepEqual(selectRange(3,3,3),{start:null,end:null});
     assert.deepEqual(selectRange(3,null,8),{start:3,end:8});assert.deepEqual(selectRange(3,8,9,true),{start:3,end:9});
 });
+
+test('inactive project boundaries include the recent edge and keep unknown dates visible',async()=>{
+ const {inactiveProject}=await import('../web/library-view.js');const at=Date.parse('2026-09-28T12:00:00Z');
+ for(const days of [7,15,30,60]){assert.equal(inactiveProject(new Date(at-days*86400000).toISOString(),days,at),false);assert.equal(inactiveProject(new Date(at-days*86400000-1).toISOString(),days,at),true);}
+ assert.equal(inactiveProject(undefined,30,at),false);
+});

@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.11.0
+
+- Make browsing local and Pull explicit; retain opened cloud sessions, show cloud icons only for missing local copies, and keep automatic Push separate from directory refresh.
+- Start a single upload countdown only for local changes and honor the disabled setting. Viewing hidden background sessions no longer queues their entire history for upload.
+- Fit complete trees on open, focus nodes by identity without rebuilding transcripts, and preserve scroll on checkbox selection.
+- Collapse inactive projects together in both panes with a configurable 7/15/30/60-day threshold; save the background filter immediately.
+- Preview Lean and Full token estimates in the custom activation selector; clarify working directories and collapse Information topics.
+- Derive Claude fallback titles from real prompts, preserve native records, and separate command-only initialization from actual conversations.
+
+
 ## 0.10.0
 
 - Unify Sync with Pull-before-Push previews, large-transfer confirmation, progress and ETA.
