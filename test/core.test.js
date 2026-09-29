@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { randomUUID } from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
 import { Store } from '../src/store.js';
 import { Native } from '../src/native.js';
@@ -190,21 +191,59 @@ test('Claude legacy picker index follows explicit activation and deactivation', 
     native.apply();
     assert.equal(JSON.parse(fs.readFileSync(index)).entries.find(e => e.sessionId === nativeId).fullPath, store.instances()[0].file);
 });
-test('sessions with unsaved auxiliary artifacts cannot be removed or fork-materialized', t => {
+test('Claude companion files are captured losslessly; native-style forks start without companion history', t => {
     const { store, native, roots, p, cwd } = setup(t), raw = claudeSample(cwd, [['Hello', 'Hi']]), nativeId = parse(raw, 'claude').nativeId;
     const dir = path.join(roots.claude, 'projects', 'example');
     fs.mkdirSync(path.join(dir, nativeId, 'subagents'), { recursive: true });
     const file = path.join(dir, nativeId + '.jsonl');
     fs.writeFileSync(file, raw);
+    fs.writeFileSync(path.join(dir, nativeId, 'subagents', 'notes.bin'), Buffer.from([0, 255, 42]));
     const b = native.import(native.discover().sessions[0].key, p.id);
-    assert.throws(() => native.apply(), /伴随/);
-    assert.equal(fs.readFileSync(file, 'utf8'), raw);
+    assert.equal(store.get('revision', b.head).source.auxiliary.length, 1);
+    native.apply();
+    assert.equal(fs.readFileSync(store.instances()[0].file, 'utf8'), raw);
     const child = store.fork(b.id, { name: 'child', end: store.detail(b.id).checkpoints[0].end });
     native.setActive(b.id, cwd, true);
     native.setActive(child.id, cwd, true);
-    assert.throws(() => native.apply(), /伴随/);
+    assert.equal(native.apply().applied, 2);
+    const fork = store.instances().find(i => i.branchId === child.id);
+    assert.equal(fs.existsSync(path.join(path.dirname(fork.file), fork.nativeId, 'subagents', 'notes.bin')), false);
+    const restored = store.instances().find(i => i.branchId === b.id && i.applied);
+    assert.deepEqual(fs.readFileSync(path.join(path.dirname(restored.file), restored.nativeId, 'subagents', 'notes.bin')), Buffer.from([0, 255, 42]));
 });
 
 test('completing a previously partial JSON record rebuilds line references correctly',t=>{
  const {store,cwd}=setup(t),raw=codexSample(cwd,[['Question','Answer']]),partial=raw.slice(0,-12),b=store.branch(null,'Partial','codex',partial);store.ingest(b.id,raw,b.head,{});const current=store.get('branch',b.id);assert.equal(store.raw(current.head),raw);assert.equal(store.get('revision',current.head).refs.length,raw.trim().split('\n').length);
+});
+
+test('Claude checkpoint activation inherits native session metadata and preserves historical working directories', t => {
+    const { store, native, cwd } = setup(t);
+    const rows = claudeSample(cwd, [['First', 'Done'], ['Later', 'Finished']]).trim().split('\n').map(JSON.parse);
+    rows[1].cwd = path.join(cwd, 'historical-subdirectory');
+    rows.push({ type: 'atis-latch', sessionId: rows[0].sessionId, atis: 'metadata-after-checkpoint' });
+    const b = store.branch(null, 'Original', 'claude', rows.map(r => JSON.stringify(r) + '\n').join(''));
+    const child = store.fork(b.id, { name: 'Checkpoint fork', end: store.detail(b.id).checkpoints[0].end });
+    native.setActive(child.id, cwd, true); native.apply([child.id]);
+    const instance = store.instances().find(i => i.branchId === child.id), output = parse(fs.readFileSync(instance.file, 'utf8'), 'claude');
+    assert.equal(output.messages.length, 2);
+    assert.equal(output.records.find(r => r.value?.type === 'atis-latch').value.atis, 'metadata-after-checkpoint');
+    assert.equal(output.records.find(r => r.value?.type === 'assistant').value.cwd, rows[1].cwd);
+});
+
+test('a continued Claude fork preserves the actual native UUID chain and shared graph prefix', t => {
+    const {store,native,cwd}=setup(t),parent=store.branch(null,'Parent','claude',claudeSample(cwd,[['Original question','Original reply']]));
+    const fork=store.fork(parent.id,{name:'Fork',end:store.detail(parent.id).checkpoints[0].end});native.setActive(fork.id,cwd,true);native.apply([fork.id]);
+    const instance=store.instances().find(i=>i.branchId===fork.id),rows=fs.readFileSync(instance.file,'utf8').trim().split('\n').map(JSON.parse),last=rows.findLast(r=>r.type==='assistant'),userId=randomUUID();
+    const added=[{type:'user',uuid:userId,parentUuid:last.uuid,sessionId:instance.nativeId,cwd,message:{role:'user',content:'New question'}},{type:'assistant',uuid:randomUUID(),parentUuid:userId,sessionId:instance.nativeId,cwd,message:{role:'assistant',content:'New reply',stop_reason:'end_turn'}}];
+    fs.appendFileSync(instance.file,added.map(r=>JSON.stringify(r)+'\n').join(''));
+    assert.equal(native.collect().errors.length,0);const current=store.get('branch',fork.id);
+    assert.deepEqual(store.detail(fork.id).messages.map(m=>m.text),['Original question','Original reply','New question','New reply']);
+    assert.equal(store.raw(current.head),fs.readFileSync(instance.file,'utf8'));
+    assert.equal(store.treeGraph(parent.id).chatCount,4);
+});
+
+test('Codex materialization preserves untouched record bytes and large integer payloads', t => {
+    const {cwd}=setup(t),record='{"type":"world_state", "payload":{"full":true,"unknown_counter":9007199254740993}}\n';
+    const raw=codexSample(cwd,[['Keep context','Ready']])+record;
+    const output=renderNative(raw,'codex',randomUUID(),cwd,'Copy');assert.ok(output.endsWith(record));
 });

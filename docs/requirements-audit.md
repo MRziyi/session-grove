@@ -20,7 +20,7 @@
 | Supported Codex legacy materialization retains tools/reasoning/instructions | Verified by structured record comparison and native read/resume smoke; no model turn submitted |
 | Original paginated file restored unchanged on its original machine/path | Byte-for-byte adapter test |
 | Supported paginated fork materialization | Verified against native `thread/fork` at the same completed turn: projected items, response items, world-state and base instructions match. Referenced byte prefixes are resolved without converting to legacy; missing/unknown formats still fail closed |
-| Real Claude client continuation | File adapters tested; actual client validation remains outstanding |
+| Real Claude client continuation | Official SDK read/fork equivalence tested on 32 sessions / 111 checkpoints; model requests and dynamic runtime state are outside this equivalence |
 | Every token in the live model request visible in Grove | **Not possible from available logs alone.** Opaque reasoning/compaction, images, dynamic instructions and truncation limit observability |
 | Identical model responses after resume | Not promised; preserving recorded input is distinct from runtime prompt construction and generation |
 
@@ -47,7 +47,7 @@ The installed VS Code Codex executable (`0.155.0-alpha.16.3`) supports experimen
 ## 0.8 review
 
 - Ungrouped now synchronizes, supports lazy retrieval and keeps device Active separate. Time grouping and batch archive address everyday-session growth without mandatory categorization.
-- Lists/Nodes expose actual tool provenance; device badges identify the latest content source. Cross-agent context conversion remains unimplemented and has no selectable placeholder. A future conversion must preserve prefix provenance and mark the new suffix with its actual tool.
+- Lists/Nodes expose actual tool provenance; device badges identify the latest content source. Cross-agent conversion now offers full/lean previews and records source provenance in a separate target session. See the 0.9 fidelity document for transformation limits.
 - Native ancestry uses verified pointer bounds and immutable reference slices, bypassing content comparison. Ordinal gaps caused by explicitly disabled compaction are accepted when order is valid.
 - Ongoing turns may be captured for display; unsafe materialization still waits for completion. No-op applies bypass process checks; writes only check the target Agent. Missing history, unsupported attachments and index-schema checks remain necessary.
 - Cached summaries avoid re-parsing old transcripts for list refreshes. Appends hash new fragments only; graph traversal uses indexes and a topological queue.

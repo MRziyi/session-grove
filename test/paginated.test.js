@@ -12,6 +12,15 @@ import { Store } from '../src/store.js';
 import { Native } from '../src/native.js';
 import { hash } from '../src/util.js';
 const lines = rows => rows.map(v => JSON.stringify(v) + '\n').join('');
+test('older paginated forks without ordinals retain native ancestry even after the parent history changes', t => {
+ const root=fs.mkdtempSync(path.join(os.tmpdir(),'grove-older-fork-')),store=new Store(root);t.after(()=>{store.close();fs.rmSync(root,{recursive:true,force:true});});
+ const rows=codexSample(root,[['Shared question','Shared answer'],['Next question','Next answer']]).trim().split('\n').map(JSON.parse);rows[0].payload.history_mode='paginated';rows.forEach((r,i)=>r.ordinal=i);
+ const parent=store.branch(null,'Parent','codex',lines(rows));
+ const childRows=structuredClone(rows);childRows[0].payload.id=randomUUID();childRows[0].payload.forked_from_id=rows[0].payload.id;
+ const child=store.branch(null,'Child','codex',lines(childRows));store.detectFamilies();assert.equal(store.get('branch',child.id).parentId,parent.id);
+ const changed=codexSample(root,[['Edited prefix','Different answer']]).trim().split('\n').map(JSON.parse);changed[0].payload.id=rows[0].payload.id;changed[0].payload.history_mode='paginated';changed.forEach((r,i)=>r.ordinal=i);store.ingest(parent.id,lines(changed),parent.head,{});
+ const otherRows=structuredClone(childRows);otherRows[0].payload.id=randomUUID();const other=store.branch(null,'Later child','codex',lines(otherRows));store.detectFamilies();const b=store.get('branch',other.id);assert.equal(b.parentId,parent.id);assert.equal(b.prefixUnavailable,true);assert.equal(b.forkEnd,0);assert.equal(store.treeGraph(parent.id).paths.length,3);
+});
 function fixture(t) {
  const root=fs.mkdtempSync(path.join(os.tmpdir(),'grove-paginated-')),home=path.join(root,'codex'),dir=path.join(home,'sessions'),store=new Store(path.join(root,'library'));fs.mkdirSync(dir,{recursive:true});
  t.after(()=>{store.close();fs.rmSync(root,{recursive:true,force:true});});

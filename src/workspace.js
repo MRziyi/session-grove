@@ -9,14 +9,15 @@ import { rootOf, treeMembers } from './organization.js';
 
 // Native threads, collection rows, and logical nodes are distinct projections.
 export const isActive = i => i.applied && !i.missing && !i.excluded && i.cwdAvailable !== false;
-export function visibleSession(store, b) {
-    if (b.scheduled && !preferences(store).showScheduledSessions) return false;
-    if (b.synthetic || b.excluded && !(b.excluded === 'scheduled' && preferences(store).showScheduledSessions)) return false;
+export function visibleSession(store, b, forSync = false) {
+    const show = preferences(store).showScheduledSessions || forSync && b.backgroundManaged;
+    if ((b.scheduled || b.background) && !show) return false;
+    if (b.synthetic || b.excluded && !(show && ['scheduled', 'agent-owned', 'background'].includes(b.excluded))) return false;
     const excluded=store.summary(b.head,b.agent).excluded;
-    return !excluded || excluded === 'scheduled' && preferences(store).showScheduledSessions;
+    return !excluded || show && ['scheduled', 'agent-owned', 'background'].includes(excluded);
 }
 const modified = b => b.contentUpdatedAt || b.updatedAt;
-export function collections(store) {
+export function collections(store, forSync = false) {
     const branches = store.all('branch'), instances = store.instances(), buckets = new Map();
     for (const b of branches) {
         const root = rootOf(store, b.id);
@@ -24,7 +25,7 @@ export function collections(store) {
         buckets.get(root.id).members.push(b);
     }
     const items = [...buckets.values()].flatMap(({ root, members }) => {
-        const sessions = members.filter(b => visibleSession(store, b));
+        const sessions = members.filter(b => visibleSession(store, b, forSync));
         if (!sessions.length) return [];
         const representative = root.synthetic ? [...sessions].sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id))[0] : root;
         const count = b => store.summary(b.head, b.agent).chats;
@@ -45,7 +46,7 @@ export function listing(store, scope = 'active:codex', query = '') {
         let sessions = item.sessions;
         if (activeAgent) sessions = sessions.filter(s => s.agent === activeAgent && s.active && !s.archived && !project?.archived);
         else if (scope === 'archived') sessions = sessions.filter(s => s.archived || project?.archived);
-        else sessions = sessions.filter(s => cloudProjectId(item.projectId) === scope && !s.archived && !project?.archived);
+        else sessions = sessions.filter(s => (scope === 'projects' || cloudProjectId(item.projectId) === scope) && !s.archived && !project?.archived);
         if (!sessions.length) return [];
         const matching = q ? sessions.filter(s => s.name.toLocaleLowerCase().includes(q) || store.parsed(store.get('branch', s.id).head, s.agent).messages.some(m => m.text.toLocaleLowerCase().includes(q))) : sessions;
         if (!matching.length && !item.name.toLocaleLowerCase().includes(q)) return [];
@@ -72,7 +73,7 @@ export function buildGraph(store, branchId) {
         const byChat = new Map();
         for (const e of inventory.entries) { if (!byChat.has(e.chatLine)) byChat.set(e.chatLine, []); byChat.get(e.chatLine).push(e); }
         let inherited = [];
-        if (b.parentId && b.forkRevision) {
+        if (b.parentId && b.forkRevision && b.forkEnd > 0) {
             const parent = store.get('branch', b.parentId);
             const parentPath = pathFor(parent, b.forkRevision);
             const childPrefix = visible.filter(m => m.line <= b.forkEnd);
@@ -92,13 +93,13 @@ export function buildGraph(store, branchId) {
         cache.set(key, path);
         return path;
     }
-    const paths = members.filter(b => visibleSession(store, b)).map(b => ({ branchId: b.id, name: b.name, agent: b.agent, archived: !!b.archived,
-        head: b.head, canRewriteContext: supportedHistory(store.parsed(b.head, b.agent)), canActivate: store.summary(b.head,b.agent).complete && !store.summary(b.head,b.agent).external && (supportedHistory(store.parsed(b.head, b.agent)) || store.instances().some(i => i.branchId === b.id && i.adopted && i.baseRevision === b.head && (i.contextPolicyHash || policyHash(null)) === policyHash(b.contextPolicy))), active: store.instances().some(i => i.branchId === b.id && isActive(i)),
-        context: { ...store.parsed(b.head, b.agent).context, ledger: (() => { const l = store.activity(b.head, b.agent); return { ...l, entries: l.entries.filter(e => e.chatLine === null) }; })(), compactions: store.parsed(b.head, b.agent).context.compactions.map(e => ({ ...e, enabled: !(b.contextPolicy?.disabled || []).includes(e.id) })) }, contextPolicy: b.contextPolicy || null, contextPending: store.instances().some(i => i.branchId === b.id && isActive(i) && ((i.contextPolicyHash || policyHash(null)) !== policyHash(b.contextPolicy) || i.baseRevision !== b.head)), messages: pathFor(b), checkpoints: store.parsed(b.head, b.agent).checkpoints }));
+    const paths = members.filter(b => visibleSession(store, b)).map(b => { const parsed = store.parsed(b.head,b.agent), inventory = store.activity(b.head,b.agent); return { branchId: b.id, name: b.name, agent: b.agent, archived: !!b.archived, parentBranchId: b.parentId, prefixUnavailable: !!b.prefixUnavailable,
+        head: b.head, canRewriteContext: supportedHistory(parsed), canActivate: store.summary(b.head,b.agent).complete && !store.summary(b.head,b.agent).external && (supportedHistory(parsed) || store.instances().some(i => i.branchId === b.id && i.adopted && i.baseRevision === b.head && (i.contextPolicyHash || policyHash(null)) === policyHash(b.contextPolicy))), active: store.instances().some(i => i.branchId === b.id && isActive(i)),
+        context: { ...parsed.context, ledger: (() => { const l = inventory; return { ...l, entries: l.entries.filter(e => e.chatLine === null) }; })(), compactions: parsed.context.compactions.map(e => ({ ...e, enabled: !(b.contextPolicy?.disabled || []).includes(e.id) })) }, contextPolicy: b.contextPolicy || null, contextPending: store.instances().some(i => i.branchId === b.id && isActive(i) && ((i.contextPolicyHash || policyHash(null)) !== policyHash(b.contextPolicy) || i.baseRevision !== b.head)), messages: pathFor(b), checkpoints: parsed.checkpoints }; });
     const assignments = {};
     // Read legacy append-only nodes as initial annotations without changing history.
     for (const b of members) {
-        if (b.synthetic || b.excluded) continue;
+        if (b.synthetic || b.excluded || !b.nodeHead) continue;
         const detail = store.detail(b.id);
         for (const node of detail.nodes) for (const m of pathFor(b, node.revisionId)) {
             if (m.line > node.start && m.line <= node.end) assignments[m.id] = { id: node.id, name: node.name };
@@ -179,6 +180,11 @@ export function buildGraph(store, branchId) {
         for(const id of n.childIds) { indegree.set(id,indegree.get(id)-1); if(indegree.get(id)===0) ready.push(byNode.get(id)); }
     }
     assert(ordered.length===nodes.length,'Conversation graph contains a cycle.');
+    // The graph is a self-contained projection. Keeping large parsed tool bodies
+    // as well as the graph wastes memory; record details remain lazy SQLite reads.
+    if (store.parseBytes > 8 * 1024 * 1024 || store.recordBytes > 8 * 1024 * 1024) {
+        store.parseCache.clear(); store.parseBytes = 0; store.recordCache.clear(); store.recordBytes = 0;
+    }
     return { id: root.id, projectId: root.projectId, layoutHead: root.layoutHead || null,
         version: hash(JSON.stringify([members.map(b => [b.id, b.head, b.nodeHead, b.parentId, b.archived, b.contextPolicy]), root.layoutHead || null])),
         name: store.collections().items.find(i => i.id === root.id)?.name || root.name,
@@ -189,7 +195,10 @@ export function buildGraph(store, branchId) {
 
 export function treeGraph(store, branchId, view = 'all') {
     assert(['all', 'in-use', 'archived'].includes(view), 'Unknown tree view.');
-    const root = rootOf(store, branchId), graph = store.memo('graph:' + root.id, () => buildGraph(store, root.id));
+    const root = rootOf(store, branchId);
+    // Keep only one full graph: large libraries otherwise retain every visited tree.
+    if (store.graphRoot !== root.id) { if (store.graphRoot) { store.memoCache.delete('graph:' + store.graphRoot); for (const key of store.memoCache.keys()) if (key.startsWith('wire:')) store.memoCache.delete(key); } store.graphRoot = root.id; }
+    const graph = store.memo('graph:' + root.id, () => buildGraph(store, root.id));
     if (view === 'all') return graph;
     const projectArchived = root.projectId && store.get('project', root.projectId).archived;
     const paths = graph.paths.filter(p => view === 'archived' ? p.archived || projectArchived : !p.archived && !projectArchived);

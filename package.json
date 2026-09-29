@@ -1,19 +1,30 @@
 {
   "name": "session-grove",
-  "version": "0.8.2",
+  "version": "0.10.0",
   "private": true,
   "description": "A project-centered workspace for branching and managing agent sessions.",
   "type": "module",
-  "engines": { "node": ">=24.0.0" },
+  "engines": {
+    "node": ">=24.0.0"
+  },
   "scripts": {
     "start": "node bin/session-grove.js",
+    "stop": "node bin/session-grove.js stop",
+    "status": "node bin/session-grove.js status",
     "dev": "node --watch bin/session-grove.js",
     "demo": "node bin/session-grove.js --demo",
     "test": "node --test test/*.test.js",
+    "test:claude": "node scripts/claude-smoke.js",
+    "test:conversion": "node scripts/conversion-smoke.js",
     "test:codex": "node scripts/codex-smoke.js",
     "test:codex-fork": "node scripts/codex-fork-smoke.js",
     "test:browser": "node scripts/browser-smoke.js"
   },
-  "bin": { "session-grove": "bin/session-grove.js" },
-  "license": "MIT"
+  "bin": {
+    "session-grove": "bin/session-grove.js"
+  },
+  "license": "MIT",
+  "dependencies": {
+    "@anthropic-ai/claude-agent-sdk": "0.3.283"
+  }
 }

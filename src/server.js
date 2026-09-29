@@ -7,12 +7,16 @@ import http from 'node:http';
 import { performance } from 'node:perf_hooks';
 import { Diagnostics } from './diagnostics.js';
 import { activationInfo } from './activation.js';
+import { prepareConversion, createConversion } from './conversion.js';
+import { packGraph } from './graph-wire.js';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { randomBytes, timingSafeEqual } from 'node:crypto';
+import { gzipSync } from 'node:zlib';
 import { Store } from './store.js';
 import { Native } from './native.js';
+import { archiveNative } from './native-archive.js';
 import { AutoSync } from './auto-sync.js';
 import { metadata, treeMembers } from './organization.js';
 import { isActive } from './workspace.js';
@@ -20,7 +24,7 @@ import { assert, atomic, json, text, now, id, hash } from './util.js';
 const webRoot = fileURLToPath(new URL('../web/', import.meta.url));
 export function createApp({ root, roots, guard, demo = false }) {
     const store = new Store(root), native = new Native(store, { roots, guard }), token = randomBytes(32).toString('hex');
-    const webAssets = new Map(['index.html', 'app.js', 'select.js', 'markdown.js', 'i18n.js', 'style.css'].map(file => [file, fs.readFileSync(path.join(webRoot, file))]));
+    const webAssets = new Map(['index.html', 'app.js', 'library-view.js', 'select.js', 'markdown.js', 'i18n.js', 'style.css'].map(file => [file, fs.readFileSync(path.join(webRoot, file))]));
     const configFile = path.join(root, 'webdav.json');
     const diagnostics = new Diagnostics(root);
     const autoSync = new AutoSync(store, () => json(configFile, {}));
@@ -38,6 +42,8 @@ export function createApp({ root, roots, guard, demo = false }) {
         store.get('branch', i.id).layoutHead
     ]))]));
     const streams = new Set(); let updateOperation = null;
+    let stopping = false;
+    const instance = id();
     const operation = (kind, value) => { for (const res of streams) res.write('event: operation\ndata: ' + JSON.stringify({kind, ...value}) + '\n\n'); };
     autoSync.onOperation = value => operation('sync', {...value, status:autoSync.status()});
     const timing = () => ({ appVersion: VERSION, serverNow: Date.now(), stateVersion: diagnostics.startedAt + ':' + store.version + ':' + store.cloudVersion, update: { nextRunAt: nextCaptureAt, lastRunAt: lastCaptureAt, started: !!store.local('localUpdateStarted'), operation: updateOperation } });
@@ -45,7 +51,7 @@ export function createApp({ root, roots, guard, demo = false }) {
     const server = http.createServer(async (req, res) => {
         const started = performance.now(), requestId = id().slice(0, 8);
         const beforeManagement = req.method !== 'GET' && /^\/api\/(trees|move|manage|projects|branches|conflicts)(?:\/|$)/.test(req.url) ? management() : null;
-        const send = (status, value, type = 'application/json') => { diagnostics.request(req.method, req.url.split('?')[0], status, performance.now() - started, requestId); res.writeHead(status, { 'Content-Type': type, 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff', 'Referrer-Policy': 'no-referrer', 'Content-Security-Policy': "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'" }); res.end(type === 'application/json' ? JSON.stringify(value) : value); if (beforeManagement && status < 400 && !req.url.startsWith('/api/sync') && !['/api/collect', '/api/webdav'].includes(req.url)) {
+        const send = (status, value, type = 'application/json') => { let output = type === 'application/json' ? JSON.stringify(value) : value; const compressed = Buffer.byteLength(output) > 262144 && /\bgzip\b/.test(req.headers['accept-encoding'] || ''); if (compressed) output = gzipSync(output, { level: 1 }); diagnostics.request(req.method, req.url.split('?')[0], status, performance.now() - started, requestId); res.writeHead(status, { ...(compressed ? { 'Content-Encoding': 'gzip', Vary: 'Accept-Encoding' } : {}), 'Content-Type': type, 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff', 'Referrer-Policy': 'no-referrer', 'Content-Security-Policy': "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'" }); res.end(output); if (beforeManagement && status < 400 && !req.url.startsWith('/api/sync') && !['/api/collect', '/api/webdav'].includes(req.url)) {
             const changed = [...management()].filter(([id, value]) => beforeManagement.get(id) !== value).map(([id]) => id);
             if (changed.length) autoSync.schedule(changed);
         } };
@@ -55,7 +61,8 @@ export function createApp({ root, roots, guard, demo = false }) {
             assert(!req.headers.origin || req.headers.origin === `http://${expected}`, '不允许跨站请求', 403);
             assert(!req.headers['sec-fetch-site'] || ['same-origin', 'none'].includes(req.headers['sec-fetch-site']), '不允许跨站请求', 403);
             const url = new URL(req.url, `http://${expected}`), route = url.pathname;
-            if (req.method === 'GET' && ['/', '/app.js', '/i18n.js', '/select.js', '/markdown.js', '/style.css'].includes(route)) {
+            if (req.method === 'GET' && route === '/api/service') return send(200, { pid: process.pid, instance, stopping });
+            if (req.method === 'GET' && ['/', '/app.js', '/library-view.js', '/i18n.js', '/select.js', '/markdown.js', '/style.css'].includes(route)) {
                 const file = route === '/' ? 'index.html' : route.slice(1);
                 return send(200, webAssets.get(file), file.endsWith('.css') ? 'text/css' : file.endsWith('.js') ? 'text/javascript' : 'text/html; charset=utf-8');
             }
@@ -65,6 +72,8 @@ export function createApp({ root, roots, guard, demo = false }) {
             }
             const supplied = Buffer.from(req.headers['x-grove-token'] || '');
             assert(supplied.length === token.length && timingSafeEqual(supplied, Buffer.from(token)), '本地访问凭证无效，请刷新页面', 403);
+            if (req.method === 'POST' && route === '/api/service/stop') { send(202, { stopping: true }); setImmediate(() => app.onStop?.()); return; }
+            assert(!stopping, 'Server is stopping.', 503);
             let body = {};
             if (!['GET', 'HEAD'].includes(req.method)) {
                 assert(req.headers['content-type']?.startsWith('application/json'), '请求必须是 JSON', 415);
@@ -89,6 +98,8 @@ export function createApp({ root, roots, guard, demo = false }) {
                 res.writeHead(200, {'Content-Type':'text/event-stream','Cache-Control':'no-store','X-Content-Type-Options':'nosniff'}); res.write(': connected\n\n'); streams.add(res); req.on('close',()=>streams.delete(res)); return;
             }
             if (req.method === 'GET' && route === '/api/status') return send(200, { ...timing(), cloud: autoSync.status() });
+            if (req.method === 'POST' && route === '/api/synchronize/plan') return send(200, await autoSync.prepareSync());
+            if (req.method === 'POST' && route === '/api/synchronize/start') return send(202, autoSync.startSync(body.planId, body.confirmed));
             if (req.method === 'GET' && route === '/api/state')
                 return send(200, { ...snapshot(), ...timing(), cloud: autoSync.status(), discoveryError: store.local('discoveryError'), lastSync: store.local('lastSync'), plan: native.plan() });
             if (req.method === 'GET' && route === '/api/diagnostics') return send(200, { ...diagnostics.report(), webdav: autoSync.cloud.connection?.dav.metrics || null, fallbackMinutes: autoSync.status().fallbackMinutes });
@@ -102,12 +113,12 @@ export function createApp({ root, roots, guard, demo = false }) {
             if (req.method === 'GET' && route === '/api/list') {
                 const check = url.searchParams.get('check') === '1';
                 const scope = url.searchParams.get('scope') || 'active:codex', query = url.searchParams.get('q') || '';
-                if (scope === 'archived') for (const p of autoSync.cloud.summaries()) await autoSync.openProject(p.id, query, { check });
+                if (['archived','projects'].includes(scope)) for (const p of autoSync.cloud.summaries()) await autoSync.openProject(p.id, query, { check });
                 else if (!scope.startsWith('active:')) await autoSync.openProject(scope, query, { check });
                 return send(200, autoSync.listing(scope, query));
             }
             const tree = route.match(/^\/api\/trees\/([^/]+)$/);
-            if (req.method === 'GET' && tree) { await autoSync.openTree(tree[1], { check: url.searchParams.get('check') === '1' }); return send(200, store.treeGraph(tree[1], url.searchParams.get('view') || 'in-use')); }
+            if (req.method === 'GET' && tree) { await autoSync.openTree(tree[1], { check: url.searchParams.get('check') === '1' }); const graph = store.treeGraph(tree[1], url.searchParams.get('view') || 'in-use'); return send(200, req.headers['x-grove-graph'] === 'shared-messages-v1' ? store.memo('wire:' + graph.id + ':' + graph.view, () => packGraph(graph)) : graph); }
             if (req.method === 'POST' && tree) return send(200, store.organize(tree[1], body));
             if (req.method === 'POST' && route === '/api/move') {
                 for (const id of body.itemIds || []) await autoSync.openTree(id, { check: true });
@@ -118,6 +129,21 @@ export function createApp({ root, roots, guard, demo = false }) {
                 return send(200, store.moveItems(body));
             }
             if (req.method === 'POST' && route === '/api/activation-check') return send(200, activationInfo(store, native, body.branchId, body.cwd));
+            if (req.method === 'POST' && ['/api/conversion-check', '/api/convert'].includes(route)) {
+                const prepared = prepareConversion(store, body.branchId, body);
+                const projected = { context: { model: null, compactions: [], lastUsage: null }, messages: prepared.entries.map((e, i) => ({ ...e, line: i + 1 })), records: [], complete: true, errors: [], warnings: [] };
+                const virtual = { get: () => ({ ...prepared.branch, agent: body.target, contextPolicy: null }), parsed: () => projected, instances: () => [] };
+                const budget = activationInfo(virtual, native, body.branchId, body.cwd);
+                if (route === '/api/conversion-check') return send(200, { ...prepared.preview, budget });
+                assert(!budget.risk || body.contextAcknowledgement === budget.fingerprint, 'Review the context-length warning before activating.', 409);
+                assert(typeof body.cwd === 'string' && path.isAbsolute(body.cwd) && fs.existsSync(body.cwd) && fs.statSync(body.cwd).isDirectory(), 'Choose an existing working directory.');
+                native.guard([body.target]);
+                const result = createConversion(store, body.branchId, body);
+                try { native.setActive(result.branch.id, body.cwd, true); native.apply([result.branch.id]); }
+                catch (e) { native.setActive(result.branch.id, null, false); throw Object.assign(new Error(`Conversion was saved in Grove but activation failed: ${e.message}`), { status: e.status || 409 }); }
+                autoSync.schedule([result.branch.id]);
+                return send(201, result);
+            }
             if (req.method === 'POST' && route === '/api/manage') {
                 assert(['activate', 'deactivate', 'archive', 'restore'].includes(body.action), 'Unknown session action.');
                 if (body.projectId && autoSync.passphrase !== null) {
@@ -134,9 +160,9 @@ export function createApp({ root, roots, guard, demo = false }) {
                 if (body.projectId) members = store.all('branch').filter(b => b.projectId === store.get('project', body.projectId).id);
                 else if (body.itemIds?.length) members = [...new Map(body.itemIds.flatMap(id => treeMembers(store, id)).map(b => [b.id, b])).values()];
                 else members = (body.branchIds || []).map(id => store.get('branch', id));
-                if (body.projectId || body.itemIds) members = members.filter(b => !b.excluded);
+                if (body.projectId || body.itemIds) members = members.filter(b => !b.excluded || b.background && preferences(store).showScheduledSessions);
                 assert(members.length, 'Select sessions first.');
-                assert(members.every(b => !b.excluded), 'Agent-owned or empty records are not managed as sessions.');
+                assert(members.every(b => !b.excluded || b.background && preferences(store).showScheduledSessions), 'Agent-owned or empty records are not managed as sessions.');
                 if (body.action === 'deactivate' && body.agent) members = members.filter(b => b.agent === body.agent && store.instances().some(i => i.branchId === b.id && isActive(i)));
                 if (body.action === 'activate') {
                     assert(members.length === 1 && !members[0].synthetic, 'Select one native session to activate.');
@@ -155,7 +181,8 @@ export function createApp({ root, roots, guard, demo = false }) {
                 // Metadata changes follow successful native changes. A busy client leaves
                 // both membership and Archive state untouched; the user can retry safely.
                 const before = store.instances();
-                if (body.action !== 'restore') {
+                if (body.action === 'archive' && !demo && !guard) await archiveNative(store,native,members.filter(b=>!b.synthetic).map(b=>b.id));
+                else if (body.action !== 'restore') {
                     try {
                         for (const b of members.filter(b => !b.synthetic)) native.setActive(b.id, body.cwd, body.action === 'activate');
                         if (native.plan().operations.some(op => members.some(b => b.id === op.branchId))) native.apply(members.map(b => b.id));
@@ -290,6 +317,7 @@ export function createApp({ root, roots, guard, demo = false }) {
         try {
             const start = performance.now(), r = native.refreshLocal(); lastCaptureAt = Date.now();
             diagnostics.record('capture', { updated: r.updates.length, discovered: r.discovered, count: r.errors.length, durationMs: Math.round(performance.now() - start) });
+            for (const [phase, durationMs] of Object.entries(r.timings || {})) diagnostics.record('capture-phase', { phase, durationMs });
             updateOperation = { ...updateOperation, state: r.errors.length ? 'error' : 'success', finishedAt: Date.now() };
             return r;
         } catch(e) { updateOperation = { ...updateOperation, state: 'error', finishedAt: Date.now() }; throw e; }
@@ -297,7 +325,7 @@ export function createApp({ root, roots, guard, demo = false }) {
     }
     function configureCapture() {
         clearTimeout(interval); nextCaptureAt = null;
-        const p = preferences(store); if (!p.localUpdateEnabled || !store.local('localUpdateStarted')) return;
+        const p = preferences(store); if (stopping || !p.localUpdateEnabled || !store.local('localUpdateStarted')) return;
         nextCaptureAt = Date.now() + p.localUpdateMinutes * 60000;
         interval = setTimeout(async () => {
             try { if (!autoSync.running && settings.job?.state !== 'running') await captureLocal(); else configureCapture(); }
@@ -306,8 +334,14 @@ export function createApp({ root, roots, guard, demo = false }) {
     }
     configureCapture();
     server.on('close', () => { clearInterval(interval); autoSync.close(); store.close(); });
-    return { server, store, native, autoSync, diagnostics, settings, close(callback) {
+    const app = { server, store, native, autoSync, diagnostics, settings, token, instance, quiesce() {
+        stopping = true; clearTimeout(interval); autoSync.closed = true;
+        clearTimeout(autoSync.timer); clearTimeout(autoSync.retryTimer); clearTimeout(autoSync.interval);
+        if (settings.job?.state !== 'running') autoSync.cloud.connection?.dav.controller?.abort(new Error('Server is stopping.'));
+    }, close(callback) {
+        app.quiesce();
         for(const res of streams)res.end(); streams.clear();
         if(capturePromise)capturePromise.catch(()=>{}).finally(()=>server.close(callback)); else server.close(callback);
     } };
+    return app;
 }

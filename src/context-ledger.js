@@ -8,7 +8,9 @@ function fileNames(args) {
 }
 export function ledger(parsed, agent) {
     const entries=[],calls=new Map();
-    const add=(line,kind,label,body,extra={})=>{const e={id:line+':'+entries.length,line,kind,label,tokens:estimateTokens(body),preview:body.slice(0,180),...extra};entries.push(e);return e;};
+    // Copy short previews: a V8 sliced string can otherwise retain a multi-MB
+    // tool result for as long as the small graph preview is cached.
+    const add=(line,kind,label,body,extra={})=>{const e={id:line+':'+entries.length,line,kind,label,tokens:estimateTokens(body),preview:JSON.parse(JSON.stringify(body.slice(0,180))),...extra};entries.push(e);return e;};
     for(const [index,r] of parsed.records.entries()){
         const v=r.value;if(!v)continue;const line=index+1,p=v.payload||{};
         if(agent==='codex'){

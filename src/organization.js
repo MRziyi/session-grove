@@ -7,6 +7,7 @@ export function metadata(value, patch) {
 export function initializeOrganization(store) {
     for (const kind of ['project', 'branch'])
         for (const value of store.all(kind)) {
+            const original = JSON.stringify(value);
             if (!value.metaVersion) {
                 value.metaVersion = hash(JSON.stringify([value.name, value.description, value.projectId, value.group, value.archived]));
                 value.metaAncestors = [];
@@ -29,7 +30,7 @@ export function initializeOrganization(store) {
                 }
                 value.nodeHead = previousId;
             }
-            store.put(kind, value);
+            if (JSON.stringify(value) !== original) store.put(kind, value);
         }
 }
 export function pendingDetail(store, branch, parsed) {
@@ -63,12 +64,12 @@ export function commitPending(store, branchId, { name, end, revisionId, expected
     });
 }
 export function rootOf(store, branchId) {
-    let b = store.get('branch', branchId);
+    const index = store.memo('family-index', () => ({ branches: new Map(store.all('branch').map(b => [b.id, b])), roots: new Map() }));
+    if (index.roots.has(branchId)) return index.roots.get(branchId);
+    let b = index.branches.get(branchId); assert(b, 'branch 不存在', 404);
     const seen = new Set();
-    while (b.parentId && !seen.has(b.id)) {
-        seen.add(b.id);
-        b = store.get('branch', b.parentId);
-    }
+    while (b.parentId) { assert(!seen.has(b.id), 'Session ancestry contains a cycle.'); seen.add(b.id); b = index.branches.get(b.parentId); assert(b, 'Parent session is missing.'); }
+    index.roots.set(branchId, b); for (const id of seen) index.roots.set(id, b);
     return b;
 }
 export function treeMembers(store, branchId) {
@@ -103,29 +104,46 @@ export function forest(store, scope) {
 // Compare complete semantic event sequences, never a bag of matching messages.
 // Volatile native identifiers are excluded, tool arguments/results remain included.
 function signatures(raw, agent) {
-    const p = typeof raw === 'string' ? parse(raw, agent) : raw, units = [];
+    const p = typeof raw === 'string' ? parse(raw, agent) : raw, boundaries = [];
+    const ends = new Set(p.checkpoints.map(c => c.end));
+    let prefix = '', count = 0, messageIndex = 0;
     for (let i = 0; i < p.records.length; i++) {
         const v = p.records[i].value;
         if (agent === 'codex' && v?.type === 'response_item') {
             const payload = structuredClone(v.payload);
             delete payload.id;
-            units.push({ line: i + 1, key: hash(JSON.stringify(payload)) });
+            prefix = hash(prefix + hash(JSON.stringify(payload)));
         }
         else if (agent === 'claude' && ['user', 'assistant'].includes(v?.type) && v.message) {
-            units.push({ line: i + 1, key: hash(JSON.stringify({ role: v.message.role, content: v.message.content })) });
+            prefix = hash(prefix + hash(JSON.stringify({ role: v.message.role, content: v.message.content })));
         }
+        while (messageIndex < p.messages.length && p.messages[messageIndex].line <= i + 1) {
+            if (p.messages[messageIndex++].role !== 'tool') count++;
+        }
+        if (ends.has(i + 1)) boundaries.push({ end: i + 1, count, key: prefix });
     }
-    return { p, boundaries: p.checkpoints.map(c => ({ end: c.end, count: p.messages.filter(m => m.line <= c.end && m.role !== 'tool').length, key: hash(units.filter(u => u.line <= c.end).map(u => u.key).join(':')) })) };
+    return { p: { cwd: p.cwd, meta: { forked_from_id: p.meta?.forked_from_id, forkedFromId: p.meta?.forkedFromId }, nativeId: p.nativeId }, boundaries,
+        byKey: new Map(boundaries.map(b => [b.count + ':' + b.key, b])) };
+}
+function commonBoundary(x, y, minimum) {
+    for (let i = x.boundaries.length - 1; i >= 0; i--) {
+        const a = x.boundaries[i];
+        if (a.count < minimum) break;
+        const b = y.byKey.get(a.count + ':' + a.key);
+        if (b) return { a, b };
+    }
 }
 export function detectFamilies(store) {
     let grouped = 0, trustedLinks = 0;
-    const parsedById = new Map(); const parsed = b => { if (!parsedById.has(b.id)) parsedById.set(b.id,store.parsed(b.head,b.agent)); return parsedById.get(b.id); };
-    const branches = store.all('branch').filter(b => !b.synthetic && !b.excluded), byId = new Map(branches.map(b => [b.id,b])), nativeParents = new Map();
+    const parsed = b => store.parsed(b.head, b.agent);
+    const signaturesById = new Map();
+    const get = b => { if (!signaturesById.has(b.id)) signaturesById.set(b.id, signatures(parsed(b), b.agent)); return signaturesById.get(b.id); };
+    const branches = store.all('branch').filter(b => !b.synthetic && !b.excluded && !b.background), byId = new Map(branches.map(b => [b.id,b])), nativeParents = new Map();
     for (const i of store.instances()) if (byId.has(i.branchId)) nativeParents.set(i.nativeId, byId.get(i.branchId));
     for (const b of branches) { const p = store.summary(b.head,b.agent); if (p.nativeId && !nativeParents.has(p.nativeId)) nativeParents.set(p.nativeId,b); }
     // Native pointers already identify the parent and exact prefix. Pin those
     // existing immutable object references; do not hash/compare the conversation.
-    for (const b of branches.filter(b => !b.parentId && !b.projectId && !b.archived && !b.layoutHead && !b.nodeHead)) {
+    for (const b of branches.filter(b => !b.parentId && !b.projectId && !b.layoutHead && !b.nodeHead)) {
         const p = store.summary(b.head,b.agent), cutoff = p.forkOrdinal, parent = nativeParents.get(p.forkedFrom);
         if (parent?.projectId && store.get('project',parent.projectId).archived) continue;
         if (b.agent !== 'codex' || p.mode !== 'paginated' || !p.supported || !parent || parent.id === b.id || parent.agent !== b.agent || !Number.isSafeInteger(cutoff) || cutoff <= 0 || rootOf(store,parent.id).id === b.id) continue;
@@ -136,25 +154,37 @@ export function detectFamilies(store) {
         grouped++; trustedLinks++;
     }
 
+    // Older paginated writers stored the parent ID but not the cutoff ordinal.
+    // Verify their ordered model-history prefix against that parent before doing
+    // broad inference. This retains the native family instead of inventing roots.
+    for (const original of branches) {
+        const b = store.get('branch', original.id);
+        if (b.parentId || b.projectId || b.layoutHead || b.nodeHead) continue;
+        const summary = store.summary(b.head, b.agent), parent = nativeParents.get(summary.forkedFrom);
+        if (!parent || parent.id === b.id || parent.agent !== b.agent || rootOf(store, parent.id).id === b.id) continue;
+        if (parent.projectId && store.get('project', parent.projectId).archived) continue;
+        const common = commonBoundary(get(b), get(parent), 2);
+        // A native parent remains authoritative even if compaction/editing removed
+        // the comparable prefix. Preserve ancestry without falsely sharing chats.
+        store.put('branch', metadata(b, { parentId: parent.id, projectId: parent.projectId, forkRevision: parent.head, forkEnd: common?.a.end || 0, forkParentEnd: common?.b.end || 0, inferred: true, nativeLinked: true, prefixUnavailable: !common }));
+        grouped++;
+    }
     // Only automatically organize the unfiled inbox; user project structure is authoritative.
     let roots = store.all('branch').filter(b => !b.projectId && !b.parentId && !b.archived && !b.excluded);
-    const signaturesById = new Map();
-    const get = b => { if (!signaturesById.has(b.id))
-        signaturesById.set(b.id, signatures(parsed(b), b.agent)); return signaturesById.get(b.id); };
     // Native forks can arrive after their parent was filed or organized. Keep
     // the existing family root and its annotations when adopting such a fork.
     for (const fresh of [...roots]) {
         if (fresh.synthetic || fresh.layoutHead || fresh.nodeHead) continue;
-        if (store.summary(fresh.head,fresh.agent).mode === 'paginated') continue;
+        const candidates = store.all('branch').filter(b => b.id !== fresh.id && b.agent === fresh.agent && !b.archived && !b.excluded && (b.projectId || b.parentId || b.synthetic || b.layoutHead || b.nodeHead) && rootOf(store, b.id).id !== fresh.id);
+        if (!candidates.length) continue;
         const x = get(fresh);
-        const candidates = store.all('branch').filter(b => b.id !== fresh.id && b.agent === fresh.agent && !b.archived && !b.excluded && (b.projectId || b.parentId || b.synthetic || b.layoutHead || b.nodeHead));
         let best = null;
         for (const candidate of candidates) {
             if (rootOf(store, candidate.id).id === fresh.id) continue;
             const y = get(candidate);
             if (!x.p.cwd || x.p.cwd !== y.p.cwd) continue;
             const linked = x.p.meta?.forked_from_id === y.p.nativeId || x.p.meta?.forkedFromId === y.p.nativeId;
-            const common = x.boundaries.filter(c => c.count >= (linked ? 2 : 4)).map(c => ({ a: c, b: y.boundaries.find(d => d.key === c.key && d.count === c.count) })).filter(c => c.b).at(-1);
+            const common = commonBoundary(x, y, linked ? 2 : 4);
             if (common && (!best || common.a.count > best.common.a.count)) best = { candidate, common };
         }
         if (best) {
@@ -171,12 +201,11 @@ export function detectFamilies(store) {
             // Existing named logical nodes are never silently reorganized by inference.
             if ([left, right].some(b => !b.synthetic && store.all('node').some(n => n.branchId === b.id)))
                 continue;
-            if ([left,right].some(b => store.summary(b.head,b.agent).mode === 'paginated')) continue;
             const x = get(left), y = get(right);
             if (!x.p.cwd || x.p.cwd !== y.p.cwd)
                 continue;
             const nativeLink = x.p.meta?.forked_from_id === y.p.nativeId || y.p.meta?.forked_from_id === x.p.nativeId || x.p.meta?.forkedFromId === y.p.nativeId || y.p.meta?.forkedFromId === x.p.nativeId;
-            const common = x.boundaries.filter(c => c.count >= (nativeLink ? 2 : 4)).map(c => ({ a: c, b: y.boundaries.find(d => d.key === c.key && d.count === c.count) })).filter(c => c.b).at(-1);
+            const common = commonBoundary(x, y, nativeLink ? 2 : 4);
             if (!common)
                 continue;
             if (nativeLink) {

@@ -1,5 +1,15 @@
 import { randomBytes, scryptSync, createCipheriv, createDecipheriv } from 'node:crypto';
 import { gzipSync, gunzipSync } from 'node:zlib';
+import { gzip } from 'node:zlib';
+import { promisify } from 'node:util';
+const compress = promisify(gzip);
+export async function sealAsync(value, key) {
+    const body = await compress(Buffer.from(JSON.stringify(value)), { level: 6 });
+    if (key === null) return Buffer.concat([Buffer.from('SGP1'), body]);
+    const iv = randomBytes(12), cipher = createCipheriv('aes-256-gcm', key, iv);
+    const encrypted = Buffer.concat([cipher.update(body), cipher.final()]);
+    return Buffer.concat([iv, cipher.getAuthTag(), encrypted]);
+}
 import { assert, hash, id, now } from './util.js';
 export function seal(value, key) {
     if (key === null) return Buffer.concat([Buffer.from('SGP1'), gzipSync(Buffer.from(JSON.stringify(value)))]);
@@ -25,14 +35,18 @@ export class WebDAV {
         assert(url.protocol === 'https:' || (url.protocol === 'http:' && ['localhost', '127.0.0.1', '[::1]'].includes(url.hostname)), 'WebDAV 需要 HTTPS（本地测试可用 HTTP）');
         assert(!url.username && !url.password && !url.search && !url.hash, 'URL 不应包含凭据、查询或片段');
         this.metrics = { requests: 0, methods: {}, bytesSent: 0, bytesReceived: 0, requestMs: 0 };
+        this.controller = new AbortController();
         this.base = url.href.replace(/\/$/, '') + '/session-grove-v1/';
         this.authorization = 'Basic ' + Buffer.from(`${config.username || ''}:${config.password || ''}`).toString('base64');
     }
     scoped(prefix) { const child = Object.create(this); child.base = this.base + prefix; return child; }
-    async request(method, key = '', body, extra = {}) {
+    async request(method, key = '', body, extra = {}, expectedBytes = 0) {
+        this.controller.signal.throwIfAborted();
         assert(!key.split('/').some(p => p === '..' || p === '.'), '无效远程路径');
         const started = performance.now(); this.metrics.requests++; this.metrics.methods[method] = (this.metrics.methods[method] || 0) + 1; this.metrics.bytesSent += body ? Buffer.byteLength(body) : 0;
-        const response = await fetch(this.base + key.split('/').map(encodeURIComponent).join('/'), { method, body, headers: { Authorization: this.authorization, 'Accept-Encoding': 'identity', ...extra }, redirect: 'error', signal: AbortSignal.timeout(30000) });
+        const size = body ? Buffer.byteLength(body) : Number.isFinite(expectedBytes) && expectedBytes > 0 ? expectedBytes : 0;
+        const timeout = /^(objects|trees|projects)\//.test(key) || size>262144 ? Math.min(600000, Math.max(180000, 30000 + Math.ceil(size / 32768) * 1000)) : 30000;
+        const response = await fetch(this.base + key.split('/').map(encodeURIComponent).join('/'), { method, body, headers: { Authorization: this.authorization, 'Accept-Encoding': 'identity', ...extra }, redirect: 'error', signal: AbortSignal.any([this.controller.signal, AbortSignal.timeout(timeout)]) });
         this.metrics.requestMs += performance.now() - started;
         if ([429, 503].includes(response.status)) {
             const retry = response.headers.get('retry-after'), seconds = retry && /^\d+$/.test(retry) ? Number(retry) : retry ? Math.max(0, (Date.parse(retry) - Date.now()) / 1000) : 60;
@@ -41,12 +55,19 @@ export class WebDAV {
         }
         return response;
     }
-    async get(key) {
-        const r = await this.request('GET', key);
-        if (r.status === 404)
-            return null;
-        assert(r.ok, `WebDAV GET 失败 (${r.status})`);
-        return this.readResponse(r);
+    async get(key, expectedBytes = 0) {
+        for (let attempt=0;;attempt++) {
+            try {
+                const r = await this.request('GET', key, undefined, {}, expectedBytes);
+                if (r.status === 404) return null;
+                assert(r.ok, `WebDAV GET 失败 (${r.status})`);
+                return await this.readResponse(r);
+            } catch(e) {
+                const code=e.cause?.code||e.code;
+                if(this.controller.signal.aborted||attempt>=2||!['UND_ERR_SOCKET','ECONNRESET','ETIMEDOUT','UND_ERR_HEADERS_TIMEOUT'].includes(code))throw e;
+                await new Promise(resolve=>setTimeout(resolve,500*(attempt+1)));
+            }
+        }
     }
     async readResponse(r, limit = 128 * 1024 * 1024) {
         if (!r.body) return Buffer.alloc(0);

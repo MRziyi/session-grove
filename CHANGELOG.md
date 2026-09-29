@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.10.0
+
+- Unify Sync with Pull-before-Push previews, large-transfer confirmation, progress and ETA.
+- Add continuous project groups, five-row previews, scroll-linked pinned navigation, collapsible panes and a resizable transcript/graph split.
+- Shorten Claude badges, expose title provenance, and group confirmed background sessions behind the visibility preference.
+- Use native Codex archive calls with rollback journals and two-month maintenance plans.
+- Introduce verified record packs (cloud schema 5; upgrade other devices), persistent summaries and indexed family/merge validation.
+- Fix single-chat toggle-off and foreign-device project-move directory cleanup.
+
+
+## 0.9.0
+
+- Add authenticated status/stop commands, cancellable sync and bounded shutdown.
+- Recover paginated native ancestry without cutoff ordinals, including archived ancestors.
+- Use official Claude file-only projection and fork semantics; snapshot companion files.
+- Add full/lean cross-agent activation previews with provenance and stale-preview checks.
+- Add sync phase timings, resumable immutable uploads, bounded graph caching, shared-message transport and gzip.
+- Add native and browser regression checks; document fidelity and measured limits.
+
 ## 0.8.0
 
 - Shared Ungrouped inbox with lazy cross-device loading, time groups, batch archive and restore without mandatory filing.

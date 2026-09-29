@@ -1,7 +1,11 @@
 import { INBOX_ID, inboxProject, cloudProjectId } from './inbox.js';
+import { preferences } from './preferences.js';
+import { BACKGROUND_PROJECT } from './session-kind.js';
 import { createVault, vaultKey } from './vault.js';
-import { WebDAV, seal, unseal } from './sync.js';
+import { WebDAV, seal, sealAsync, unseal } from './sync.js';
+import { encodeRevisionRefs, decodeRevisionRefs } from './revision-wire.js';
 import { assert, hash, now, mapConcurrent } from './util.js';
+import { uploadPacks, downloadRecords } from './record-packs.js';
 import { rootOf } from './organization.js';
 const digest = value => hash(JSON.stringify(value));
 const sorted = rows => [...rows].sort((a, b) => a.id.localeCompare(b.id));
@@ -29,7 +33,7 @@ function tips(items) {
 export class Cloud {
     constructor(store, readConfig) { this.store = store; this.readConfig = readConfig; this.connection = null; }
     cache() { return this.store.local(this.cacheKey || 'cloud:no-vault') || cacheDefault(); }
-    save(c) { this.store.local(this.cacheKey, c); }
+    save(c, quiet = false) { this.store.local(this.cacheKey, c, { quiet }); }
     async connect(passphrase) {
         const config = this.readConfig(), signature = digest([config, passphrase]);
         if (this.connection?.signature === signature) return this.connection;
@@ -82,7 +86,7 @@ export class Cloud {
             assert(response.ok, `Cloud directory read failed (${response.status}).`);
             const bytes = await dav.readResponse(response, 16 * 1024 * 1024); assert(bytes.length < 16 * 1024 * 1024, 'Cloud directory too large.');
             const value = unseal(bytes, key);
-            assert(value.schema === 4 && Array.isArray(value.projects), 'Unsupported cloud directory.');
+            assert([4, 5].includes(value.schema) && Array.isArray(value.projects), 'Unsupported cloud directory.');
             for (const p of value.projects) assert(typeof p.id === 'string' && typeof p.name === 'string' && /^[a-f0-9]{64}$/.test(p.index), 'Invalid cloud project.');
             c.heads[name] = { ...value, etag: response.headers.get('etag') };
         }
@@ -132,18 +136,36 @@ export class Cloud {
         return this.items().filter(i => i.projectId === projectId);
     }
     items() {
-        this.useSavedCache(); const c = this.cache(), grouped = new Map();
+        this.useSavedCache(); const c = this.cache(), grouped = new Map(), localIds = new Set(this.store.all('branch').map(b => b.id));
         for (const p of this.projectRefs()) for (const item of c.indexes[p.index]?.items || []) {
             if (!grouped.has(item.id)) grouped.set(item.id, []); grouped.get(item.id).push(item);
         }
         return [...grouped.values()].map(rows => {
             const versions = tips(rows), chosen = [...versions].sort((a, b) => (b.updatedAt || '').localeCompare(a.updatedAt || ''))[0];
-            return { ...chosen, versions, cloudState: versions.every(v => (c.loaded[chosen.id] || []).includes(v.ref)) ? 'cached' : this.store.all('branch').some(b => b.id === chosen.id) ? 'update' : 'cloud' };
+            return { ...chosen, versions, cloudState: versions.every(v => (c.loaded[chosen.id] || []).includes(v.ref)) ? 'cached' : localIds.has(chosen.id) ? 'update' : 'cloud' };
         });
     }
     dirtyIds() {
         this.useSavedCache(); const ack = this.cache().ack;
-        return this.store.collections().items.filter(i => this.store.memo('fingerprint:' + i.id, () => digest(treeSnapshot(this.store, i.id))) !== ack[i.id]).map(i => i.id);
+        return this.store.syncCollections().items.filter(i => this.store.memo('fingerprint:' + i.id, () => digest(treeSnapshot(this.store, i.id))) !== ack[i.id]).map(i => i.id);
+    }
+    async transferPlan(passphrase) {
+        await this.catalog(passphrase);
+        for (const p of this.summaries()) await this.project(p.id, passphrase);
+        const c = this.cache(), downloads = this.items().filter(i => i.versions.some(v => !(c.loaded[i.id] || []).includes(v.ref))), missing = new Set();
+        const exists = this.store.db.prepare('SELECT 1 FROM objects WHERE hash=?');
+        for (const item of downloads) for (const version of item.versions) {
+            if ((c.loaded[item.id] || []).includes(version.ref)) continue;
+            const bytes = c.legacyGraphs[version.ref] ? null : await this.connection.dav.get('trees/' + version.ref + '.bin');
+            const graph = c.legacyGraphs[version.ref] || (bytes && unseal(bytes, this.connection.key));
+            assert(graph && digest(graph) === version.ref, 'Cloud manifest integrity check failed.');
+            for (const r of decodeRevisionRefs(graph).revisions) for (const h of r.refs) if (!exists.get(h)) missing.add(h);
+        }
+        const uploads = this.dirtyIds(), refs = new Set(uploads.flatMap(id => treeSnapshot(this.store, id)?.revisions.flatMap(r => r.refs) || []));
+        const known = new Set([...(c.uploadedObjects || []), ...(c.packs || []).flatMap(p => p.refs)]);
+        const pending = [...refs].filter(h => !known.has(h));
+        const bytes = this.store.db.prepare('SELECT COALESCE(SUM(length(CAST(body AS BLOB))),0) AS bytes FROM objects WHERE hash IN (SELECT value FROM json_each(?))').get(JSON.stringify(pending)).bytes;
+        return { pull: { trees: downloads.length, records: missing.size }, push: { trees: uploads.length, records: pending.length, bytes }, large: missing.size > 2000 || pending.length > 2000 || bytes > 32 * 1024 * 1024, downloadIds: downloads.map(i => i.id) };
     }
     async hydrate(treeId, passphrase) {
         const { dav, key } = await this.connect(passphrase), item = this.items().find(i => i.id === treeId);
@@ -154,19 +176,13 @@ export class Cloud {
         for (const version of item.versions) {
             if (loaded.includes(version.ref)) continue;
             const bytes = c.legacyGraphs[version.ref] ? null : await dav.get('trees/' + version.ref + '.bin');
-            const graph = c.legacyGraphs[version.ref] || (bytes && unseal(bytes, key));
-            assert(graph && digest(graph) === version.ref && graph.branches.some(b => b.id === treeId), 'Invalid cloud tree manifest.');
-            const objects = {}, exists=this.store.db.prepare('SELECT 1 FROM objects WHERE hash=?');
-            const missing=[...new Set(graph.revisions.flatMap(r=>r.refs))].filter(h=>!exists.get(h));
-            let received=0;const started=Date.now();this.report('Downloading records',0,missing.length,started);
-            await mapConcurrent(missing, async h => {
-                assert(/^[a-f0-9]{64}$/.test(h), 'Invalid transcript reference.');
-                const blob = await dav.get('objects/' + h + '.bin'); assert(blob, 'Cloud transcript is incomplete.');
-                objects[h] = unseal(blob, key); assert(typeof objects[h] === 'string' && hash(objects[h]) === h, 'Transcript integrity check failed.');
-                this.report('Downloading records',++received,missing.length,started);
-            });
+            const encoded = c.legacyGraphs[version.ref] || (bytes && unseal(bytes, key));
+            assert(encoded && digest(encoded) === version.ref && encoded.branches.some(b => b.id === treeId), 'Invalid cloud tree manifest.');
+            const graph = decodeRevisionRefs(encoded);
+            this.report('Downloading records', 0, null);
+            await downloadRecords(this.store, dav, key, graph, (done, total, started) => this.report('Downloading records', done, total, started), pack => { c.packs ||= []; if (!c.packs.some(p => p.ref === pack.ref)) c.packs.push(pack); });
             this.report('Applying downloaded changes');
-            this.store.merge(graph, objects); loaded.push(version.ref);
+            this.store.merge(graph, {}); loaded.push(version.ref);
             c.loaded[treeId] = loaded; this.save(c);
         }
         if (!wasDirty && !(this.store.local('conflicts') || []).length) c.ack[treeId] = digest(treeSnapshot(this.store, treeId));
@@ -178,6 +194,8 @@ export class Cloud {
         const { dav, key, rootDav, vaultBytes } = this.connection;
         assert(!await rootDav.get('migration.json'), 'Cloud migration in progress; retry after it completes.');
         const projectIds = new Set(treeIds.map(id => cloudProjectId(this.store.get('branch', id).projectId)));
+        const remoteItems = new Map(this.items().map(i=>[i.id,i]));
+        for (const id of treeIds) for (const previous of remoteItems.get(id)?.versions || []) projectIds.add(previous.projectId);
         const before = this.cache();
         if (Object.keys(before.legacyGraphs || {}).length) for (const p of this.summaries()) projectIds.add(p.id);
         for (const id of treeIds) if (before.locations?.[id]) projectIds.add(before.locations[id]);
@@ -185,28 +203,25 @@ export class Cloud {
         for (const id of treeIds) await this.hydrate(id, passphrase);
         assert(!(this.store.local('conflicts') || []).length, 'Resolve sync conflicts before uploading.');
         const c = this.cache(), replacements = new Map(), fingerprints = {};
-        const graphs=new Map(treeIds.map(id=>[id,treeSnapshot(this.store,id)]));
-        const known=new Set(c.uploadedObjects||[]), pending=new Set([...graphs.values()].filter(Boolean).flatMap(g=>g.revisions.flatMap(r=>r.refs)).filter(h=>!known.has(h)));
-        const transferStarted=Date.now();let transferred=0;this.report('Uploading records',0,pending.size,transferStarted);
-        let uploaded = 0;
+        const graphs=new Map(treeIds.map(id=>[id,treeSnapshot(this.store,id)])), snapshotItems=new Map(this.store.syncCollections().items.map(i=>[i.id,i]));
+        let uploaded = 0, doneBefore = 0;
+        const recordTotal = [...graphs.values()].filter(Boolean).reduce((n,g)=>n+new Set(g.revisions.flatMap(r=>r.refs)).size,0), pushStarted = Date.now();
         for (const id of treeIds) {
             const graph = graphs.get(id); if (!graph) continue;
-            const ref = digest(graph), previous = this.items().find(i => i.id === id);
-            if (c.ack[id] === ref && previous?.versions.length === 1) continue;
-            const sent = new Set(c.uploadedObjects || []);
-            await mapConcurrent([...new Set(graph.revisions.flatMap(r => r.refs))], async h => {
-                if (sent.has(h)) return;
-                const body = this.store.db.prepare('SELECT body FROM objects WHERE hash=?').get(h)?.body; assert(typeof body === 'string', 'Missing local transcript.');
-                if (await dav.put('objects/' + h + '.bin', seal(body, key), true)) uploaded++;
-                sent.add(h);
-                if(pending.delete(h))this.report('Uploading records',++transferred,transferred+pending.size,transferStarted);
-            });
-            c.uploadedObjects = [...sent];
-            await dav.put('trees/' + ref + '.bin', seal(graph, key), true);
+            const fingerprint = digest(graph), previous = this.items().find(i => i.id === id);
+            if (c.ack[id] === fingerprint && previous?.versions.length === 1) continue;
+            const refs = [...new Set(graph.revisions.flatMap(r => r.refs))];
+            this.report('Uploading records', doneBefore, recordTotal, pushStarted);
+            const packed = await uploadPacks(this.store, dav, key, refs, c, () => this.save(c, true), (done, total) => this.report('Uploading records', doneBefore + refs.length - total + done, recordTotal, pushStarted));
+            doneBefore += refs.length;
+            this.report('Uploading records', doneBefore, recordTotal, pushStarted);
+            uploaded += packed.uploaded;
+            const transport = encodeRevisionRefs(packed.packs.length ? { ...graph, packs: packed.packs } : graph), ref = digest(transport);
+            await dav.put('trees/' + ref + '.bin', await sealAsync(transport, key), true);
             const ancestors = [...new Set((previous?.versions || []).flatMap(v => [v.ref, ...(v.ancestors || [])]))].filter(h => h !== ref);
-            const item = this.store.collections().items.find(i => i.id === id);
+            const item = snapshotItems.get(id);
             replacements.set(id, { ...item, projectId: cloudProjectId(item.projectId), sessions: item.sessions.map(s => ({ ...s, active: false })), ref, ancestors });
-            fingerprints[id] = ref;
+            fingerprints[id] = fingerprint;
         }
         if (!replacements.size) return { uploaded: 0, published: 0 };
         this.report('Publishing project indexes');
@@ -226,14 +241,14 @@ export class Cloud {
             const indexAncestors = [...new Set(this.projectRefs().filter(p => p.id === projectId).flatMap(p => [p.index, ...(p.indexAncestors || [])]))].filter(h => h !== index);
             ownProjects.set(projectId, { ...value.project, index, count: treeIds.length, treeIds, indexAncestors });
         }
-        const head = { schema: 4, deviceId: this.store.device.id, at: now(), projects: [...ownProjects.values()] };
+        const head = { schema: 5, deviceId: this.store.device.id, at: now(), projects: [...ownProjects.values()] };
         // Publication point: every referenced immutable dependency is already durable.
         assert((await rootDav.get('vault.json'))?.equals(vaultBytes) && !await rootDav.get('migration.json'), 'Cloud settings changed before publication.');
         this.report('Publishing cloud directory');
         await dav.put('heads/' + this.store.device.id + '.bin', seal(head, key));
         c.heads[this.store.device.id + '.bin'] = head; c.ownProjects = head.projects;
         c.locations ||= {};
-        for (const [id, ref] of Object.entries(fingerprints)) { c.ack[id] = ref; c.loaded[id] = [...new Set([...(c.loaded[id] || []), ref])]; c.locations[id] = replacements.get(id).projectId; }
+        for (const [id, ref] of Object.entries(fingerprints)) { c.ack[id] = ref; c.loaded[id] = [...new Set([...(c.loaded[id] || []), replacements.get(id).ref])]; c.locations[id] = replacements.get(id).projectId; }
         c.lastUpload = now(); this.save(c);
         return { uploaded, published: replacements.size };
     }
@@ -252,7 +267,8 @@ export class Cloud {
         const inboxIds = new Set(this.projectRefs().filter(p => p.id === INBOX_ID).flatMap(p => p.treeIds || []));
         for (const i of data.items) { if (!i.projectId && !i.archived) inboxIds.add(i.id); else inboxIds.delete(i.id); for (const id of i.sessionIds || []) if (id !== i.id) inboxIds.delete(id); }
         projects.set(INBOX_ID, { ...projects.get(INBOX_ID), ...inboxProject(), count: inboxIds.size });
-        return { ...data, projects: [...projects.values()], items: [...items.values()], cloudProjects: this.summaries() };
+        const show = preferences(this.store).showScheduledSessions;
+        return { ...data, projects: [...projects.values()].filter(p=>show||!p.background&&p.id!==BACKGROUND_PROJECT), items: [...items.values()].filter(i=>show||i.projectId!==BACKGROUND_PROJECT), cloudProjects: this.summaries() };
     }
     listing(scope, query) {
         const dirty = new Set(this.dirtyIds());
@@ -264,7 +280,7 @@ export class Cloud {
         const branches = new Map(this.store.all('branch').map(b => [b.id, b]));
         const items = data.items.flatMap(i => {
             const project = data.projects.find(p => p.id === i.projectId);
-            const sessions = i.sessions.filter(s => scope === 'archived' ? s.archived || project?.archived : cloudProjectId(i.projectId) === scope && !s.archived && !project?.archived);
+            const sessions = i.sessions.filter(s => scope === 'archived' ? s.archived || project?.archived : (scope === 'projects' || cloudProjectId(i.projectId) === scope) && !s.archived && !project?.archived);
             if (!sessions.length) return [];
             const matching = sessions.filter(s => !q || s.name.toLocaleLowerCase().includes(q) || branches.has(s.id) && this.store.parsed(branches.get(s.id).head, s.agent).messages.some(m => m.text.toLocaleLowerCase().includes(q)));
             if (!matching.length && !i.name.toLocaleLowerCase().includes(q)) return [];

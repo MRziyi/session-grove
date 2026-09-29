@@ -1,10 +1,18 @@
 import { hash } from './util.js';
+const tokenCache = new Map(); let tokenCacheBytes = 0;
 // A local, deliberately approximate text metric. This is not a model tokenizer,
 // billing usage, or the size of the live post-compaction context window.
 export function estimateTokens(text) {
-    let latin = 0, other = 0;
-    for (const c of String(text || '')) /[\u0000-\u007f]/u.test(c) ? latin++ : other++;
-    return Math.ceil(latin / 4 + other * 1.5);
+    const value = String(text || ''), cached = tokenCache.get(value);
+    if (cached !== undefined) return cached;
+    const nonAscii = value.replace(/[\u0000-\u007f]+/g, '');
+    const latin = value.length - nonAscii.length, other = [...nonAscii].length;
+    const result = Math.ceil(latin / 4 + other * 1.5), bytes = value.length * 2;
+    if (bytes <= 1024 * 1024) {
+        while (tokenCache.size && (tokenCacheBytes + bytes > 4 * 1024 * 1024 || tokenCache.size >= 1024)) { const oldest = tokenCache.keys().next().value; tokenCacheBytes -= oldest.length * 2; tokenCache.delete(oldest); }
+        tokenCache.set(value, result); tokenCacheBytes += bytes;
+    }
+    return result;
 }
 const plain = content => typeof content === 'string' ? content : Array.isArray(content) ? content.filter(c => ['text', 'input_text', 'output_text'].includes(c.type)).map(c => c.text || '').join('\n') : '';
 export function contextInfo(records, agent) {

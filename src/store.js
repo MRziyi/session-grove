@@ -1,4 +1,4 @@
-import { sessionExclusion } from './session-kind.js';
+import { sessionExclusion, backgroundKind } from './session-kind.js';
 import { supportedHistory } from './codex-history.js';
 import { INBOX_ID, inboxProject, cloudProjectId } from './inbox.js';
 import { deviceDetails } from './device.js';
@@ -24,9 +24,10 @@ export class Store {
       CREATE TABLE IF NOT EXISTS entities (kind TEXT NOT NULL, id TEXT PRIMARY KEY, body TEXT NOT NULL);
       CREATE INDEX IF NOT EXISTS entities_kind ON entities(kind);
       CREATE TABLE IF NOT EXISTS objects (hash TEXT PRIMARY KEY, body TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS summaries (id TEXT, agent TEXT, version INTEGER, body TEXT, PRIMARY KEY(id,agent));
       CREATE TABLE IF NOT EXISTS local (key TEXT PRIMARY KEY, body TEXT NOT NULL);`);
         fs.chmodSync(path.join(root, 'grove.sqlite'), 0o600);
-        this.version = 0; this.cloudVersion = 0; this.cloudCache = new Map(); this.memoCache = new Map(); this.parseCache = new Map(); this.parseBytes = 0; this.summaryCache = new Map();
+        this.version = 0; this.cloudVersion = 0; this.cloudCache = new Map(); this.memoCache = new Map(); this.parseCache = new Map(); this.parseBytes = 0; this.summaryCache = new Map(); this.recordCache = new Map(); this.recordBytes = 0;
         this.getStatement = this.db.prepare('SELECT body FROM entities WHERE kind=? AND id=?');
         this.objectStatement = this.db.prepare('SELECT body FROM objects WHERE hash=?');
         this.insertObject = this.db.prepare('INSERT OR IGNORE INTO objects VALUES (?,?)');
@@ -34,6 +35,8 @@ export class Store {
         this.entityWrite = this.db.prepare('INSERT INTO entities VALUES (?,?,?) ON CONFLICT(id) DO UPDATE SET body=excluded.body WHERE entities.kind=excluded.kind');
         this.localRead = this.db.prepare('SELECT body FROM local WHERE key=?');
         this.localWrite = this.db.prepare('INSERT OR REPLACE INTO local VALUES (?,?)');
+        this.summaryRead = this.db.prepare('SELECT body FROM summaries WHERE id=? AND agent=? AND version=4');
+        this.summaryWrite = this.db.prepare('INSERT OR REPLACE INTO summaries VALUES (?,?,4,?)');
         initializeOrganization(this);
     }
     invalidate() { this.version++; this.memoCache.clear(); this.graphCache=null; }
@@ -41,7 +44,22 @@ export class Store {
     parsed(revisionId, agent) {
         const key = agent + ':' + revisionId;
         if (this.parseCache.has(key)) { const entry = this.parseCache.get(key); this.parseCache.delete(key); this.parseCache.set(key, entry); return entry.value; }
-        const raw = this.raw(revisionId), value = parse(raw, agent), size = Buffer.byteLength(raw);
+        let size = 0;
+        const records = this.get('revision', revisionId).refs.map(h => {
+            let entry = this.recordCache.get(h);
+            if (entry) { this.recordCache.delete(h); this.recordCache.set(h, entry); }
+            else {
+                const raw = this.objectStatement.get(h)?.body; assert(typeof raw === 'string', `缺少历史对象 ${h}`, 409);
+                let value = null; try { value = JSON.parse(raw); } catch {}
+                entry = { record: { raw, value }, bytes: Buffer.byteLength(raw) };
+                while (this.recordCache.size && (this.recordBytes + entry.bytes > 24 * 1024 * 1024 || this.recordCache.size >= 20000)) {
+                    const oldest = this.recordCache.keys().next().value; this.recordBytes -= this.recordCache.get(oldest).bytes; this.recordCache.delete(oldest);
+                }
+                if (entry.bytes <= 24 * 1024 * 1024) { this.recordCache.set(h, entry); this.recordBytes += entry.bytes; }
+            }
+            size += entry.bytes; return entry.record;
+        });
+        const value = parse(null, agent, records);
         while (this.parseCache.size && (this.parseBytes + size > 24 * 1024 * 1024 || this.parseCache.size >= 24)) { const key = this.parseCache.keys().next().value; this.parseBytes -= this.parseCache.get(key).size; this.parseCache.delete(key); }
         // Keep one oversized session rather than reparsing it for every projection.
         if (size <= 100 * 1024 * 1024) { this.parseCache.set(key, { value, size }); this.parseBytes += size; }
@@ -49,14 +67,19 @@ export class Store {
     }
     summary(revisionId, agent) {
         const key = agent + ':' + revisionId; if (this.summaryCache.has(key)) return this.summaryCache.get(key);
+        const saved = this.summaryRead.get(revisionId, agent); if (saved) { const value = JSON.parse(saved.body); this.summaryCache.set(key, value); return value; }
         return this.rememberSummary(revisionId,agent,this.parsed(revisionId,agent));
     }
     rememberSummary(revisionId,agent,p) {
         const key=agent+':'+revisionId, chats = p.messages.filter(m => m.role !== 'tool').length;
-        const value = { chats, firstUser:p.messages.find(m=>m.role==='user')?.text.slice(0,100), complete: p.complete && !p.errors.length, external: p.warnings.some(w=>w.includes('外部附件')), nativeId:p.nativeId, cwd:p.cwd, mode:p.meta?.history_mode, forkedFrom:p.meta?.forked_from_id || p.meta?.forkedFromId, forkOrdinal:p.meta?.forked_from_ordinal_exclusive, forkEnd:p.meta?.forked_from_ordinal_exclusive == null ? -1 : p.records.findIndex(r=>r.value?.ordinal >= p.meta.forked_from_ordinal_exclusive), supported:supportedHistory(p),
-            excluded:sessionExclusion({agent,source:p.meta?.source,threadSource:p.meta?.thread_source,sidechain:agent === 'claude' && p.records.find(r=>['user','assistant'].includes(r.value?.type))?.value?.isSidechain === true,chats}) };
+        const firstHuman = p.records.find(r => r.value?.type === 'user' && !r.value.isMeta)?.value;
+        const provenance = {agent,source:p.meta?.source,threadSource:p.meta?.thread_source,sidechain:agent==='claude'&&p.records.find(r=>['user','assistant'].includes(r.value?.type))?.value?.isSidechain===true,originKind:firstHuman?.origin?.kind,sessionKind:p.records.find(r=>r.value?.sessionKind)?.value.sessionKind};
+        const value = { chats, firstUser:(()=>{const v=p.messages.find(m=>m.role==='user')?.text;return v===undefined?undefined:JSON.parse(JSON.stringify(v.slice(0,100)));})(), complete: p.complete && !p.errors.length, external: p.warnings.some(w=>w.includes('外部附件')), nativeId:p.nativeId, cwd:p.cwd, mode:p.meta?.history_mode, forkedFrom:p.meta?.forked_from_id || p.meta?.forkedFromId, forkOrdinal:p.meta?.forked_from_ordinal_exclusive, forkEnd:p.meta?.forked_from_ordinal_exclusive == null ? -1 : p.records.findIndex(r=>r.value?.ordinal >= p.meta.forked_from_ordinal_exclusive), supported:supportedHistory(p),
+            lastActivity: p.messages.reduce((latest,m)=>typeof m.timestamp==='string'&&Number.isFinite(Date.parse(m.timestamp))&&(!latest||Date.parse(m.timestamp)>Date.parse(latest))?m.timestamp:latest,null) || p.meta?.timestamp || null,
+            background: backgroundKind(provenance), titleSource: p.records.some(r=>r.value?.type==='custom-title')?'custom':p.records.some(r=>r.value?.type==='ai-title')?'automatic':'first-prompt',
+            excluded:sessionExclusion({...provenance,chats}) };
         if(this.summaryCache.size >= 4096) this.summaryCache.delete(this.summaryCache.keys().next().value);
-        this.summaryCache.set(key,value); return value;
+        this.summaryCache.set(key,value); if (!revisionId.startsWith('scan:')) this.summaryWrite.run(revisionId, agent, JSON.stringify(value)); return value;
     }
     activity(revisionId, agent) { const p = this.parsed(revisionId, agent), entry = this.parseCache.get(agent + ':' + revisionId); if (entry) return entry.ledger ||= ledger(p, agent); return ledger(p, agent); }
     close() { this.db.close(); }
@@ -68,20 +91,20 @@ export class Store {
             return result;
         }
         catch (e) {
-            this.db.exec('ROLLBACK'); this.invalidate(); this.parseCache.clear(); this.parseBytes = 0; this.instanceCache = undefined; this.summaryCache.clear(); this.cloudCache.clear(); this.cloudVersion++;
+            this.db.exec('ROLLBACK'); this.invalidate(); this.parseCache.clear(); this.parseBytes = 0; this.recordCache.clear(); this.recordBytes = 0; this.instanceCache = undefined; this.summaryCache.clear(); this.cloudCache.clear(); this.cloudVersion++;
             throw e;
         }
     }
     all(kind) { return this.allStatement.all(kind).map(x => JSON.parse(x.body)); }
     get(kind, key) { const row = this.getStatement.get(kind, key); assert(row, `${kind} 不存在`, 404); return JSON.parse(row.body); }
     put(kind, value) { this.invalidate(); this.entityWrite.run(kind, value.id, JSON.stringify(value)); return value; }
-    local(key, value) {
+    local(key, value, options = {}) {
         if (key.startsWith('cloud:')) {
             if (!this.cloudCache.has(key)) { const body = this.localRead.get(key)?.body; this.cloudCache.set(key, { body, value: body ? JSON.parse(body) : null }); }
             const cached = this.cloudCache.get(key);
             if (arguments.length === 1) return cached.value;
             const body = JSON.stringify(value);
-            if (body !== cached.body) { this.localWrite.run(key, body); this.cloudVersion++; this.cloudCache.set(key, { body, value: JSON.parse(body) }); }
+            if (body !== cached.body) { this.localWrite.run(key, body); if (!options.quiet) this.cloudVersion++; this.cloudCache.set(key, { body, value: JSON.parse(body) }); }
             return value;
         }
 
@@ -134,8 +157,8 @@ export class Store {
         end = Number(end);
         assert(parsed.checkpoints.some(c => c.end === end), '只能从已完成的轮次创建分支');
         const contextPolicy = parent.contextPolicy ? { disabled: parent.contextPolicy.disabled.filter(id => parsed.context.compactions.some(e => e.id === id && e.line <= end)) } : undefined;
-        const revision = this.revision(this.raw(rev.id, end), rev.id, { agent: parent.agent, operation: 'fork' });
-        return this.put('branch', { ...parent, contextPolicy, id: id(), name: text(name), head: revision.id, nodeHead: null, layoutHead: null, chatIdentity: null, parentId: parent.id, forkRevision: rev.id, forkEnd: end, forkParentEnd: end, archived: false, synthetic: false, contentUpdatedAt: now(), createdAt: now(), updatedAt: now(), metaVersion: id(), metaAncestors: [] });
+        const revision = this.revision(this.raw(rev.id, end), rev.id, { agent: parent.agent, operation: 'fork', ...(parent.agent === 'claude' ? { claudeCheckpoint: parsed.checkpoints.find(c => c.end === end).turnId } : {}) });
+        return this.put('branch', { ...parent, contextPolicy, id: id(), name: text(name), head: revision.id, nodeHead: null, layoutHead: null, chatIdentity: null, parentId: parent.id, forkRevision: rev.id, forkEnd: end, forkParentEnd: end, archived: false, synthetic: false, inferred: false, nativeLinked: false, prefixUnavailable: false, createdViaGroveFork: true, contentUpdatedAt: now(), createdAt: now(), updatedAt: now(), metaVersion: id(), metaAncestors: [] });
     }
     edit(branchId, patch) {
         const b = this.get('branch', branchId), previous = structuredClone(b);
@@ -146,6 +169,7 @@ export class Store {
         if ('contextPolicy' in patch) { assert(validPolicy(patch.contextPolicy), 'Invalid context policy.'); b.contextPolicy = patch.contextPolicy; }
         if ('archived' in patch)
             b.archived = !!patch.archived;
+        if ('archived' in patch && b.background) b.backgroundManaged = true;
         b.updatedAt = now();
         return this.put('branch', metadata(previous, b));
     }
@@ -191,8 +215,9 @@ export class Store {
             r = r.parent ? this.get('revision', r.parent) : null;
         }
         if (lineage.some(r => r.source.requiresAuxiliary))
-            p.warnings.push('来源含尚未收纳的伴随目录；当前版本禁止激活或移除原生实例');
-        return { ...b, ...pendingDetail(this, b, p), messages: p.messages, checkpoints: p.checkpoints, warnings: p.warnings, cwd: p.cwd, records: p.records.length, lineage, instances: this.instances().filter(i => i.branchId === b.id).map(({ baseline, observedHash, ...i }) => i) };
+            if (!lineage.some(r => r.source.auxiliary) && !(b.agent === 'claude' && lineage[0]?.source.operation === 'fork')) p.warnings.push('来源含尚未收纳的伴随目录；当前版本禁止激活或移除原生实例');
+        if (b.prefixUnavailable) p.warnings.push('Native parent is known, but its shared prefix was changed or compacted. Ancestry is retained without merging unverifiable chats.');
+        return { ...b, nativeTitleSource: this.summary(b.head,b.agent).titleSource, ...pendingDetail(this, b, p), messages: p.messages, checkpoints: p.checkpoints, warnings: p.warnings, cwd: p.cwd, records: p.records.length, lineage, instances: this.instances().filter(i => i.branchId === b.id).map(({ baseline, observedHash, ...i }) => i) };
     }
     setCompaction(branchId, { eventId, enabled, head }) {
         const b = this.get('branch', branchId); assert(!b.archived && !b.excluded && !(b.projectId && this.get('project', b.projectId).archived), 'Restore this session before organizing.');
@@ -210,6 +235,7 @@ export class Store {
     forest(scope) { return forest(this, scope); }
     detectFamilies() { return detectFamilies(this); }
     collections() { return this.memo('collections', () => collections(this)); }
+    syncCollections() { return this.memo('sync-collections', () => collections(this, true)); }
     listing(scope, query) { return listing(this, scope, query); }
     treeGraph(id, view = 'all') {
         const key = `${this.version}:${id}:${view}`;
@@ -226,7 +252,7 @@ export class Store {
 
     exportGraph() { return this.memo('exportGraph', () => this.buildExportGraph()); }
     buildExportGraph() {
-        const all = this.all('branch'), wanted = new Set(this.collections().items.flatMap(i => [i.id, ...i.sessionIds]));
+        const all = this.all('branch'), wanted = new Set(this.syncCollections().items.flatMap(i => [i.id, ...i.sessionIds]));
         // Preserve frozen ancestry dependencies, while excluding unrelated helpers.
         for (const id of [...wanted]) { let b = this.get('branch', id); while (b.parentId) { wanted.add(b.parentId); b = this.get('branch', b.parentId); } }
         const branches = all.filter(b => wanted.has(b.id)).map(b => ({ ...b, projectId: cloudProjectId(b.projectId) })), branchIds = new Set(branches.map(b => b.id));
@@ -258,17 +284,16 @@ export class Store {
                 else
                     this.put('revision', r);
             }
+            const checkedObjects = new Set(), checkedRevisions = new Set(), revisions = new Map(graph.revisions.map(r=>[r.id,r]));
+            const objectExists = this.db.prepare('SELECT 1 FROM objects WHERE hash=?');
             for (const r of graph.revisions) {
-                this.raw(r.id);
-                if (r.parent)
-                    this.get('revision', r.parent);
-                const visited = new Set();
-                let cursor = r;
-                while (cursor) {
-                    assert(!visited.has(cursor.id), '版本图存在环');
-                    visited.add(cursor.id);
-                    cursor = cursor.parent ? this.get('revision', cursor.parent) : null;
+                for (const h of r.refs) if (!checkedObjects.has(h)) { assert(objectExists.get(h), `缺少历史对象 ${h}`, 409); checkedObjects.add(h); }
+                const visited = new Set(); let cursor = r;
+                while (cursor && !checkedRevisions.has(cursor.id)) {
+                    assert(!visited.has(cursor.id), '版本图存在环'); visited.add(cursor.id);
+                    cursor = cursor.parent ? revisions.get(cursor.parent) || this.get('revision',cursor.parent) : null;
                 }
+                for (const id of visited) checkedRevisions.add(id);
             }
             const conflicts = this.local('conflicts') || [];
             for (const p of graph.projects) {

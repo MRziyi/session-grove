@@ -1,6 +1,8 @@
+import { projectGroups, selectRange } from './library-view.js';
 import { markdown } from './markdown.js';
 import { enhanceSelect } from './select.js';
 import { t, locale, setLocale, errorText } from './i18n.js';
+const PROJECTS = 'projects';
 const INBOX = '00000000-0000-4000-8000-000000000001';
 const $ = s => document.querySelector(s), $$ = s => [...document.querySelectorAll(s)];
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -35,7 +37,7 @@ const palette = {
     'pending-0': ['#576b85', '#566b852b'], 'pending-1': ['#726486', '#7161842b'], 'pending-2': ['#526f73', '#536f732b'], 'pending-3': ['#7c6979', '#7c69792b']
 };
 const style = n => { const [tone, tint] = palette[n.color]; return `--tone:${tone};--tint:${tint}`; };
-const state = { data: null, token: '', roots: {}, scope: 'active:codex', list: { items: [] }, query: '', selected: new Set(), tree: null, branchId: null, nodeId: null, compactionId: null, chats: new Set(), rangeStart: null, rangeEnd: null, expandedGroups: new Set(), expanded: new Set() };
+const state = { data: null, token: '', roots: {}, scope: 'active:codex', list: { items: [] }, query: '', selected: new Set(), tree: null, branchId: null, nodeId: null, compactionId: null, chats: new Set(), rangeStart: null, rangeEnd: null, expandedGroups: new Set(), expandedProjects: new Set(), projectFocus: null, expanded: new Set() };
 let clockTimer = null, modalVersion = 0;
 const operations = {}, operationTimers = {}, seenOperations={};
 let activityGroups=[];
@@ -48,10 +50,13 @@ function showOperation(kind, value) {
     if (value.state !== 'running') operationTimers[kind] = setTimeout(() => { delete operations[kind]; renderCloudStatus(); }, 3500);
     renderCloudStatus();
 }
+let eventController;
 async function watchOperations() {
     for (;;) {
+        if(document.hidden)await new Promise(resolve=>{const visible=()=>{if(!document.hidden){document.removeEventListener('visibilitychange',visible);resolve();}};document.addEventListener('visibilitychange',visible);});
         try {
-            const response = await fetch('/api/events', {headers:{'X-Grove-Token':state.token}}); if(!response.ok) return;
+            eventController=new AbortController();
+            const response = await fetch('/api/events', {headers:{'X-Grove-Token':state.token},signal:eventController.signal}); if(!response.ok) { await api('/status'); throw new Error('Reconnect event stream'); }
             const reader = response.body.pipeThrough(new TextDecoderStream()).getReader(); let buffer='';
             for (;;) { const {value,done}=await reader.read(); if(done)break; buffer+=value; let end;
                 while((end=buffer.indexOf('\n\n'))!==-1){const message=buffer.slice(0,end);buffer=buffer.slice(end+2);const data=message.split('\n').find(l=>l.startsWith('data: '));if(data){const value=JSON.parse(data.slice(6));showOperation(value.kind,value);}}
@@ -72,10 +77,18 @@ const route = () => state.tree?.paths.find(p => p.branchId === state.branchId);
 const selectedNode = () => state.tree?.nodes.find(n => n.id === state.nodeId);
 const nodeName = n => n.name || `${t('Pending')} ${state.tree.nodes.filter(v => v.pending).findIndex(v => v.id === n.id) + 1}`;
 function toast(message) { $('#toast').textContent = message; $('#toast').classList.add('show'); clearTimeout(toastTimer); toastTimer = setTimeout(() => $('#toast').classList.remove('show'), 6000); }
-async function api(path, method = 'GET', body) {
-    const r = await fetch('/api' + path, { method, headers: { 'Content-Type': 'application/json', 'X-Grove-Token': state.token }, ...(body ? { body: JSON.stringify(body) } : {}) });
+async function api(path, method = 'GET', body, retried = false) {
+    let r;
+    try { r = await fetch('/api' + path, { method, headers: { 'Content-Type': 'application/json', 'X-Grove-Token': state.token, 'X-Grove-Graph': 'shared-messages-v1' }, ...(body ? { body: JSON.stringify(body) } : {}) }); }
+    catch (e) { state.connected = false; if (state.data) renderCloudStatus(); throw e; }
     const data = await r.json();
+    if (r.status === 403 && data.error === '本地访问凭证无效，请刷新页面' && !retried) {
+        const boot = await (await fetch('/api/bootstrap')).json(); state.token = boot.token;
+        return api(path, method, body, true);
+    }
+    state.connected = r.status !== 503;
     if (!r.ok) throw new Error(errorText(data.error) + (data.requestId ? ` [${data.requestId}]` : ''));
+    if (data.format === 'shared-messages-v1') { for (const p of data.paths) p.messages = p.messages.map(m => ({ ...data.messagePool[m.ref], line: m.line })); delete data.messagePool; delete data.format; }
     return data;
 }
 function modal(title, html, action, label = 'Save') {
@@ -101,92 +114,92 @@ async function run(fn, activity = null) {
 }
 function button(id, label, fn) { const el = $(id); if (el) { el.textContent = t(label); el.onclick = fn; el.disabled = working || ['syncing','migrating'].includes(state.data?.cloud?.phase); } }
 function translateBanner() {
-    for (const [id, glyph, label] of [['sync', 'download', 'Download'], ['collect', 'refresh', 'Update'], ['settings', 'settings', 'Settings']]) {
+    for (const [id, glyph, label] of [['sync', 'refresh', 'Sync'], ['collect', 'refresh', 'Update'], ['settings', 'settings', 'Settings']]) {
         const el = $('#' + id); el.dataset.glyph= glyph; el.innerHTML = `${icon(glyph)}<span class="button-label">${t(label)}</span>`; el.title = t(label); el.setAttribute('aria-label', t(label));
     }
-    $('#upload').innerHTML=icon('upload')+'<span class="button-label">'+t('Upload changes')+'</span>';
-    $('#sync-menu-toggle').title=t('Upload and transfer details');$('#sync-menu-toggle').setAttribute('aria-label',t('Upload and transfer details'));
     $('#about').textContent = t('About'); $('#information').title = t('Information'); $('#information').setAttribute('aria-label', t('Information'));
     $('#search-icon').innerHTML = icon('search'); $('#search').placeholder = t('Search title or content…'); $('#search').setAttribute('aria-label', t('Search title or content…'));
     $('#back').innerHTML = icon('back'); $('#back').title = t('Back to list'); $('#back').setAttribute('aria-label', t('Back to list'));
     $('#source').textContent = t('Source'); $('#source').title = t('Source & revisions'); $('#source').setAttribute('aria-label', t('Source & revisions'));
     $('#transcripts-title').textContent = t('Transcripts'); $('#graph-title').textContent = t('Graph'); $('#graph-reset').textContent = t('Reset view'); $('#zoom-in').title = t('Zoom in'); $('#zoom-out').title = t('Zoom out');
+    $('#graph-fit').textContent = t('Fit tree');
 }
 function renderNavigation() {
-    const d = state.data;
-    const entry = (scope, name, count, css = '') => `<button class="nav-entry ${css} ${state.scope === scope ? 'selected' : ''}" data-scope="${esc(scope)}" ${state.scope === scope ? 'aria-current="page"' : ''}><span class="nav-name">${esc(name)}${!scope.startsWith('active:') && scope !== 'archived' ? `<span class="cloud-mark" title="${t('Project sync')}">${icon('cloud')}</span>` : ''}</span><span class="count">${count}</span></button>`;
+    const d = state.data, directoryScroll = $('.project-directory-scroll')?.scrollTop || 0;
+    const selectedScope = state.scope === PROJECTS ? state.projectFocus : state.scope;
+    const entry = (scope, name, count, css = '') => `<button class="nav-entry ${css} ${selectedScope === scope ? 'selected' : ''}" data-scope="${esc(scope)}" ${selectedScope === scope ? 'aria-current="page"' : ''}><span class="nav-name">${esc(name)}${!scope.startsWith('active:') && scope !== 'archived' ? `<span class="cloud-mark" title="${t('Project sync')}">${icon('cloud')}</span>` : ''}</span><span class="count">${count}</span></button>`;
+    const projectTimes = new Map(projectGroups(d.items.filter(i=>!i.archived).map(i=>({...i,updatedAt:i.sessions.filter(s=>!s.archived).map(s=>s.updatedAt).sort().at(-1)||i.updatedAt})), d.projects).map(g=>[g.id,g.updatedAt]));
     const projects = d.projects.filter(p => !p.archived && (p.builtin || d.items.some(i => i.projectId === p.id && !i.archived) || p.count > 0));
     const archivedProjects = d.projects.filter(p => p.archived && (d.items.some(i => i.projectId === p.id) || p.index));
     const archivedSessions = d.items.filter(i => !archivedProjects.some(p => p.id === i.projectId)).reduce((n, i) => n + i.sessions.filter(s => s.archived).length, 0);
-    $('#navigation').innerHTML = `<section class="nav-group"><h2 class="nav-label">${t('Current Active')}</h2>${entry('active:codex', 'Codex', d.activeCounts.codex, 'codex')}${entry('active:claude', 'Claude Code', d.activeCounts.claude, 'claude')}</section><section class="nav-group"><h2 class="nav-label">${t('Projects')}</h2>${projects.sort((a,b) => Number(!!b.builtin)-Number(!!a.builtin)).map(p => entry(p.id, p.builtin ? t('Ungrouped') : p.name, Math.max(p.count || 0, d.items.filter(i => i.projectId === p.id && !i.archived).length))).join('') || `<p class="nav-empty">${t('No projects yet')}</p>`}</section><section class="nav-group"><h2 class="nav-label">${t('Archived')}</h2>${entry('archived', t('Archived items'), archivedProjects.length + archivedSessions)}</section>`;
+    $('#navigation').innerHTML = `<section class="nav-group"><h2 class="nav-label">${t('Current Active')}</h2>${entry('active:codex', 'Codex', d.activeCounts.codex, 'codex')}${entry('active:claude', 'Claude', d.activeCounts.claude, 'claude')}</section><section class="nav-group project-directory"><h2 class="nav-label">${t('Projects')}</h2><div class="project-directory-scroll">${projects.sort((a,b) => (projectTimes.get(b.id)||'').localeCompare(projectTimes.get(a.id)||'') || a.name.localeCompare(b.name)).map(p => entry(p.id, p.builtin ? t('Ungrouped') : p.name==='Scheduled & background'?t(p.name):p.name, Math.max(p.count || 0, d.items.filter(i => i.projectId === p.id && !i.archived).length))).join('') || `<p class="nav-empty">${t('No projects yet')}</p>`}</div></section><section class="nav-group"><h2 class="nav-label">${t('Archived')}</h2>${entry('archived', t('Archived items'), archivedProjects.length + archivedSessions)}</section>`;
+    $('.project-directory-scroll').scrollTop = directoryScroll;
     $$('[data-scope]').forEach(el => el.onclick = () => navigate(el.dataset.scope));
     renderCloudStatus();
 }
 
-function renderCloudStatus(){const d=state.data;
-    $('#collect').title=t('Last local update: {time}',{time:date(d.update?.lastRunAt)});
-    const phase = state.uiBusy === 'sync' ? 'syncing' : d.cloud.phase, labels = { unconfigured: '', migrating: 'Updating settings…', locked: 'Sync locked', queued: 'Upload queued', syncing: 'Syncing…', synced: 'Synced', retrying: 'Retrying', failed: 'Sync failed', local: 'Local changes' };
-    $('#cloud-status').textContent = t(labels[phase] || ''); $('#cloud-status').title = d.cloud.error ? errorText(d.cloud.error) : '';
-    for(const [kind,id,glyph] of [['sync','sync','download'],['update','collect','refresh']]) {
-        const op=operations[kind], busy=op?.state==='running'; const el=$('#'+id);
-        el.dataset.operation=op?.state||''; el.setAttribute('aria-busy',String(busy));
-        const name=op?.state==='success'?'check':op?.state==='error'?'alert':kind==='sync'&&op?.state==='running'&&op.direction&&op.direction!=='pull'?'upload':glyph;
-        if(el.dataset.glyph!==name){el.querySelector('.icon')?.remove();el.insertAdjacentHTML('afterbegin',icon(name));el.dataset.glyph=name;}
-    }
-    const transfer=operations.sync; $('#sync .button-label').textContent=t(transfer?.state==='running'&&transfer.direction ? transfer.direction==='pull'?'Downloading…':'Uploading…':'Download');
-    renderTransfer();
-    renderCountdowns();
-    const busy = working || operations.update?.state==='running' || operations.sync?.state==='running' || ['syncing','migrating'].includes(d.cloud.phase);
-    $$('#sync,#collect,#upload,.actions button,button[data-compaction],#deactivate-archived').forEach(el=>el.disabled=busy);
-    $('#upload').disabled=busy || !d.cloud.dirty || !d.cloud.configured || !d.cloud.unlocked;
-    $('#upload').title=t(d.cloud.dirty?'Publish local changes, including Pending.':'No local changes to upload.');
-    $('#collect').setAttribute('aria-busy',String(state.uiBusy==='update'||operations.update?.state==='running'));
-    const updateLabel=$('#collect .button-label');if(updateLabel)updateLabel.textContent=t(state.uiBusy==='update'?'Updating…':'Update');
-    $('#sync').setAttribute('aria-busy',String(phase==='syncing'||operations.sync?.state==='running'));
-    $('#sync').title = t('Last upload: {time}', { time: date(d.cloud.lastUpload) }) + '\n' + t('Last cloud check: {time}', { time: date(d.cloud.lastCheck) });
-    if(d.cloud.configured && d.cloud.unlocked && !d.cloud.started) { $('#sync').title=t('Ready. Click Download once to load the cloud directory and enable automatic sync.'); $('#cloud-status').textContent=t('Ready · click Download'); }
-    const ticking = !document.hidden && (d.update?.nextRunAt || d.cloud?.nextRunAt);
-    if(ticking && !clockTimer) clockTimer=setInterval(renderCountdowns,1000);
-    if(!ticking && clockTimer){clearInterval(clockTimer);clockTimer=null;}
-
+function renderCloudStatus(){
+    const d=state.data;if(!d)return;
+    const offline=state.connected===false, operation=d.cloud.operation || operations.sync, busy=operation?.state==='running'||['syncing','migrating'].includes(d.cloud.phase);
+    $('#cloud-status').textContent=t(offline?'Service disconnected':busy?'Syncing…':d.cloud.needsReview?'Review sync':d.cloud.error?'Sync failed':d.cloud.dirty?'Local changes':d.cloud.started?'Synced':'Ready to sync');
+    $('#cloud-status').title=offline?t('The page shows cached data. Run pnpm start to reconnect.'):d.cloud.error||'';
+    $('#sync').dataset.operation=busy?'running':operation?.state||'';
+    $('#sync').disabled=offline;$('#sync').setAttribute('aria-busy',String(busy));
+    const updating=operations.update?.state==='running'||state.uiBusy==='update';$('#collect').dataset.operation=updating?'running':'';$('#collect').disabled=offline||busy||working;
+    $('#collect .button-label').textContent=t(updating?'Updating…':'Update');
+    $$('.actions button,button[data-compaction]').forEach(el=>el.disabled=offline||busy||working);
+    renderTransfer();renderCountdowns();
+    const ticking=!document.hidden&&!offline&&(d.update?.nextRunAt||d.cloud?.nextRunAt);
+    if(ticking&&!clockTimer)clockTimer=setInterval(renderCountdowns,1000);if(!ticking&&clockTimer){clearInterval(clockTimer);clockTimer=null;}
 }
-
+function transferHtml(value) {
+    const p=value?.progress;if(!p)return `<p>${t('Preparing sync…')}</p><progress></progress>`;
+    const total=p.total,count=p.completed||0,direction=/Upload|Publishing/.test(p.phase)?'Push':'Pull';
+    const eta=p.etaSeconds==null?t('Estimating…'):t('About {time} remaining in this stage',{time:Math.floor(p.etaSeconds/60)+':'+String(p.etaSeconds%60).padStart(2,'0')});
+    return `<strong>${direction} · ${t(p.phase)}</strong><progress ${total?'max="'+total+'" value="'+count+'"':''}></progress><small>${total?count.toLocaleString()+' / '+total.toLocaleString()+' · '+Math.floor(count/total*100)+'% · ':''}${eta}</small>`;
+}
 function renderTransfer() {
-    const value=operations.sync || state.data.cloud.operation, p=value?.progress, box=$('#transfer-progress');
-    box.hidden=!p || value.state!=='running';
-    $('#sync-control').classList.toggle('transferring',!box.hidden);
-    if(box.hidden)return;
-    if(state.progressOpened!==value.id){state.progressOpened=value.id;setSyncMenu(true);}
-    const total=p.total, count=p.completed||0;
-    box.innerHTML=`<span>${t(p.phase)}</span><progress ${total?'max="'+total+'" value="'+count+'"':''}></progress><small>${total?count+' / '+total+' · '+Math.floor(count/total*100)+'%':''}${p.etaSeconds!==null?' · '+t('About {time} remaining in this stage',{time:Math.floor(p.etaSeconds/60)+':'+String(p.etaSeconds%60).padStart(2,'0')}):' · '+t('Estimating…')}</small>`;
-}
-function renderCountdowns() {
-    if (!state.data || document.hidden) return;
-    for (const [id, deadline] of [['upload', state.data.cloud?.nextRunAt], ['collect', state.data.update?.nextRunAt]]) {
-        const button = $('#'+id); let counter = button.querySelector('.button-countdown');
-        if (!deadline) { counter?.remove(); continue; }
-        if (!counter) { counter=document.createElement('span');counter.className='button-countdown';counter.setAttribute('aria-hidden','true');counter.title=t(id==='upload'?'Next automatic sync check; uploads only changes.':'Next local session update.');button.append(counter); }
-        const seconds=Math.max(0,Math.ceil((deadline-Date.now())/1000)),value=seconds ? Math.floor(seconds/60)+':'+String(seconds%60).padStart(2,'0') : '0:00';
-        if(counter.textContent!==value)counter.textContent=value;
+    if(state.connected===false&&$('#sync-dialog').open){state.syncOperation=null;$('#sync-detail').textContent=t('Service disconnected');$('#sync-close').hidden=false;$('#sync-cancel').hidden=false;$('#sync-confirm').hidden=true;$('#sync-cancel').textContent=t('Close');return;}
+    const latest=state.data.cloud.operation||operations.sync,manual=state.data.cloud.manualOperation;
+    const value=state.syncOperation&&manual?.id===state.syncOperation?manual:latest,box=$('#transfer-progress'),running=latest?.state==='running';
+    box.hidden=!running;if(running)box.innerHTML=transferHtml(latest);
+    if($('#sync-dialog').open&&state.syncOperation){
+        $('#sync-detail').innerHTML=transferHtml(value);
+        if(value&&value.state!=='running'&&value.id===state.syncOperation){state.syncOperation=null;$('#sync-error').textContent=value.state==='error'?state.data.cloud.error||t('Sync failed'):'';$('#sync-detail').innerHTML=`<p>${t(value.state==='success'?'Sync complete':'Sync failed')}</p>`;$('#sync-close').hidden=false;$('#sync-cancel').hidden=false;$('#sync-cancel').textContent=t('Close');refresh().catch(()=>{});}
     }
-
 }
+function renderCountdowns(){
+    if(!state.data||document.hidden)return;
+    for(const [id,deadline]of [['sync',state.data.cloud?.nextRunAt],['collect',state.data.update?.nextRunAt]]){const button=$('#'+id);let counter=button.querySelector('.button-countdown');if(!deadline||state.connected===false){counter?.remove();continue;}if(!counter){counter=document.createElement('span');counter.className='button-countdown';button.append(counter);}const seconds=Math.max(0,Math.ceil((deadline-Date.now())/1000));const text=Math.floor(seconds/60)+':'+String(seconds%60).padStart(2,'0');if(counter.textContent!==text)counter.textContent=text;}
+}
+
 function toolTags(agents, compact=false, origin=null) {
     const names=[...new Set((agents||[]).filter(a=>['codex','claude'].includes(a)))];
-    return names.map(a=>`<span class="tool-tag ${a} ${compact?'compact':''}" title="${a==='codex'?'Codex':'Claude Code'}${compact&&origin?' · '+esc(origin.model||origin.name):''}" aria-label="${a==='codex'?'Codex':'Claude Code'}">${icon(a)}${compact?'':a==='codex'?'Codex':'Claude Code'}</span>`).join('')+(names.length>1&&!compact?`<span class="mixed-tag">${t('Mixed')}</span>`:'');
+    return names.map(a=>`<span class="tool-tag ${a} ${compact?'compact':''}" title="${a==='codex'?'Codex':'Claude'}${compact&&origin?' · '+esc(origin.model||origin.name):''}" aria-label="${a==='codex'?'Codex':'Claude'}">${icon(a)}${compact?'':a==='codex'?'Codex':'Claude'}</span>`).join('')+(names.length>1&&!compact?`<span class="mixed-tag">${t('Mixed')}</span>`:'');
 }
 function sourceTags(item) {
     const o=item.origin, type=o?.platform==='win32'?'windows':o?.kind==='laptop'?'laptop':/Mac Studio/i.test(o?.model||o?.name||'')?'studio':'desktop';
     return `<span class="row-tags">${toolTags(item.agents || item.sessions?.map(s=>s.agent) || [item.agent])}${o?`<span class="device-tag" title="${esc(t(o.observed?'Imported on {device}':'Last conversation update on {device}',{device:o.name}))}">${icon(type)}<span>${esc(o.model||o.name)}</span></span>`:''}</span>`;
 }
 
-async function navigate(scope) {
-    ++requestId; opening = false; state.scope = scope; state.tree = null; state.list = { items: [], sessionCount: 0 }; state.query = ''; state.selected.clear(); clearRange(); $('#search').value = '';
-    render(); $('#list-title').textContent = title(); $('#session-list').innerHTML = `<p class="empty">${t('Loading project index…')}</p>`;
-    try { await refresh({ checkCloud: true }); } catch (e) { toast(e.message); state.list = { items: [] }; render(); }
+let projectObserver;
+function focusProject(id, scroll = true) {
+    state.projectFocus = id;
+    $$('[data-scope]').forEach(el=>{const on=el.dataset.scope===id;el.classList.toggle('selected',on);if(on)el.setAttribute('aria-current','location');else el.removeAttribute('aria-current');});
+    if(scroll) document.querySelector('[data-project-group="'+id+'"]')?.scrollIntoView({block:'start',behavior:'smooth'});
+    const tab=$$('[data-scope]').find(el=>el.dataset.scope===id); if(tab && !scroll) tab.scrollIntoView({block:'nearest'});
 }
-function title() { if(state.scope === INBOX) return t('Ungrouped'); return state.scope === 'active:codex' ? t('Active Codex Sessions') : state.scope === 'active:claude' ? t('Active Claude Code Sessions') : state.scope === 'archived' ? t('Archived') : currentProject()?.name || t('Projects'); }
+async function navigate(scope) {
+    const project = !scope.startsWith('active:') && scope !== 'archived';
+    const focus = project ? (scope === PROJECTS ? state.projectFocus : scope) : null;
+    if(project && state.scope===PROJECTS && !state.tree && !state.query){focusProject(focus);return;}
+    ++requestId; opening=false;state.scope=project?PROJECTS:scope;state.projectFocus=focus;state.tree=null;state.list={items:[],sessionCount:0};state.query='';state.selected.clear();clearRange();$('#search').value='';
+    render();$('#session-list').innerHTML=`<p class="empty">${t('Loading project index…')}</p>`;
+    try {await refresh({checkCloud:true});if(project&&focus)focusProject(focus);}catch(e){toast(e.message);}
+}
+function title() { if(state.scope === PROJECTS) return t('Projects'); if(state.scope === INBOX) return t('Ungrouped'); return state.scope === 'active:codex' ? t('Active Codex Sessions') : state.scope === 'active:claude' ? t('Active Claude Code Sessions') : state.scope === 'archived' ? t('Archived') : currentProject()?.name || t('Projects'); }
 function groups() {
+    if(state.scope === PROJECTS) return projectGroups(state.list.items,state.data.projects);
     if(state.scope === INBOX && !state.query) {
         const buckets=[{id:'recent',name:t('Last 7 days'),items:[]},{id:'month',name:t('Last 30 days'),items:[]},{id:'older',name:t('Older'),items:[],collapsed:true}];
         for(const item of state.list.items){const days=(Date.now()-new Date(item.updatedAt).getTime())/86400000;buckets[days<7?0:days<30?1:2].items.push(item);}
@@ -210,22 +223,25 @@ function renderList() {
     $('#active-notice').innerHTML = pending.length ? `<span>${t('{count} archived sessions are still active on this device.',{count:pending.length})}</span><button id="deactivate-archived">${t('Deactivate archived sessions')}</button>` : '';
     if(pending.length)$('#deactivate-archived').onclick=()=>run(()=>api('/manage','POST',{action:'deactivate',branchIds:pending.map(s=>s.id)}));
     $('#list-count').textContent = t('{count} sessions', { count: state.list.sessionCount || 0 });
-    const selected = state.list.items.filter(i => state.selected.has(i.id)), ungrouped = selected.length && selected.every(i => !i.projectId);
-    const mode = selected.length ? !!selected[0].projectId : null;
-    $('#list-actions').innerHTML = selected.length
-        ? `<span class="selection-count">${t('{count} selected', { count: selected.length })}</span>${state.scope === 'archived' ? '' : ungrouped || currentProject() ? '<button id="move-items"></button>'+ (state.scope === INBOX ? '<button id="archive-items"></button>' : '') : '<button id="deactivate-items"></button>'}`
-        : '';
-    button('#archive-items','Archive',()=>modal('Archive selected sessions', `<p>${t('Archive {count} selected trees and sessions?',{count:selected.length})}</p>`,async()=>{await api('/manage','POST',{action:'archive',itemIds:[...state.selected]});state.selected.clear();},'Archive'));
-    button('#move-items', 'Move to project', () => moveDialog([...state.selected]));
-    button('#deactivate-items', 'Deactivate', () => run(() => api('/manage', 'POST', { action: 'deactivate', itemIds: [...state.selected], agent: state.scope.slice(7) })));
-    $('#session-list').innerHTML = groups().map(g => `${state.scope===INBOX?`<details class="list-group time-group" data-time-group="${g.id}" ${!g.collapsed||state.expandedGroups.has(g.id)||g.items.some(i=>state.selected.has(i.id))?'open':''}><summary>${esc(g.name)}<span>${g.items.length}</span></summary>`:'<section class="list-group">'}${!currentProject() ? `<h2>${esc(g.name)}${state.scope === 'archived' && state.data.projects.find(p => p.id === g.id)?.archived ? `<button class="restore-project" data-project="${esc(g.id)}">${t('Restore project')}</button>` : ''}</h2>` : ''}${(state.scope===INBOX && g.collapsed && !state.expandedGroups.has(g.id) && !g.items.some(i=>state.selected.has(i.id)) ? [] : g.items).map(i => `<article class="session-row ${state.selected.has(i.id) ? 'checked' : ''}" data-item="${esc(i.id)}"><button class="row-open" data-open="${esc(i.id)}">${icon(i.kind)}<span class="row-text"><span class="row-title">${esc(i.name)} ${cloudMark(i)}</span><span class="row-meta">${itemMeta(i)} ${sourceTags(i)}</span></span><time class="row-date" datetime="${esc(i.updatedAt)}">${date(i.updatedAt)}</time></button>${state.scope === 'archived' ? '' : `<input type="checkbox" data-select="${esc(i.id)}" aria-label="${esc(t('Select {name}', { name: i.name }))}" ${state.selected.has(i.id) ? 'checked' : ''} ${mode !== null && mode !== !!i.projectId && state.scope !== 'archived' ? 'disabled' : ''}>`}</article>`).join('')}${state.scope===INBOX?'</details>':'</section>'}`).join('') || `<p class="empty">${t(state.query ? 'No matching sessions' : state.scope.startsWith('active:') ? 'Click Update to read local sessions, or configure WebDAV and click Download to load the cloud directory.' : 'No sessions here.')}</p>`;
-    $$('[data-time-group]').forEach(el=>el.ontoggle=()=>{if(el.open){state.expandedGroups.add(el.dataset.timeGroup);if(!el.querySelector('.session-row'))renderList();}else{state.expandedGroups.delete(el.dataset.timeGroup);if(el.dataset.timeGroup==='older')el.querySelectorAll('.session-row').forEach(row=>row.remove());}});
-    $$('[data-open]').forEach(el => el.onclick = () => openTree(el.dataset.open));
-    $$('[data-select]').forEach(el => el.onchange = () => { el.checked ? state.selected.add(el.dataset.select) : state.selected.delete(el.dataset.select); renderList(); });
-    $$('.restore-project').forEach(el => el.onclick = () => run(() => api('/manage', 'POST', { action: 'restore', projectId: el.dataset.project })));
+    const selected = state.list.items.filter(i => state.selected.has(i.id));
+    const organizing = !state.scope.startsWith('active:') && state.scope !== 'archived';
+    $('#list-actions').innerHTML = (organizing?'<button id="select-all"></button>':'') + (selected.length ? `<span class="selection-count">${t('{count} selected',{count:selected.length})}</span>${state.scope==='archived'?'<button id="restore-items"></button>':organizing?'<button id="move-items"></button><button id="archive-items"></button>':'<button id="deactivate-items"></button>'}`:'');
+    button('#select-all','Select all',()=>{const items=state.scope===PROJECTS&&state.projectFocus?state.list.items.filter(i=>(i.projectId||INBOX)===state.projectFocus):state.list.items;const all=items.every(i=>state.selected.has(i.id));for(const i of items)all?state.selected.delete(i.id):state.selected.add(i.id);renderList();});
+    button('#move-items','Move to project',()=>moveDialog([...state.selected]));
+    button('#archive-items','Archive',()=>modal('Archive selected sessions',`<p>${t('Archive {count} selected trees and sessions?',{count:selected.length})}</p>`,async()=>{await api('/manage','POST',{action:'archive',itemIds:[...state.selected]});state.selected.clear();},'Archive'));
+    button('#restore-items','Restore',()=>restore({itemIds:[...state.selected]}));
+    button('#deactivate-items','Deactivate',()=>run(()=>api('/manage','POST',{action:'deactivate',itemIds:[...state.selected],agent:state.scope.slice(7)})));
+    const row=i=>`<article class="session-row ${state.selected.has(i.id)?'checked':''}" data-item="${esc(i.id)}"><button class="row-open" data-open="${esc(i.id)}">${icon(i.kind)}<span class="row-text"><span class="row-title">${esc(i.name)} ${cloudMark(i)}</span><span class="row-meta">${itemMeta(i)} ${sourceTags(i)}</span></span><time class="row-date">${date(i.updatedAt)}</time></button>${state.scope==='archived'?'':`<input type="checkbox" data-select="${esc(i.id)}" aria-label="${esc(t('Select {name}',{name:i.name}))}" ${state.selected.has(i.id)?'checked':''}>`}</article>`;
+    $('#session-list').innerHTML=groups().map(g=>{const limited=state.scope===PROJECTS&&!state.query&&g.items.length>5,expanded=state.expandedProjects.has(g.id)||g.items.some(i=>state.selected.has(i.id));const shown=limited&&!expanded?g.items.slice(0,5):g.items;return `<section class="list-group project-group" data-project-group="${esc(g.id||INBOX)}"><h2>${esc(g.name==='Scheduled & background'?t(g.name):g.name)}<span>${g.items.length}</span></h2>${shown.map(row).join('')}${limited?`<button class="show-project" data-expand-project="${esc(g.id)}">${t(expanded?'Show fewer':'Show all {count}',{count:g.items.length})}</button>`:''}</section>`;}).join('')||`<p class="empty">${t(state.query?'No matching sessions':'No sessions here.')}</p>`;
+    $$('[data-open]').forEach(el=>el.onclick=()=>openTree(el.dataset.open));
+    $$('[data-select]').forEach(el=>el.onchange=()=>{el.checked?state.selected.add(el.dataset.select):state.selected.delete(el.dataset.select);renderList();});
+    $$('[data-expand-project]').forEach(el=>el.onclick=()=>{const id=el.dataset.expandProject;state.expandedProjects.has(id)?state.expandedProjects.delete(id):state.expandedProjects.add(id);renderList();});
+    projectObserver?.disconnect();
+    if(state.scope===PROJECTS&&!state.tree){projectObserver=new IntersectionObserver(entries=>{const visible=entries.filter(e=>e.isIntersecting).sort((a,b)=>a.boundingClientRect.top-b.boundingClientRect.top);if(visible[0])focusProject(visible[0].target.dataset.projectGroup,false);},{root:$('#session-list'),rootMargin:'0px 0px -65% 0px',threshold:0});$$('[data-project-group]').forEach(el=>projectObserver.observe(el));}
 }
+
 function renderRail() {
-    $('#session-rail').innerHTML = groups().map(g => `<h2 class="rail-heading">${esc(g.name)}</h2>${g.items.map(i => `<button class="rail-row ${state.tree?.id === i.id ? 'selected' : ''}" data-rail="${esc(i.id)}" ${state.tree?.id === i.id ? 'aria-current="true"' : ''}>${icon(i.kind)}<span class="row-text"><span class="row-title">${esc(i.name)} ${cloudMark(i)}</span><span class="row-meta">${itemMeta(i)} ${sourceTags(i)}</span></span></button>`).join('')}`).join('');
+    $('#rail-content').innerHTML = groups().map(g => `<h2 class="rail-heading">${esc(g.name)}</h2>${g.items.map(i => `<button class="rail-row ${state.tree?.id === i.id ? 'selected' : ''}" data-rail="${esc(i.id)}" ${state.tree?.id === i.id ? 'aria-current="true"' : ''}>${icon(i.kind)}<span class="row-text"><span class="row-title">${esc(i.name)} ${cloudMark(i)}</span><span class="row-meta">${itemMeta(i)} ${sourceTags(i)}</span></span></button>`).join('')}`).join('');
     $$('[data-rail]').forEach(el => el.onclick = () => openTree(el.dataset.rail));
 }
 async function openTree(id) {
@@ -256,7 +272,7 @@ function renderDetail() {
     const tree = state.tree, p = route(); if (!p) { state.tree = null; render(); return; }
     $('#session-title').textContent = tree.name;
     const tokens = p.nodeIds.reduce((sum, id) => sum + (tree.nodes.find(n => n.id === id)?.tokens?.recordedEstimate || 0), 0);
-    $('#session-meta').textContent = `${p.agent === 'codex' ? 'Codex' : 'Claude Code'} · ≈ ${compactNumber(tokens)} tokens${p.context?.compactions.length ? ' · ' + t('{count} compactions', { count: p.context.compactions.length }) : ''}`;
+    $('#session-meta').textContent = `${p.agent === 'codex' ? 'Codex' : 'Claude'} · ≈ ${compactNumber(tokens)} tokens${p.context?.compactions.length ? ' · ' + t('{count} compactions', { count: p.context.compactions.length }) : ''}`;
     $('#detail-count').textContent = `${t('{count} branches', { count: tree.paths.length })} · ${t('{count} chats', { count: tree.chatCount })} · ${t('{count} pending', { count: tree.pendingCount })}`;
     $('#branch-picker').innerHTML = tree.paths.map(v => `<option value="${esc(v.branchId)}" ${v.branchId === p.branchId ? 'selected' : ''}>${esc(v.name)}</option>`).join('');
     enhanceSelect($('#branch-picker'));
@@ -285,6 +301,8 @@ function renderDetailActions() {
     const dissolve = state.tree.nodes.some(n => !n.pending && n.chatIds.some(id => state.chats.has(id)));
     $('#detail-actions').innerHTML = state.chats.size ? `<span>${t('{count} selected', { count: state.chats.size })}</span>${editable && state.rangeEnd !== null && canCombine() ? '<button id="combine"></button>' : ''}${editable && state.rangeEnd !== null && dissolve ? '<button id="dissolve"></button>' : ''}<button id="clear-selection"></button>` : node ? `${editable && !node.empty ? '<button id="rename-node"></button>' : ''}${terminal ? archived ? '<button id="restore-session"></button>' : `${p.active || (!p.active && p.canActivate) ? '<button id="toggle-active"></button>' : ''}<button id="archive-path"></button>` : ''}${editable && forkCheckpoint() ? '<button id="fork"></button>' : ''}` : '';
     if (!state.chats.size && editable && p.active && p.contextPending && p.canRewriteContext && p.canActivate) $('#detail-actions').innerHTML = '<button id="apply-context"></button>' + $('#detail-actions').innerHTML;
+    if (!state.chats.size && editable && terminal) $('#detail-actions').insertAdjacentHTML('beforeend', '<button id="convert-session"></button>');
+    button('#convert-session', 'Activate as…', () => conversionDialog(p));
     button('#apply-context', 'Apply context', () => activateDialog(p, 'Apply context'));
     button('#combine', 'Combine', combineDialog);
     button('#dissolve', 'Dissolve', () => run(async () => { await saveOrganization('dissolve'); clearRange(); }));
@@ -337,7 +355,7 @@ function renderTranscript() {
     const p = route();
     $('#transcripts').innerHTML = contextBreakdown(p) + p.nodeIds.map(id => {
         const n = state.tree.nodes.find(n => n.id === id), messages = p.messages.filter(m => n.chatIds.includes(m.id));
-        return `${compactionsAt(n, p).map(e => `<div class="compaction-marker">${t('Context compacted here')}${compactionButton(e)}</div>`).join('')}<section class="transcript-segment ${mutedNode(n, p) ? 'context-muted' : ''} ${n.pending ? 'pending' : ''}" data-segment="${esc(n.id)}" style="${style(n)}"><div class="segment-caption"><button data-focus-node="${esc(n.id)}">${esc(nodeName(n))} · ${t('{count} chats', { count: messages.length })}</button><span class="token-estimate" title="${esc(tokenHint())}">${tokenLabel(n)}</span></div>${messages.map(m => `<article class="chat ${m.role} ${state.chats.has(m.id) ? 'checked' : ''}">${state.scope === 'archived' ? '' : `<input type="checkbox" data-chat="${esc(m.id)}" aria-label="${esc(t('Select chat {number}', { number: p.messages.findIndex(x => x.id === m.id) + 1 }))}" ${state.chats.has(m.id) ? 'checked' : ''}>`}<div class="bubble"><span class="speaker">${m.role === 'user' ? t('You') : p.agent === 'codex' ? 'Codex' : 'Claude Code'}</span>${excerpt(m.text, state.expanded.has(m.id))}${activityHtml(m.activity,p)}${m.text.length >= 380 ? `<button class="expand-chat" data-expand="${esc(m.id)}">${t(state.expanded.has(m.id) ? 'Collapse' : 'Expand')}</button>` : ''}</div></article>`).join('')}</section>`;
+        return `${compactionsAt(n, p).map(e => `<div class="compaction-marker">${t('Context compacted here')}${compactionButton(e)}</div>`).join('')}<section class="transcript-segment ${mutedNode(n, p) ? 'context-muted' : ''} ${n.pending ? 'pending' : ''}" data-segment="${esc(n.id)}" style="${style(n)}"><div class="segment-caption"><button data-focus-node="${esc(n.id)}">${esc(nodeName(n))} · ${t('{count} chats', { count: messages.length })}</button><span class="token-estimate" title="${esc(tokenHint())}">${tokenLabel(n)}</span></div>${messages.map(m => `<article class="chat ${m.role} ${state.chats.has(m.id) ? 'checked' : ''}">${state.scope === 'archived' ? '' : `<input type="checkbox" data-chat="${esc(m.id)}" aria-label="${esc(t('Select chat {number}', { number: p.messages.findIndex(x => x.id === m.id) + 1 }))}" ${state.chats.has(m.id) ? 'checked' : ''}>`}<div class="bubble"><span class="speaker">${m.role === 'user' ? t('You') : p.agent === 'codex' ? 'Codex' : 'Claude'}</span>${excerpt(m.text, state.expanded.has(m.id))}${activityHtml(m.activity,p)}${m.text.length >= 380 ? `<button class="expand-chat" data-expand="${esc(m.id)}">${t(state.expanded.has(m.id) ? 'Collapse' : 'Expand')}</button>` : ''}</div></article>`).join('')}</section>`;
     }).join('') || `<p class="empty">${t('No chats yet.')}</p>`;
     const trailing = (p.context?.compactions || []).filter(e => !p.messages.some(m => m.line > e.line));
     $('#transcripts').insertAdjacentHTML('beforeend', trailing.map(e => `<div class="compaction-marker">${t('Context compacted here')}${compactionButton(e)}</div>`).join(''));
@@ -364,10 +382,9 @@ function renderTranscript() {
     $$('[data-chat]').forEach(el => el.onclick = e => {
         e.preventDefault();
         const index = p.messages.findIndex(m => m.id === el.dataset.chat);
-        if (state.rangeStart === null || state.rangeEnd !== null && !e.shiftKey) { state.rangeStart = index; state.rangeEnd = null; }
-        else state.rangeEnd = index;
+        const range=selectRange(state.rangeStart,state.rangeEnd,index,e.shiftKey); state.rangeStart=range.start;state.rangeEnd=range.end;
         const end = state.rangeEnd ?? state.rangeStart;
-        state.chats = new Set(p.messages.slice(Math.min(state.rangeStart, end), Math.max(state.rangeStart, end) + 1).map(m => m.id));
+        state.chats = state.rangeStart===null?new Set():new Set(p.messages.slice(Math.min(state.rangeStart, end), Math.max(state.rangeStart, end) + 1).map(m => m.id));
         state.nodeId = null; state.compactionId = null;
         const top = $('#transcripts').scrollTop; renderTranscript(); $('#transcripts').scrollTop = top; renderDetailActions(); renderGraph();
     });
@@ -435,12 +452,12 @@ function applyCamera() {
     view.style.backgroundSize = `${18 * camera.zoom}px ${18 * camera.zoom}px`;
     view.style.backgroundPosition = `${camera.x}px ${camera.y}px`;
     $('#zoom-label').textContent = Math.round(camera.zoom * 100) + '%';
-    $('#zoom-out').disabled = camera.zoom <= .35; $('#zoom-in').disabled = camera.zoom >= 1.75;
+    $('#zoom-out').disabled = camera.zoom <= .02; $('#zoom-in').disabled = camera.zoom >= 1.75;
     scheduleRibbons();
 }
 function zoom(delta, x, y) {
     const rect = $('#graph-scroll').getBoundingClientRect(), cx = x ?? rect.width / 2, cy = y ?? rect.height / 2;
-    const next = Math.max(.35, Math.min(1.75, camera.zoom * delta)), ratio = next / camera.zoom;
+    const next = Math.max(.02, Math.min(1.75, camera.zoom * delta)), ratio = next / camera.zoom;
     camera.x = cx - (cx - camera.x) * ratio; camera.y = cy - (cy - camera.y) * ratio; camera.zoom = next; applyCamera();
 }
 function resetCamera() {
@@ -467,8 +484,8 @@ async function refresh({ checkCloud = false } = {}) {
         if (!tree.nodes.some(n => n.id === state.nodeId)) state.nodeId = null;
         state.chats = new Set([...state.chats].filter(id => route()?.messages.some(m => m.id === id)));
     }
-    const scroll = $('#transcripts').scrollTop, graphTop = $('#graph-scroll').scrollTop, graphLeft = $('#graph-scroll').scrollLeft;
-    render(); $('#transcripts').scrollTop = scroll; $('#graph-scroll').scrollTop = graphTop; $('#graph-scroll').scrollLeft = graphLeft; scheduleRibbons();
+    const listTop = $('#session-list').scrollTop, scroll = $('#transcripts').scrollTop, graphTop = $('#graph-scroll').scrollTop, graphLeft = $('#graph-scroll').scrollLeft;
+    render(); $('#session-list').scrollTop=listTop; $('#transcripts').scrollTop = scroll; $('#graph-scroll').scrollTop = graphTop; $('#graph-scroll').scrollLeft = graphLeft; scheduleRibbons();
 }
 function moveDialog(itemIds, restoreTarget = null) {
     const selectedItems=state.data.items.filter(i=>itemIds.includes(i.id));
@@ -519,6 +536,25 @@ async function activateDialog(p, actionLabel = 'Activate') {
         $('[name=cwd]').oninput = () => { checked = null; $('#activation-budget').textContent = ''; $('#dialog-submit').textContent = t('Check & activate'); };
     } catch (e) { toast(e.message); }
 }
+async function conversionDialog(p) {
+    try {
+        const d = await api('/branches/' + p.branchId), target = p.agent === 'claude' ? 'codex' : 'claude';
+        let preview = null, checkedOptions = '';
+        modal('Activate as…', `<p>${esc(p.agent)} → ${esc(target)}</p>${field('Working directory', 'cwd', d.cwd)}<label class="field">${t('Context mode')}<select name="mode"><option value="lean">${t('Lean context')}</option><option value="full">${t('Full history')}</option></select></label><p class="dialog-copy">${t('The source stays intact. A separate session is created in the target agent.')}</p><div id="conversion-preview" role="status"></div>`, async form => {
+            const options = { branchId: p.branchId, target, mode: form.get('mode'), cwd: form.get('cwd') }, key = JSON.stringify(options);
+            if (!preview || key !== checkedOptions) {
+                preview = await api('/conversion-check', 'POST', options); checkedOptions = key;
+                $('#conversion-preview').innerHTML = `<p>≈ ${compactNumber(preview.estimated)} tokens (${t('Source')}: ≈ ${compactNumber(preview.originalEstimated)})</p><p>${t('Shortened outputs')}: ${preview.stats.shortenedOutputs} · ${t('Omitted records')}: ${preview.stats.omittedRecords}</p><p class="dialog-copy">${t(options.mode === 'full' ? 'Full history embeds the exact original JSONL as historical context. Foreign tools are not replayed.' : 'Lean keeps conversation text and tool calls. Long read-only outputs are shortened; errors, writes and other shell output stay complete. Thinking and transport metadata remain in the source.')}</p>${preview.budget.risk ? `<p class="warning">${t('Context may be near its limit: about {used} tokens, planning limit {limit}.', { used: compactNumber(preview.estimated), limit: compactNumber(preview.budget.window || preview.budget.compactAt) })}</p>` : ''}<p class="dialog-copy">${t('Cross-agent continuation changes the model and runtime; it is not a native fork.')}</p>`;
+                $('#dialog-submit').textContent = t(preview.budget.risk ? 'Activate anyway' : 'Activate');
+                return false;
+            }
+            const result = await api('/convert', 'POST', { ...options, fingerprint: preview.fingerprint, contextAcknowledgement: preview.budget.fingerprint });
+            state.tree = null; state.branchId = result.branch.id; state.itemId = result.branch.id;
+            toast(t('Open the active continuation from your agent’s session list.'));
+        }, 'Preview context');
+        for (const element of $$('[name=mode],[name=cwd]')) element.onchange = () => { preview = null; $('#conversion-preview').textContent = ''; $('#dialog-submit').textContent = t('Preview context'); };
+    } catch (e) { toast(e.message); }
+}
 function saveOrganization(action, name) { return api('/trees/' + state.tree.id, 'POST', { version: state.tree.version, pathId: state.branchId, chatIds: [...state.chats], action, name }); }
 function combineDialog() {
     const p = route(), positions = p.messages.map((m, i) => state.chats.has(m.id) ? i : -1).filter(i => i >= 0);
@@ -536,7 +572,7 @@ function forkDialog() {
 async function showSource() {
     try {
         const d = await api('/branches/' + state.branchId);
-        modal('Source & revisions', `${d.warnings.map(w => `<p class="warning">${esc(errorText(w))}</p>`).join('')}${d.lineage.map(r => `<div class="source-entry">${esc(r.source.deviceName || t('Unknown device'))} · ${date(r.createdAt)}<br>${esc(r.source.cwd || d.cwd)}<br>${esc(r.source.client || '')}</div>`).join('')}`, null);
+        modal('Source & revisions', `${d.agent==='claude'?'<p class="dialog-copy">'+t('Native title source')+': '+t(({custom:'Custom title',automatic:'Automatic title','first-prompt':'First prompt'})[d.nativeTitleSource]||'Unknown')+'</p>':''}${d.warnings.map(w => `<p class="warning">${esc(errorText(w))}</p>`).join('')}${d.lineage.map(r => `<div class="source-entry">${esc(r.source.deviceName || t('Unknown device'))} · ${date(r.createdAt)}<br>${esc(r.source.cwd || d.cwd)}<br>${esc(r.source.client || '')}</div>`).join('')}`, null);
     } catch (e) { toast(e.message); }
 }
 async function settings(options = {}) {
@@ -552,7 +588,7 @@ async function settings(options = {}) {
           ${!edit ? `<section class="settings-card"><div class="settings-section-heading"><h3>${t('Encryption')}</h3>${!editKey ? `<span class="${c.encrypted ? 'setting-ok' : 'setting-warning'}">${c.encrypted ? '✓ ' + t('Encrypted') : '⚠ ' + t('Not encrypted')}</span><button type="button" id="modify-encryption">${t('Modify')}</button>` : ''}</div>
             ${c.needsCurrentPassphrase ? `<div class="secret-row">${password('Current passphrase', 'currentPassphrase', false)}<button type="button" id="unlock-vault" class="primary" hidden>${t('Unlock vault')}</button></div><p class="dialog-copy">${t('This cloud vault is encrypted. Enter its existing passphrase to connect. Encryption can be changed afterward.')}</p>` : `<div class="secret-row">${password('Passphrase (optional)', 'passphrase', c.hasPassphrase, !editKey)}${editKey ? `<button type="button" id="confirm-encryption" class="primary">${t(c.hasPassphrase ? 'Keep encryption' : 'Continue without encryption')}</button>` : ''}</div>
             ${editKey ? `<p class="dialog-copy">${c.encryptionReady ? t('Pause sync on other devices while changing the vault. Other devices must reconnect afterward.') + '<br>' : ''}${t('Use at least 12 characters, or leave empty for no content encryption. Other devices need the same passphrase.')}</p>` : ''}`}
-            ${c.encryptionReady && !state.data.cloud.started ? `<p class="setup-hint">${t('Ready. Close Settings and click Download once to load the cloud directory and enable automatic sync.')}</p>` : ''}
+            ${c.encryptionReady && !state.data.cloud.started ? `<p class="setup-hint">${t('Ready. Close Settings and click Sync to review cloud synchronization.')}</p>` : ''}
             <div id="settings-progress" role="status" hidden></div>
           </section>` : ''}
           <section class="settings-card"><h3>${t('Automatic updates')}</h3><div class="timer-row"><label><input type="checkbox" name="showScheduledSessions" ${p.showScheduledSessions?'checked':''}>${t('Show scheduled and background sessions')}</label></div><p class="dialog-copy">${t('Use Update after changing this filter. Native files are never deleted.')}</p>
@@ -605,7 +641,7 @@ async function settings(options = {}) {
     } catch(e) { toast(e.message); }
 }
 function information() {
-    modal('Information', `<h3>${t('When can I use each action?')}</h3><ul class="action-guide"><li>${t('Update reads local sessions. Download checks the cloud; Upload changes publishes local work, including Pending.')}</li><li>${t('Move belongs to the session list. Select items before choosing a project.')}</li><li>${t('In a transcript, select a start and end to Combine or Dissolve a continuous range.')}</li><li>${t('Select a graph node to Rename it. Naming Pending makes it a saved node.')}</li><li>${t('Fork appears only at a completed turn. Activate, Deactivate and Archive belong to a complete session endpoint.')}</li><li>${t('Archived shows only archived paths with their prefixes. Restore returns a path to its project without activating it.')}</li></ul><p class="dialog-copy">${t('Token counts are estimates. Local configuration and recorded usage inform activation warnings; unknown limits are not guessed.')}</p><p class="dialog-copy">${t('Close running agents before changing native activation. Browsing and organization remain available.')}</p><h3>${t('Diagnostics')}</h3><p class="dialog-copy">${t('Logs contain timings, operation types and error references; no conversation text, passwords, URLs or working paths.')}</p><button type="button" id="download-diagnostics">${t('Download diagnostics')}</button>${(state.data.plan?.pendingRecovery||[]).map(id=>`<button type="button" data-recover="${esc(id)}">${t('Recover interrupted operation')}</button>`).join('')}${state.data.conflicts.map((c,i)=>`<div class="conflict">${t('Conflict')}: ${esc(c.local.name)}<button type="button" data-conflict="${i}" data-choice="local">${t('Keep local')}</button><button type="button" data-conflict="${i}" data-choice="remote">${t('Use remote')}</button></div>`).join('')}`,null);
+    modal('Information', `<h3>${t('When can I use each action?')}</h3><ul class="action-guide"><li>${t('Update reads local sessions. Sync pulls remote changes before pushing local work, including Pending.')}</li><li>${t('Move belongs to the session list. Select items before choosing a project.')}</li><li>${t('In a transcript, select a start and end to Combine or Dissolve a continuous range.')}</li><li>${t('Select a graph node to Rename it. Naming Pending makes it a saved node.')}</li><li>${t('Fork appears only at a completed turn. Activate, Deactivate and Archive belong to a complete session endpoint.')}</li><li>${t('Archived shows only archived paths with their prefixes. Restore returns a path to its project without activating it.')}</li></ul><p class="dialog-copy">${t('Token counts are estimates. Local configuration and recorded usage inform activation warnings; unknown limits are not guessed.')}</p><p class="dialog-copy">${t('Close running agents before changing native activation. Browsing and organization remain available.')}</p><h3>${t('Diagnostics')}</h3><p class="dialog-copy">${t('Logs contain timings, operation types and error references; no conversation text, passwords, URLs or working paths.')}</p><button type="button" id="download-diagnostics">${t('Download diagnostics')}</button>${(state.data.plan?.pendingRecovery||[]).map(id=>`<button type="button" data-recover="${esc(id)}">${t('Recover interrupted operation')}</button>`).join('')}${state.data.conflicts.map((c,i)=>`<div class="conflict">${t('Conflict')}: ${esc(c.local.name)}<button type="button" data-conflict="${i}" data-choice="local">${t('Keep local')}</button><button type="button" data-conflict="${i}" data-choice="remote">${t('Use remote')}</button></div>`).join('')}`,null);
     $('#download-diagnostics').onclick=async()=>{try{const report=await api('/diagnostics'),url=URL.createObjectURL(new Blob([JSON.stringify(report,null,2)],{type:'application/json'})),link=document.createElement('a');link.href=url;link.download='session-grove-diagnostics.json';link.click();setTimeout(()=>URL.revokeObjectURL(url),1000);}catch(e){$('#dialog-error').textContent=e.message;}};
     $$('[data-conflict]').forEach(el=>el.onclick=()=>run(async()=>{await api('/conflicts/resolve','POST',{index:Number(el.dataset.conflict),choice:el.dataset.choice});$('#dialog').close();}));
     $$('[data-recover]').forEach(el=>el.onclick=()=>run(async()=>{await api('/recover','POST',{id:el.dataset.recover});$('#dialog').close();}));
@@ -613,19 +649,34 @@ function information() {
 function about() {
     modal('About', `<div class="about"><h3>Session Grove <small>${esc(state.data.appVersion || '')}</small></h3><p>${t('Organize agent conversations by project. Keep the context, choose the branch, continue your work.')}</p><p>${t('Developed by')} Ziyi Zhang</p><div class="about-links"><a href="https://ziyi-zhang.vercel.app" target="_blank" rel="noopener noreferrer" aria-label="Ziyi Zhang website" title="Ziyi Zhang">${icon('website')}</a><a href="https://github.com/MRziyi/session-grove" target="_blank" rel="noopener noreferrer" aria-label="GitHub repository" title="GitHub">${icon('github')}</a></div></div>`,null);
 }
-async function sync(direction) {
-    if (!state.data.cloud.configured || !state.data.cloud.unlocked) return settings();
-    return run(async () => { const r=await api('/sync', 'POST', { direction }); toast(t(r?.published || r?.uploaded || r?.remoteChanged ? direction==='pull'?'Download complete':'Upload complete' : 'Already up to date')); }, 'sync');
+async function sync() {
+    if(!state.data.cloud.configured||!state.data.cloud.unlocked)return settings();
+    $('#sync-dialog').showModal();$('#sync-error').textContent='';$('#sync-confirm').hidden=true;$('#sync-cancel').textContent=t('Cancel');
+    const active=state.data.cloud.operation;
+    if(state.data.cloud.phase==='syncing'&&active?.manual){state.syncOperation=active.id;$('#sync-close').hidden=true;$('#sync-cancel').hidden=true;renderTransfer();return;}
+    $('#sync-detail').innerHTML=transferHtml(null);$('#sync-close').hidden=false;$('#sync-cancel').hidden=false;
+    try {while(state.data.cloud.phase==='syncing'){if(!$('#sync-dialog').open)return;await new Promise(r=>setTimeout(r,1000));}const plan=await api('/synchronize/plan','POST',{});if(!$('#sync-dialog').open)return;state.syncPlan=plan;
+        $('#sync-detail').innerHTML=`<p>${t('Sync pulls server changes first, then pushes local changes.')}</p><div class="sync-plan"><strong>↓ Pull</strong><span>${plan.pull.trees} ${t('trees')} · ${plan.pull.records.toLocaleString()} ${t('records')}</span><strong>↑ Push</strong><span>${plan.push.trees} ${t('trees')} · ${plan.push.records.toLocaleString()} ${t('records')} · ${(plan.push.bytes/1048576).toFixed(1)} MB</span></div>${plan.large?'<p class="warning">'+t('This is a large transfer. Continue to synchronize before returning to the library.')+'</p>':''}`;
+        if(plan.large){$('#sync-confirm').hidden=false;$('#sync-confirm').textContent=t('Sync now');}else await beginSync();
+    }catch(e){$('#sync-error').textContent=e.message;}
 }
-$('#about').onclick = about; $('#information').onclick = information;
-$('#sync').onclick = () => sync('pull');
-$('#upload').onclick = () => sync('push');
-const setSyncMenu=open=>{$('#sync-menu').hidden=!open;$('#sync-menu-toggle').setAttribute('aria-expanded',String(open));};
-$('#sync-menu-toggle').onclick=()=>setSyncMenu($('#sync-menu').hidden);
-$('#sync-control').onmouseenter=()=>setSyncMenu(true);
-$('#sync-control').onmouseleave=()=>{if(!$('#sync-control').contains(document.activeElement))setSyncMenu(false);};
-document.addEventListener('click',e=>{if(!e.target.closest('#sync-control'))setSyncMenu(false);});
-$('#sync-control').onkeydown=e=>{if(e.key==='Escape'){setSyncMenu(false);$('#sync-menu-toggle').focus();}}; $('#settings').onclick = () => settings();
+async function beginSync(){try{$('#sync-confirm').hidden=true;$('#sync-close').hidden=true;$('#sync-cancel').hidden=true;const result=await api('/synchronize/start','POST',{planId:state.syncPlan.id,confirmed:true});state.syncOperation=result.operationId;state.syncPlan=null;$('#sync-detail').innerHTML=transferHtml(null);}catch(e){$('#sync-error').textContent=e.message;$('#sync-close').hidden=false;$('#sync-cancel').hidden=false;}}
+$('#about').onclick=about;$('#information').onclick=information;$('#sync').onclick=sync;$('#transfer-progress').onclick=sync;$('#settings').onclick=()=>settings();
+$('#sync-confirm').onclick=beginSync;
+$('#sync-close').onclick=$('#sync-cancel').onclick=()=>{if(!state.syncOperation)$('#sync-dialog').close();};
+$('#sync-dialog').oncancel=e=>{if(state.syncOperation)e.preventDefault();};
+function applyPanePreferences(){
+    const layout=$('#layout');layout.classList.toggle('nav-collapsed',localStorage.getItem('grove-nav-collapsed')==='true');layout.classList.toggle('rail-collapsed',localStorage.getItem('grove-rail-collapsed')==='true');
+    $('#toggle-navigation').textContent=layout.classList.contains('nav-collapsed')?'›':'‹';$('#toggle-rail').textContent=layout.classList.contains('rail-collapsed')?'›':'‹';for(const [id,key,label]of [['toggle-navigation','nav','projects'],['toggle-rail','rail','session list']]){const expanded=!layout.classList.contains(key+'-collapsed');$('#'+id).setAttribute('aria-expanded',String(expanded));$('#'+id).title=t((expanded?'Collapse ':'Expand ')+label);}
+    const ratio=Math.max(.2,Math.min(.8,Number(localStorage.getItem('grove-pane-ratio'))||.5));$('#editor').style.setProperty('--transcript-share',ratio+'fr');$('#editor').style.setProperty('--graph-share',(1-ratio)+'fr');scheduleRibbons();
+}
+for(const [button,key]of [['toggle-navigation','nav'],['toggle-rail','rail']])$('#'+button).onclick=()=>{const name='grove-'+key+'-collapsed';localStorage.setItem(name,String(localStorage.getItem(name)!=='true'));applyPanePreferences();};
+const divider=$('#ribbon-lane');
+divider.onpointerdown=e=>{if(e.button!==0)return;divider.setPointerCapture(e.pointerId);divider.dataset.dragging='true';e.preventDefault();};
+divider.onpointermove=e=>{if(!divider.dataset.dragging)return;const rect=$('#editor').getBoundingClientRect(),ratio=Math.max(.2,Math.min(.8,(e.clientX-rect.left)/rect.width));localStorage.setItem('grove-pane-ratio',String(ratio));applyPanePreferences();};
+divider.onpointerup=divider.onpointercancel=()=>{delete divider.dataset.dragging;};
+divider.onkeydown=e=>{if(!['ArrowLeft','ArrowRight'].includes(e.key))return;e.preventDefault();localStorage.setItem('grove-pane-ratio',String((Number(localStorage.getItem('grove-pane-ratio'))||.5)+(e.key==='ArrowRight'?.05:-.05)));applyPanePreferences();};
+applyPanePreferences();
 $('#collect').onclick = () => run(async () => { const r = await api('/collect', 'POST', {}); if (r.errors?.length) toast(r.errors.map(e => errorText(e.message)).join('\n')); else toast(t('Refresh complete · {updates} updated · {discovered} discovered', { updates: r.updates.length, discovered: r.discovered })); }, 'update');
 $('#search').oninput = e => { state.query = e.target.value; state.selected.clear(); clearTimeout(searchTimer); searchTimer = setTimeout(() => refresh().catch(e => toast(e.message)), 180); };
 $('#back').onclick = () => { state.tree = null; clearRange(); render(); };
@@ -633,6 +684,7 @@ $('#source').onclick = showSource;
 $('#branch-picker').onchange = e => { state.branchId = e.target.value; clearRange(); state.nodeId = null; state.compactionId = null; renderDetail(); };
 $('#transcripts').onscroll = () => scheduleRibbons();
 $('#zoom-in').onclick = () => zoom(1.15); $('#zoom-out').onclick = () => zoom(1 / 1.15); $('#graph-reset').onclick = resetCamera;
+$('#graph-fit').onclick = () => { const view = $('#graph-scroll'); camera.zoom = Math.max(.02, Math.min(1, (view.clientWidth - 32) / camera.width, (view.clientHeight - 32) / camera.height)); camera.x = (view.clientWidth - camera.width * camera.zoom) / 2; camera.y = (view.clientHeight - camera.height * camera.zoom) / 2; applyCamera(); };
 let pan = null;
 $('#graph-scroll').addEventListener('pointerdown', e => {
     if (e.button !== 0 || e.target.closest('button')) return;
@@ -646,20 +698,20 @@ $('#graph-scroll').addEventListener('wheel', e => {
     if (e.ctrlKey || e.metaKey) zoom(Math.exp(-e.deltaY * .008), e.clientX - rect.left, e.clientY - rect.top);
     else { camera.x -= e.deltaX; camera.y -= e.deltaY; applyCamera(); }
 }, { passive: false });
-window.addEventListener('focus', () => { if (!state.data || working || opening) return; api('/cloud/check', 'POST', {}).then(() => refresh()).catch(() => {}); });
+window.addEventListener('focus', () => { if (!state.data || working || opening || $('#sync-dialog').open) return; api('/cloud/check', 'POST', {}).then(() => refresh()).catch(() => {}); });
 window.addEventListener('resize', () => scheduleRibbons());
 try {
     const boot = await (await fetch('/api/bootstrap')).json(); if (boot.error) throw new Error(errorText(boot.error));
     state.token = boot.token; state.data = boot; state.roots = boot.roots; $('#demo-badge').textContent = boot.demo ? 'DEMO' : '';
     setLocale(locale()); await refresh(); watchOperations();
-    document.addEventListener('visibilitychange',renderCloudStatus);renderCloudStatus();
+    document.addEventListener('visibilitychange',()=>{if(document.hidden)eventController?.abort();else api('/status').then(next=>{state.data.cloud=next.cloud;state.data.update=next.update;renderCloudStatus();}).catch(()=>{});renderCloudStatus();});renderCloudStatus();
     setInterval(async () => {
         if (document.hidden) return;
         try {
             const next = await api('/status');
             if(next.cloud.operation)showOperation('sync',next.cloud.operation);
             if(next.update.operation)showOperation('update',next.update.operation);
-            const canRefresh = !working && !opening && !$('#dialog').open && !state.chats.size;
+            const canRefresh = !working && !opening && !$('#dialog').open && !$('#sync-dialog').open && !state.chats.size;
             if (next.stateVersion !== state.data.stateVersion && canRefresh) await refresh();
             else { state.data.cloud = next.cloud; state.data.update = next.update; renderCloudStatus(); }
         } catch { /* Explicit Update reports connection errors. */ }

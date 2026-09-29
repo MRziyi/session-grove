@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { randomUUID } from 'node:crypto';
 import { parse } from '../src/transcript.js';
 import { estimateTokens } from '../src/context.js';
 import { codexSample, codexTurn, claudeSample } from '../src/demo.js';
@@ -31,8 +32,9 @@ test('Claude expansion removes only the selected boundary/summary and reconnects
         { type: 'assistant', uuid: 'after', parentUuid: 'summary', sessionId, cwd: '/work', message: { role: 'assistant', content: 'Continuation', stop_reason: 'end_turn' } }
     ]);
     const event = parse(raw, 'claude').context.compactions[0];
-    const output = renderNative(raw, 'claude', 'new-session', '/target', 'Resumed', { disabled: [event.id] });
+    const output = renderNative(raw, 'claude', randomUUID(), '/target', 'Resumed', { disabled: [event.id] });
     const p = parse(output, 'claude'); assert.equal(p.context.compactions.length, 0); assert.equal(p.messages.length, 3);
-    assert.equal(p.records.find(r => r.value?.uuid === 'after').value.parentUuid, parent);
+    const after = p.records.find(r => r.value?.forkedFrom?.messageUuid === 'after').value;
+    assert.equal(after.parentUuid, p.records.find(r => r.value?.forkedFrom?.messageUuid === parent).value.uuid);
     assert.ok(!output.includes('Summary-only text')); assert.ok(raw.includes('Summary-only text'));
 });

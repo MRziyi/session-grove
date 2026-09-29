@@ -2,7 +2,7 @@
 
 ## Local service
 
-Node.js 24+ is required. `pnpm dev` and `npm run dev` start the local server with source watching; `pnpm start` is also available. Demo mode (`pnpm run demo`) uses isolated sample data. The default URL is `http://127.0.0.1:7421`; the service binds only to loopback.
+Node.js 24+ and `pnpm install` are required. `pnpm dev` and `npm run dev` start the local server with source watching; `pnpm start` is also available. Demo mode (`pnpm run demo`) uses isolated sample data. The default URL is `http://127.0.0.1:7421`; the service binds only to loopback.
 
 ```sh
 pnpm start --port 7421 --data-dir /path/to/library \
@@ -35,7 +35,7 @@ Interrupted native writes can be recovered from Information when a recovery jour
 
 - Codex legacy JSONL and `state_5.sqlite` are supported. Supported paginated reference chains are resolved and materialized without converting to legacy; required historical segments must be available. Unknown required index fields and unsupported history modes fail closed.
 - Codex 0.155.0-alpha.16.3 has been tested with real App Server list/read/resume/deactivate/reactivate calls, without sending model turns.
-- Claude project JSONL, encoded paths and legacy indexes are covered by file-adapter tests; a real Claude client still needs validation.
+- Claude projection and fork use the pinned official SDK; local audit covers 32 sessions and 111 checkpoints. See [0.9 fidelity and operation](0.9-session-fidelity.md) for exact boundaries.
 - Native activation writes require the agent processes to be closed. Opening and organizing Grove history does not.
 - External attachments, subagent companion directories and unsupported native history modes may prevent full activation. Source details show known compatibility warnings.
 - Projects/code, authentication and installed plugins are not migrated. The destination working folder must already exist.
@@ -106,7 +106,7 @@ Native discovery prefers the Codex database's current rollout path and title: du
 
 ## Development startup and settings recovery
 
-Use `pnpm dev` (or `npm run dev`) for the real local library; stop it with Ctrl+C. `pnpm run demo -- --port 7430` uses isolated samples. No service is installed. The CLI waits for a settings migration to finish before exiting.
+Use `pnpm dev` (or `npm run dev`) for the real local library; stop it with Ctrl+C. `pnpm run demo -- --port 7430` uses isolated samples. No service is installed. The CLI waits up to ten seconds; an interrupted settings migration retains its recovery journal. Use `pnpm status` and `pnpm stop` for the default library, or supply the same `--data-dir` used at startup.
 
 WebDAV setup lives in Settings. Grove appends `/Session-Grove/`, verifies a disposable write/read/delete, then offers optional content encryption. `sync-key.txt` is an owner-only local key file managed by Settings; `webdav.json` records verified connection settings. The key is never sent back to the browser. A saved key automatically unlocks on startup unless an unfinished `sync-settings-pending.json` journal requires recovery. Do not delete that private journal until the change is resolved; it contains the destination recovery key.
 

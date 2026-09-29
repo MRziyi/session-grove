@@ -13,6 +13,7 @@ import { parse } from '../src/transcript.js';
 import { codexFiles, readCodexHistory, supportedHistory } from '../src/codex-history.js';
 import { hash } from '../src/util.js';
 const [sourceHome, threadId] = process.argv.slice(2), expanded = process.argv.includes('--expand');
+const executable = process.argv.includes('--codex') ? process.argv[process.argv.indexOf('--codex') + 1] : 'codex';
 assert(sourceHome && /^[a-f0-9-]{36}$/.test(threadId || ''), 'Usage: node scripts/codex-fork-smoke.js CODEX_HOME THREAD_ID [--expand]');
 const index = new DatabaseSync(path.join(sourceHome, 'state_5.sqlite'), { readOnly: true });
 const source = index.prepare('SELECT rollout_path FROM threads WHERE id=?').get(threadId); index.close(); assert(source, 'Native thread not found.');
@@ -29,14 +30,14 @@ const digest = value => hash(JSON.stringify(value) ?? "undefined");
 async function items(id) { let cursor, all = []; for (let n = 0; n < 100; n++) { const r = await client.request('thread/items/list', { threadId: id, limit: 100, sortDirection: 'asc', ...(cursor ? { cursor } : {}) }); all.push(...r.data); if (!r.nextCursor) return all; cursor = r.nextCursor; } throw new Error('Pagination limit reached'); }
 const resume = id => client.request('thread/resume', { threadId: id, excludeTurns: true, cwd: root, approvalPolicy: 'on-request', sandbox: 'read-only' });
 try {
-    client = connect('codex', home); await client.init(); await resume(threadId);
+    client = connect(executable, home); await client.init(); await resume(threadId);
     phase = 'native fork'; const forked = await client.request('thread/fork', { threadId, excludeTurns: true, lastTurnId: parsed.checkpoints.at(-1).turnId, cwd: root, approvalPolicy: 'on-request', sandbox: 'read-only' });
     const nativeItems = await items(forked.thread.id); assert(nativeItems.length > 0, 'Native fork has no projected items.'); await client.close(); client = null;
     phase = 'grove fork'; const parent = store.branch(null, 'Comparison source', 'codex', full);
     if (expanded) { assert(parsed.context.compactions.length, 'No compaction to test.'); for (const event of parsed.context.compactions) if (event.canDisable) store.setCompaction(parent.id, { head: parent.head, eventId: event.id, enabled: false }); }
     const branch = store.fork(parent.id, { name: 'Comparison fork', end: parsed.checkpoints.at(-1).end }); native.setActive(branch.id, root, true); native.apply([branch.id]);
     const instance = store.instances().find(i => i.branchId === branch.id && i.applied);
-    client = connect('codex', home); await client.init(); await resume(instance.nativeId); const groveItems = await items(instance.nativeId);
+    client = connect(executable, home); await client.init(); await resume(instance.nativeId); const groveItems = await items(instance.nativeId);
     const state = new DatabaseSync(path.join(home, 'state_5.sqlite'), { readOnly: true }), nativeFile = state.prepare('SELECT rollout_path FROM threads WHERE id=?').get(forked.thread.id).rollout_path; state.close();
     const originalFork = parse(readCodexHistory(nativeFile, codexFiles(home)), 'codex'), groveFork = parse(fs.readFileSync(instance.file, 'utf8'), 'codex');
     const payloads = (p, type) => p.records.filter(r => r.value?.type === type).map(r => r.value.payload);
@@ -53,13 +54,17 @@ try {
         native.setActive(branch.id, root, true); native.apply([branch.id]);
         const restored = store.instances().find(i => i.branchId === branch.id && i.applied);
         assert.notEqual(restored.nativeId, instance.nativeId, 'A context replacement must get a fresh native projection.');
-        client = connect('codex', home); await client.init(); await resume(restored.nativeId);
+        client = connect(executable, home); await client.init(); await resume(restored.nativeId);
         assert.equal(digest(await items(restored.nativeId)), digest(nativeItems));
         assert.equal(parse(fs.readFileSync(restored.file, 'utf8'), 'codex').context.compactions.length, originalFork.context.compactions.length);
         toggleRoundTrip = true;
     }
+    phase = 'archived parent read';
+    await client.request('thread/archive', { threadId });
+    await client.close(); client = connect(executable, home); await client.init();
+    await resume(forked.thread.id); assert.equal(digest(await items(forked.thread.id)), digest(nativeItems), 'Native fork lost history after parent archive.');
     assert.deepEqual(files.map(f => hash(fs.readFileSync(f))), originalHashes, 'Original native files changed during the test.');
-    const report = { version: execFileSync('codex', ['--version'], { encoding: 'utf8' }).trim(), nativeProjectedItems: nativeItems.length, modelHistoryItems: payloads(groveFork, 'response_item').length, projectedItemsIdentical: true, modelRecordsIdentical: true, worldStateIdentical: true, baseInstructionsIdentical: true, compactionsDisabled: expanded, toggleRoundTrip, originalFilesUnchanged: true, modelTurnsSubmitted: 0 };
+    const report = { version: execFileSync(executable, ['--version'], { encoding: 'utf8' }).trim(), nativeProjectedItems: nativeItems.length, modelHistoryItems: payloads(groveFork, 'response_item').length, projectedItemsIdentical: true, modelRecordsIdentical: true, worldStateIdentical: true, baseInstructionsIdentical: true, compactionsDisabled: expanded, toggleRoundTrip, originalFilesUnchanged: true, modelTurnsSubmitted: 0 };
     fs.mkdirSync('test-results', { recursive: true }); fs.writeFileSync('test-results/codex-fork-' + (expanded ? 'expanded' : 'native') + '.json', JSON.stringify(report, null, 2)); console.log(JSON.stringify(report));
 } catch { console.error('Native comparison failed during ' + phase + '. No private contents were printed.'); process.exitCode = 1; }
 finally { await client?.close(); store.close(); fs.rmSync(root, { recursive: true, force: true }); }

@@ -10,6 +10,7 @@ import { Cloud } from '../src/cloud.js';
 import { AutoSync } from '../src/auto-sync.js';
 import { codexSample, codexTurn } from '../src/demo.js';
 import { hash } from '../src/util.js';
+import { seal } from '../src/sync.js';
 async function setup(t) {
     const files = new Map(), requests = []; let failHead = false;
     const server = http.createServer(async (req, res) => {
@@ -39,6 +40,45 @@ async function setup(t) {
 function branch(store, projectId, title, secret = title) { return store.branch(projectId, title, 'codex', codexSample('/work', [[secret, 'Ready']])); }
 function append(store, b, text) { const current = store.get('branch', b.id); return store.ingest(b.id, store.raw(current.head) + codexTurn(text, 'Done').map(v => JSON.stringify(v) + '\n').join(''), current.head, {}); }
 function organize(store, b, title) { const g = store.treeGraph(b.id); store.organize(b.id, { version: g.version, pathId: b.id, chatIds: [g.paths[0].messages.at(-1).id], action: 'combine', name: title }); }
+test('a successful background check cannot erase a failed manual sync result',async t=>{
+ const e=await setup(t),a=e.device('a'),auto=new AutoSync(a.store,()=>e.config);t.after(()=>auto.close());auto.unlock(e.pass);const p=a.store.project('Failure');branch(a.store,p.id,'Data');const plan=await auto.prepareSync();
+ a.cloud.publish=async()=>{throw Error('simulated transfer timeout');};auto.cloud.publish=a.cloud.publish;const job=auto.startSync(plan.id,true);await assert.rejects(auto.syncJob,/timeout/);
+ await auto.exclusive(async()=>({checked:true}));const status=auto.status();assert.equal(status.operation.id,job.operationId);assert.equal(status.manualOperation.state,'error');assert.match(status.error,/timeout/);assert.equal(status.lastUpload,null);
+});
+test('moving another device’s imported tree publishes removal from its old project index',async t=>{
+    const e=await setup(t),a=e.device('a'),b=e.device('b'),c=e.device('c'),old=a.store.project('Old'),item=branch(a.store,old.id,'Move');
+    await a.cloud.publish([item.id],e.pass);await b.cloud.catalog(e.pass);await b.cloud.project(old.id,e.pass);await b.cloud.hydrate(item.id,e.pass);
+    const target=b.store.project('New');b.store.moveTree(item.id,target.id);await b.cloud.publish([item.id],e.pass);
+    await c.cloud.catalog(e.pass);await c.cloud.project(old.id,e.pass);assert.equal(c.cloud.listing(old.id).itemCount,0);assert.equal(c.cloud.summaries().find(p=>p.id===old.id).count,0);
+    await c.cloud.project(target.id,e.pass);assert.equal(c.cloud.listing(target.id).itemCount,1);
+});
+test('large sync previews require confirmation and packed transfer reduces requests without losing records', async t => {
+    const env=await setup(t),a=env.device('a'),b=env.device('b'),project=a.store.project('Large');
+    const raw=codexSample('/work',Array.from({length:400},(_,i)=>['Question '+i,'Answer '+i])),branch=a.store.branch(project.id,'Large history','codex',raw);
+    const auto=new AutoSync(a.store,()=>env.config);t.after(()=>auto.close());auto.unlock(env.pass);
+    const plan=await auto.prepareSync();assert.equal(plan.large,true);assert.throws(()=>auto.startSync(plan.id),/Confirm/);
+    env.requests.length=0;auto.startSync(plan.id,true);await auto.syncJob;
+    const objectPuts=env.requests.filter(([m,p])=>m==='PUT'&&p.includes('/objects/')).length;assert.ok(objectPuts<20);assert.equal(auto.status().dirty,false);
+    await b.cloud.catalog(env.pass);await b.cloud.project(project.id,env.pass);await b.cloud.hydrate(branch.id,env.pass);
+    assert.equal(b.store.raw(b.store.get('branch',branch.id).head),raw);
+    env.requests.length=0;const next=await auto.prepareSync();auto.startSync(next.id,true);await auto.syncJob;assert.equal(env.requests.some(([m])=>m==='PUT'),false);
+});
+test('interrupted downloads retain only verified objects and resume without publishing a partial session', async t => {
+    const env = await setup(t), a = env.device('a'), b = env.device('b'), project = a.store.project('Resume download'), item = a.store.branch(project.id, 'History', 'codex', codexSample('/work', Array.from({length:100}, (_,i)=>['Question '+i, 'Answer '+i])));
+    await a.cloud.publish([item.id], env.pass); await b.cloud.catalog(env.pass); await b.cloud.project(project.id, env.pass);
+    const dav = b.cloud.connection.dav, original = dav.get.bind(dav); let count = 0, failedHash;
+    dav.get = async key => {
+        if (key.startsWith('objects/') && ++count === 3) { failedHash = key.slice(8, -4); return seal('tampered', b.cloud.connection.key); }
+        return original(key);
+    };
+    await assert.rejects(b.cloud.hydrate(item.id, env.pass), /integrity/);
+    assert.equal(b.store.all('branch').length, 0);
+    assert.equal(b.store.objectStatement.get(failedHash), undefined);
+    const saved = b.store.db.prepare('SELECT hash FROM objects').all().map(r => r.hash); assert.ok(saved.length > 0);
+    dav.get = original; env.requests.length = 0; await b.cloud.hydrate(item.id, env.pass);
+    assert.equal(b.store.raw(b.store.get('branch', item.id).head), a.store.raw(item.head));
+    for (const h of saved) assert.equal(env.requests.some(([method, url]) => method === 'GET' && url.endsWith('/' + h + '.bin')), false);
+});
 test('directory → project index → one tree fetches transcripts strictly on demand and encrypts all layers', async t => {
     const env = await setup(t), { pass, requests, files } = env, a = env.device('a'), b = env.device('b');
     const p = a.store.project('Paper'), q = a.store.project('Unopened');
@@ -147,6 +187,16 @@ test('cached page refreshes and repeated opens make no remote requests; fallback
     const before = auto.cloud.cache().lastUpload;
     await auto.flush('both', true); assert.ok(requests.some(([method]) => method === 'PROPFIND')); assert.equal(requests.filter(([method]) => method === 'PUT').length, 0);
     assert.equal(auto.cloud.cache().lastUpload, before); assert.ok(auto.cloud.connection.dav.metrics.bytesReceived > 0);
+});
+test('opening a cached local project does not wait behind an unrelated cloud transfer', async t => {
+    const env = await setup(t), a = env.device('a'), project = a.store.project('Local'), item = branch(a.store, project.id, 'Ready');
+    const auto = new AutoSync(a.store, () => env.config); t.after(() => auto.close()); auto.unlock(env.pass);
+    await auto.flush('both', true); let release;
+    const busy = auto.exclusive(() => new Promise(resolve => { release = resolve; }));
+    await new Promise(resolve => setImmediate(resolve)); let timer;
+    try { await Promise.race([auto.openProject(project.id, '', { check: true }), new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('Local project blocked on cloud')), 100); })]); }
+    finally { clearTimeout(timer); release(); await busy; }
+    assert.equal(a.store.listing(project.id).items[0].id, item.id);
 });
 test('failed automatic uploads back off instead of retrying on every local refresh', async t => {
     const env = await setup(t), { pass, config, requests } = env, a = env.device('a');
