@@ -1,3 +1,5 @@
+import {stageTrash,restoreTrash,expireTrash,cleanupLocal,isTrashed} from './trash.js';
+import {removeTrashNativeCopies} from './trash-native.js';
 import os from 'node:os';
 import { recordPreview } from './record-preview.js';
 import { VERSION } from './version.js';
@@ -48,7 +50,8 @@ export function createApp({ root, roots, guard, demo = false }) {
     const operation = (kind, value) => { for (const res of streams) res.write('event: operation\ndata: ' + JSON.stringify({kind, ...value}) + '\n\n'); };
     autoSync.onOperation = value => operation('sync', {...value, status:autoSync.status()});
     const timing = () => ({ appVersion: VERSION, serverNow: Date.now(), stateVersion: diagnostics.startedAt + ':' + store.version + ':' + store.cloudVersion, update: { nextRunAt: nextCaptureAt, lastRunAt: lastCaptureAt, started: !!store.local('localUpdateStarted'), operation: updateOperation } });
-    const snapshot = () => ({ ...autoSync.decorate(store.snapshot()), preferences: preferences(store) });
+    let expiryTimer;const configureExpiry=()=>{clearTimeout(expiryTimer);const entries=expireTrash(store),next=entries.filter(e=>!e.expired).map(e=>Date.parse(e.expiresAt)).sort((a,b)=>a-b)[0];if(next){expiryTimer=setTimeout(configureExpiry,Math.max(1000,Math.min(2147483647,next-Date.now())));expiryTimer.unref();}};configureExpiry();
+    const snapshot = () => ({ ...autoSync.decorate(store.snapshot()), preferences: preferences(store), trashEntries:(store.local('trashEntries')||[]).filter(e=>!e.expired||e.state!=='cleaned'), trashNative:store.instances().filter(i=>isTrashed(store,i.branchId)&&i.file&&fs.existsSync(i.file)).map(i=>({id:i.id,branchId:i.branchId,title:i.title,agent:i.agent,active:i.applied})) });
     const server = http.createServer(async (req, res) => {
         const started = performance.now(), requestId = id().slice(0, 8);
         const beforeManagement = req.method !== 'GET' && /^\/api\/(trees|move|manage|projects|branches|conflicts)(?:\/|$)/.test(req.url) ? management() : null;
@@ -126,6 +129,22 @@ export function createApp({ root, roots, guard, demo = false }) {
             const tree = route.match(/^\/api\/trees\/([^/]+)$/);
             if (req.method === 'GET' && tree) { await autoSync.openTree(tree[1], { check: url.searchParams.get('check') === '1' }); const graph = store.treeGraph(tree[1], url.searchParams.get('view') || 'in-use'); return send(200, req.headers['x-grove-graph'] === 'shared-messages-v1' ? store.memo('wire:' + graph.id + ':' + graph.view, () => packGraph(graph)) : graph); }
             if (req.method === 'POST' && tree) return send(200, store.organize(tree[1], body));
+            if(req.method==='POST'&&route==='/api/trash'){
+                const requestedTrees=body.itemIds||[];for(const id of requestedTrees)await autoSync.openTree(id);
+                const archived=b=>b.archived||b.projectId&&store.get('project',b.projectId).archived;
+                const ids=requestedTrees.length?[...new Set(requestedTrees.flatMap(id=>treeMembers(store,id).filter(b=>!b.synthetic&&!isTrashed(store,b.id)&&(body.view==='archived'?archived(b):!archived(b))).map(b=>b.id)))]:body.branchIds||[];
+                assert(ids.length,'Select sessions first.');
+                const treeIds=requestedTrees.filter(id=>treeMembers(store,id).filter(b=>!b.synthetic&&!isTrashed(store,b.id)).every(b=>ids.includes(b.id)));
+                if(!requestedTrees.length){assert(ids.length===1,'Select one complete path.');const graph=store.treeGraph(ids[0],'all');assert(graph.version===body.version&&graph.nodes.some(n=>n.id===body.nodeId&&n.endBranchIds.includes(ids[0])),'Select a complete session endpoint.',409);}
+                native.collect();
+                // The explicit Trash action may deactivate local copies through
+                // the established native archive path. Busy/changed copies stay
+                // intact and remain visible in Trash's native-cleanup section.
+                try{if(!demo&&!guard)await archiveNative(store,native,ids);else{for(const id of ids)native.setActive(id,null,false);native.apply(ids);}}catch(e){diagnostics.record('trash-native-pending',{code:'NATIVE_COPY_RETAINED',count:ids.length});}
+                const entry=stageTrash(store,ids,treeIds);cleanupLocal(store);configureExpiry();autoSync.reconcileTimer();return send(202,entry);
+            }
+            if(req.method==='POST'&&route==='/api/trash/restore'){const result=restoreTrash(store,body.id);autoSync.schedule();return send(201,result);}
+            if(req.method==='POST'&&route==='/api/trash/native')return send(200,removeTrashNativeCopies(store,native,body.branchIds||[]));
             if (req.method === 'POST' && route === '/api/move') {
                 for (const id of body.itemIds || []) await autoSync.openTree(id, { check: true });
                 if (body.projectId && body.projectId !== INBOX_ID && !store.all('project').some(p => p.id === body.projectId)) {
@@ -166,8 +185,9 @@ export function createApp({ root, roots, guard, demo = false }) {
                 if (body.projectId) members = store.all('branch').filter(b => b.projectId === store.get('project', body.projectId).id);
                 else if (body.itemIds?.length) members = [...new Map(body.itemIds.flatMap(id => treeMembers(store, id)).map(b => [b.id, b])).values()];
                 else members = (body.branchIds || []).map(id => store.get('branch', id));
-                if (body.projectId || body.itemIds) members = members.filter(b => !b.excluded || b.background && preferences(store).showScheduledSessions);
+                if (body.projectId || body.itemIds) members = members.filter(b => !isTrashed(store,b.id)&&(!b.excluded || b.background && preferences(store).showScheduledSessions));
                 assert(members.length, 'Select sessions first.');
+                assert(members.every(b=>!isTrashed(store,b.id)||b.trashDependency),'Restore from Trash as a new session.',410);
                 assert(members.every(b => !b.excluded || b.background && preferences(store).showScheduledSessions), 'Agent-owned or empty records are not managed as sessions.');
                 if (body.action === 'deactivate' && body.agent) members = members.filter(b => b.agent === body.agent && store.instances().some(i => i.branchId === b.id && isActive(i)));
                 if (body.action === 'activate') {
@@ -339,9 +359,9 @@ export function createApp({ root, roots, guard, demo = false }) {
         }, p.localUpdateMinutes * 60000); interval.unref();
     }
     configureCapture();
-    server.on('close', () => { clearInterval(interval); autoSync.close(); store.close(); });
+    server.on('close', () => { clearInterval(interval);clearTimeout(expiryTimer); autoSync.close(); store.close(); });
     const app = { server, store, native, autoSync, diagnostics, settings, token, instance, quiesce() {
-        stopping = true; clearTimeout(interval); autoSync.closed = true;
+        stopping = true; clearTimeout(interval);clearTimeout(expiryTimer); autoSync.closed = true;
         clearTimeout(autoSync.timer); clearTimeout(autoSync.retryTimer); clearTimeout(autoSync.interval);
         if (settings.job?.state !== 'running') autoSync.cloud.connection?.dav.controller?.abort(new Error('Server is stopping.'));
     }, close(callback) {

@@ -1,8 +1,11 @@
+import {bodyRefs,retainedGraph} from './retention.js';
+import {applyTrashState,deletedIds,isTrashed} from './trash.js';
+import {withVaultLock} from './dav-lock.js';
 import { INBOX_ID, inboxProject, cloudProjectId } from './inbox.js';
 import { preferences } from './preferences.js';
 import { BACKGROUND_PROJECT } from './session-kind.js';
 import { createVault, vaultKey } from './vault.js';
-import { WebDAV, seal, sealAsync, unseal } from './sync.js';
+import { WebDAV, seal, sealAsync, unseal, assertDavListing } from './sync.js';
 import { encodeRevisionRefs, decodeRevisionRefs } from './revision-wire.js';
 import { assert, hash, now, mapConcurrent } from './util.js';
 import { uploadPacks, downloadRecords } from './record-packs.js';
@@ -22,7 +25,7 @@ function sliceGraph(graph, ids) {
     const nodes = (graph.nodes || []).filter(n => selected.has(n.branchId));
     for (const b of branches) { visit(b.head); visit(b.forkRevision); }
     nodes.forEach(n => visit(n.revisionId));
-    return { schema: 3, projects: sorted(graph.projects.filter(p => projectIds.has(p.id))), branches: sorted(branches), nodes: sorted(nodes), layouts: sorted((graph.layouts || []).filter(l => selected.has(l.rootId))), revisions: sorted([...revisions.values()]) };
+    return { schema: 3, projects: sorted(graph.projects.filter(p => projectIds.has(p.id))), branches: sorted(branches), nodes: sorted(nodes), layouts: sorted((graph.layouts || []).filter(l => selected.has(l.rootId))), revisions: sorted([...revisions.values()]), ...(graph.retention?{retention:{schema:1,extras:Object.fromEntries(Object.entries(graph.retention.extras||{}).filter(([id])=>revisions.has(id))),ranges:Object.fromEntries(Object.entries(graph.retention.ranges).filter(([id])=>revisions.has(id)))}}:{}) };
 }
 const cacheDefault = () => ({ heads: {}, indexes: {}, loaded: {}, ack: {}, ownProjects: [], legacyGraphs: {} });
 // Drop superseded references by ancestry, never by wall-clock timestamps.
@@ -38,19 +41,21 @@ export class Cloud {
         const config = this.readConfig(), signature = digest([config, passphrase]);
         if (this.connection?.signature === signature) return this.connection;
         const dav = new WebDAV(config);
-        await dav.mkdir();
+        let created=false;
         let bytes = await dav.get('vault.json');
         if (!bytes) {
+            await dav.mkdir();created=true;
             const { vault } = createVault(passphrase);
             await dav.put('vault.json', Buffer.from(JSON.stringify(vault)), true);
             bytes = await dav.get('vault.json');
         }
         const vault = JSON.parse(bytes.toString()), key = vaultKey(vault, passphrase);
         const rootDav = dav, dataDav = vault.generation ? dav.scoped('generations/' + vault.generation + '/') : dav;
-        for (const dir of ['objects/', 'trees/', 'projects/', 'heads/']) await dataDav.mkdir(dir);
+        if(created)for (const dir of ['objects/', 'trees/', 'projects/', 'heads/']) await dataDav.mkdir(dir);
         this.cacheKey = 'cloud:' + hash(dav.base + vault.salt);
         this.store.local('cloudCacheKey', this.cacheKey);
-        return this.connection = { dav: dataDav, rootDav, vaultBytes: bytes, key, signature };
+        if(vault.schema===3&&this.cache().generation!==vault.generation){this.store.local('trashDirtyRoots',this.dirtyIds());this.save({...cacheDefault(),generation:vault.generation});}
+        return this.connection = { dav: dataDav, rootDav, vaultBytes: bytes, key, signature, protocol:vault.schema };
     }
     useSavedCache() { this.cacheKey ||= this.store.local('cloudCacheKey'); }
     lock() { this.connection = null; }
@@ -75,10 +80,11 @@ export class Cloud {
     }
     async catalog(passphrase) {
         this.report('Checking cloud directory');
-        const connection = await this.connect(passphrase);
+        let connection = await this.connect(passphrase);
         const current = await connection.rootDav.get('vault.json');
-        if (!current?.equals(connection.vaultBytes)) { this.lock(); throw new Error('Cloud encryption settings changed. Reconnect in Settings.'); }
+        if (!current?.equals(connection.vaultBytes)) { const held=connection.rootDav.lockContext,verified=connection.rootDav.collectionLockVerified;this.lock(); const latest=current&&JSON.parse(current.toString());if(latest?.schema===3){connection=await this.connect(passphrase);if(held?.active){connection.rootDav.lockContext=held;connection.rootDav.collectionLockVerified=verified;}}else throw new Error('Cloud encryption settings changed. Reconnect in Settings.'); }
         const { dav, key } = connection, c = this.cache();
+        if(connection.protocol===3){const bytes=await dav.get('trash-state.bin');assert(bytes,'Cloud deletion markers are missing.');applyTrashState(this.store,unseal(bytes,key));}
         const names = await dav.list('heads/', /^[a-f0-9-]+\.bin$/);
         for (const name of names) {
             const response = await dav.request('GET', 'heads/' + name, undefined, c.heads[name]?.etag ? { 'If-None-Match': c.heads[name].etag } : {});
@@ -86,7 +92,7 @@ export class Cloud {
             assert(response.ok, `Cloud directory read failed (${response.status}).`);
             const bytes = await dav.readResponse(response, 16 * 1024 * 1024); assert(bytes.length < 16 * 1024 * 1024, 'Cloud directory too large.');
             const value = unseal(bytes, key);
-            assert([4, 5].includes(value.schema) && Array.isArray(value.projects), 'Unsupported cloud directory.');
+            assert([4, 5, 6].includes(value.schema) && Array.isArray(value.projects), 'Unsupported cloud directory.');
             for (const p of value.projects) assert(typeof p.id === 'string' && typeof p.name === 'string' && /^[a-f0-9]{64}$/.test(p.index), 'Invalid cloud project.');
             c.heads[name] = { ...value, etag: response.headers.get('etag') };
         }
@@ -99,7 +105,7 @@ export class Cloud {
         const r = await dav.request('PROPFIND', 'commits/', undefined, { Depth: '1' });
         if (r.status === 404) return;
         assert(r.ok, 'Could not check legacy cloud history.');
-        const xml = (await dav.readResponse(r, 16 * 1024 * 1024)).toString(), names = [...xml.matchAll(/<(?:[\w-]+:)?href[^>]*>([^<]+)<\/(?:[\w-]+:)?href>/g)].map(m => decodeURIComponent(m[1].split('/').at(-1))).filter(n => /^[0-9T-]+-[a-f0-9-]+\.bin$/.test(n)).sort();
+        const xml = (await dav.readResponse(r, 16 * 1024 * 1024)).toString();assertDavListing(xml);const names = [...xml.matchAll(/<(?:[\w-]+:)?href[^>]*>([^<]+)<\/(?:[\w-]+:)?href>/g)].map(m => decodeURIComponent(m[1].split('/').at(-1))).filter(n => /^[0-9T-]+-[a-f0-9-]+\.bin$/.test(n)).sort();
         for (const name of names) {
             if (c.heads['legacy-' + name]) continue;
             const bytes = await dav.get('commits/' + name); assert(bytes, 'Missing legacy manifest.');
@@ -135,15 +141,15 @@ export class Cloud {
         this.save(c);
         return this.items().filter(i => i.projectId === projectId);
     }
-    items() {
+    items({includeTrashed=false} = {}) {
         this.useSavedCache(); const c = this.cache(), grouped = new Map(), localIds = new Set(this.store.all('branch').map(b => b.id));
         for (const p of this.projectRefs()) for (const item of c.indexes[p.index]?.items || []) {
             if (!grouped.has(item.id)) grouped.set(item.id, []); grouped.get(item.id).push(item);
         }
         return [...grouped.values()].map(rows => {
             const versions = tips(rows), chosen = [...versions].sort((a, b) => (b.updatedAt || '').localeCompare(a.updatedAt || ''))[0];
-            return { ...chosen, versions, cloudState: versions.every(v => (c.loaded[chosen.id] || []).includes(v.ref)) ? 'cached' : localIds.has(chosen.id) ? 'update' : 'cloud' };
-        });
+            return { ...chosen, versions, sessions:chosen.sessions.filter(s=>includeTrashed||!isTrashed(this.store,s.id)), cloudState: versions.every(v => (c.loaded[chosen.id] || []).includes(v.ref)) ? 'cached' : localIds.has(chosen.id) ? 'update' : 'cloud' };
+        }).filter(i=>includeTrashed||i.sessions.length);
     }
     saveDirectory({ onlyIfMissing = false } = {}) {
         this.useSavedCache();
@@ -169,9 +175,9 @@ export class Cloud {
             const bytes = c.legacyGraphs[version.ref] ? null : await this.connection.dav.get('trees/' + version.ref + '.bin');
             const graph = c.legacyGraphs[version.ref] || (bytes && unseal(bytes, this.connection.key));
             assert(graph && digest(graph) === version.ref, 'Cloud manifest integrity check failed.');
-            for (const r of decodeRevisionRefs(graph).revisions) for (const h of r.refs) if (!exists.get(h)) missing.add(h);
+            for (const h of bodyRefs(decodeRevisionRefs(graph))) if (!exists.get(h)) missing.add(h);
         }
-        const uploads = this.dirtyIds(), refs = new Set(uploads.flatMap(id => treeSnapshot(this.store, id)?.revisions.flatMap(r => r.refs) || []));
+        const uploads = this.dirtyIds(), refs = new Set(uploads.flatMap(id => {const graph=treeSnapshot(this.store,id);return graph?bodyRefs(graph):[];}));
         const known = new Set([...(c.uploadedObjects || []), ...(c.packs || []).flatMap(p => p.refs)]);
         const pending = [...refs].filter(h => !known.has(h));
         const bytes = this.store.db.prepare('SELECT COALESCE(SUM(length(CAST(body AS BLOB))),0) AS bytes FROM objects WHERE hash IN (SELECT value FROM json_each(?))').get(JSON.stringify(pending)).bytes;
@@ -188,7 +194,9 @@ export class Cloud {
             const bytes = c.legacyGraphs[version.ref] ? null : await dav.get('trees/' + version.ref + '.bin');
             const encoded = c.legacyGraphs[version.ref] || (bytes && unseal(bytes, key));
             assert(encoded && digest(encoded) === version.ref && encoded.branches.some(b => b.id === treeId), 'Invalid cloud tree manifest.');
-            const graph = decodeRevisionRefs(encoded);
+            let graph = decodeRevisionRefs(encoded);
+            assert(!graph.retention||this.connection.protocol===3||this.connection.retentionStaging,'Sparse history requires a Trash-aware vault.');
+            if(this.store.local('trashState')||this.store.local('trashPending')?.length)graph=retainedGraph(graph,deletedIds(this.store,graph));
             this.report('Downloading records', 0, null);
             await downloadRecords(this.store, dav, key, graph, (done, total, started) => this.report('Downloading records', done, total, started), pack => { c.packs ||= []; if (!c.packs.some(p => p.ref === pack.ref)) c.packs.push(pack); });
             this.report('Applying downloaded changes');
@@ -198,11 +206,13 @@ export class Cloud {
         if (!wasDirty && !(this.store.local('conflicts') || []).length) c.ack[treeId] = digest(treeSnapshot(this.store, treeId));
         this.save(c);
     }
-    async publish(treeIds, passphrase, { catalogFresh = false } = {}) {
+    async publish(treeIds, passphrase, { catalogFresh = false, locked = false } = {}) {
+        const connection=await this.connect(passphrase);
+        if(connection.protocol===3&&!locked)return withVaultLock(connection.rootDav,()=>this.publish(treeIds,passphrase,{catalogFresh:false,locked:true}));
         if (!catalogFresh) await this.catalog(passphrase);
         else await this.connect(passphrase);
         const { dav, key, rootDav, vaultBytes } = this.connection;
-        assert(!await rootDav.get('migration.json'), 'Cloud migration in progress; retry after it completes.');
+        assert(this.connection.retentionStaging || !await rootDav.get('migration.json'), 'Cloud migration in progress; retry after it completes.');
         const projectIds = new Set(treeIds.map(id => cloudProjectId(this.store.get('branch', id).projectId)));
         const remoteItems = new Map(this.items().map(i=>[i.id,i]));
         for (const id of treeIds) for (const previous of remoteItems.get(id)?.versions || []) projectIds.add(previous.projectId);
@@ -215,12 +225,13 @@ export class Cloud {
         const c = this.cache(), replacements = new Map(), fingerprints = {};
         const graphs=new Map(treeIds.map(id=>[id,treeSnapshot(this.store,id)])), snapshotItems=new Map(this.store.syncCollections().items.map(i=>[i.id,i]));
         let uploaded = 0, doneBefore = 0;
-        const recordTotal = [...graphs.values()].filter(Boolean).reduce((n,g)=>n+new Set(g.revisions.flatMap(r=>r.refs)).size,0), pushStarted = Date.now();
+        const recordTotal = [...graphs.values()].filter(Boolean).reduce((n,g)=>n+bodyRefs(g).length,0), pushStarted = Date.now();
         for (const id of treeIds) {
             const graph = graphs.get(id); if (!graph) continue;
+            assert(!graph.retention||this.connection.protocol===3||this.connection.retentionStaging,'Sync pending Trash before publishing retained history.');
             const fingerprint = digest(graph), previous = this.items().find(i => i.id === id);
             if (c.ack[id] === fingerprint && previous?.versions.length === 1) continue;
-            const refs = [...new Set(graph.revisions.flatMap(r => r.refs))];
+            const refs = bodyRefs(graph);
             this.report('Uploading records', doneBefore, recordTotal, pushStarted);
             const packed = await uploadPacks(this.store, dav, key, refs, c, () => this.save(c, true), (done, total) => this.report('Uploading records', doneBefore + refs.length - total + done, recordTotal, pushStarted));
             doneBefore += refs.length;
@@ -251,9 +262,9 @@ export class Cloud {
             const indexAncestors = [...new Set(this.projectRefs().filter(p => p.id === projectId).flatMap(p => [p.index, ...(p.indexAncestors || [])]))].filter(h => h !== index);
             ownProjects.set(projectId, { ...value.project, index, count: treeIds.length, treeIds, indexAncestors });
         }
-        const head = { schema: 5, deviceId: this.store.device.id, at: now(), projects: [...ownProjects.values()] };
+        const head = { schema: this.connection.protocol===3||this.connection.retentionStaging?6:5, deviceId: this.store.device.id, at: now(), projects: [...ownProjects.values()] };
         // Publication point: every referenced immutable dependency is already durable.
-        assert((await rootDav.get('vault.json'))?.equals(vaultBytes) && !await rootDav.get('migration.json'), 'Cloud settings changed before publication.');
+        assert(this.connection.retentionStaging || (await rootDav.get('vault.json'))?.equals(vaultBytes) && !await rootDav.get('migration.json'), 'Cloud settings changed before publication.');
         this.report('Publishing cloud directory');
         await dav.put('heads/' + this.store.device.id + '.bin', seal(head, key));
         c.heads[this.store.device.id + '.bin'] = head; c.ownProjects = head.projects;
@@ -263,7 +274,10 @@ export class Cloud {
         return { uploaded, published: replacements.size };
     }
     decorate(data) {
-        this.useSavedCache(); const directory = this.cache().directorySnapshot, remote = directory?.items || this.items(), summaries = directory?.projects || this.summaries(), dirty = new Set(this.dirtyIds()), projects = new Map(summaries.map(p => [p.id, p]));
+        this.useSavedCache(); const directory = this.cache().directorySnapshot;
+        const remote=(directory?.items||this.items()).map(i=>({...i,sessions:i.sessions.filter(s=>!isTrashed(this.store,s.id))})).filter(i=>i.sessions.length);
+        const summaries=(directory?.projects||this.summaries()).map(p=>{if(!p.treeIds)return p;const treeIds=p.treeIds.filter(id=>!isTrashed(this.store,id)||remote.some(i=>i.id===id));return{...p,treeIds,count:treeIds.length};});
+        const dirty = new Set(this.dirtyIds()), projects = new Map(summaries.map(p => [p.id, p]));
         for (const p of data.projects) {
             const remote = projects.get(p.id);
             projects.set(p.id, remote?.metaAncestors?.includes(p.metaVersion) ? remote : { ...remote, ...p });

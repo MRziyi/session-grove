@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.13.0
+
+- Replace new Archive actions with Trash; retain previous archives behind an explicit migration entry.
+- Keep private recovery copies for a configurable 1–365 days (default 30), expire them automatically, and restore under new identities without activation.
+- Publish deletion markers, preserve referenced prefixes/native fork metadata, reclaim old cloud generations, and remove stale local caches.
+- Rescue unsynced offline changes locally while preventing stale-identity resurrection.
+- Introduce a Trash-aware vault fence, verified collection locking, per-resource HTTP 207 checks, renewed leases and resumable cleanup journals.
+- Provide guarded native-copy cleanup and remove redundant completed rollback payloads.
+- All devices must upgrade before the first Trash sync; ordinary startup does not migrate or delete existing archives.
+
 ## 0.12.0
 
 - Restore dependency installation under the existing release-age policy; surface missing Claude SDK dependencies immediately.

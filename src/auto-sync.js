@@ -1,3 +1,7 @@
+import {bodyRefs} from './retention.js';
+import fs from 'node:fs';import path from 'node:path';
+import {collectTrash,resumeTrashCleanup} from './cloud-trash.js';
+import {cleanupLocal} from './trash.js';
 import { cloudProjectId } from './inbox.js';
 import { preferences } from './preferences.js';
 import { Cloud } from './cloud.js';
@@ -13,13 +17,15 @@ export class AutoSync {
         this.queue = new Set(store.local('uploadQueue') || []);
         this.configureTimer();
     }
+    trashPending() { return !!(this.store.local('trashPending')||[]).length || fs.existsSync(path.join(this.store.root,'trash-cleanup.json')); }
+    async syncTrash() { if(fs.existsSync(path.join(this.store.root,'trash-cleanup.json')))await resumeTrashCleanup(this.cloud,this.passphrase);if((this.store.local('trashPending')||[]).length)await collectTrash(this.cloud,this.passphrase); }
     configureTimer() {
         clearTimeout(this.interval); this.interval = null; this.nextFallbackAt = null;
         this.reconcileTimer();
     }
     reconcileTimer(dirty = this.cloud.dirtyIds().length > 0) {
         const p = preferences(this.store);
-        const enabled = dirty && !this.closed && !this.needsReview && p.autoUploadEnabled && this.store.local('syncStarted') !== false && this.passphrase !== null && !!this.readConfig()?.url;
+        const enabled = (dirty||this.trashPending()) && !this.closed && !this.needsReview && p.autoUploadEnabled && this.store.local('syncStarted') !== false && this.passphrase !== null && !!this.readConfig()?.url;
         if (!enabled) { clearTimeout(this.interval); this.interval=null; this.nextFallbackAt=null; return; }
         if (this.interval) return;
         this.nextFallbackAt = Date.now() + p.autoUploadMinutes * 60000;
@@ -41,6 +47,7 @@ export class AutoSync {
         assert(this.passphrase !== null && this.readConfig()?.url, 'Configure WebDAV and unlock project sync first.');
         return this.exclusive(async () => {
             await this.beforeUpload?.();
+            await this.syncTrash();
             const plan = await this.cloud.transferPlan(this.passphrase);
             this.syncPlan = { ...plan, id: id(), createdAt: Date.now() };
             return this.syncPlan;
@@ -58,6 +65,7 @@ export class AutoSync {
             await this.beforeUpload?.();
             const dirty = this.cloud.dirtyIds();
             const result = dirty.length ? await this.cloud.publish(dirty, this.passphrase, { catalogFresh: true }) : { uploaded: 0, published: 0 };
+            cleanupLocal(this.store);
             this.queue.clear(); this.store.local('uploadQueue', []); this.store.local('lastSync', { at: now(), ...result });
             return result;
         }, false, 'both', true);
@@ -70,9 +78,9 @@ export class AutoSync {
         this.cloud.useSavedCache(); const cache = this.cloud.cache();
         const operation = this.running ? this.operation : this.lastManualOperation?.state === 'error' ? this.lastManualOperation : this.operation || this.lastManualOperation;
         const error = this.lastManualOperation?.state === 'error' ? this.lastManualOperation.error : this.error;
-        return { manualOperation: this.running && this.operation?.manual ? this.operation : this.lastManualOperation || null, needsReview: this.needsReview || null, started: this.store.local('syncStarted') !== false, operation: operation || null, configured, unlocked: this.passphrase !== null, queued: this.queue.size > 0, dirty: dirty.length > 0, dirtyCount: dirty.length,
-            phase: this.migrating ? 'migrating' : this.running ? 'syncing' : !configured ? 'unconfigured' : this.passphrase === null ? 'locked' : this.error ? this.store.local('syncStarted') === false ? 'failed' : 'retrying' : this.queue.size ? 'queued' : dirty.length ? 'local' : 'synced',
-            nextRunAt: this.needsReview || !dirty.length || this.store.local('syncStarted') === false || this.passphrase === null || !configured ? null : this.retryAt > Date.now() ? this.retryAt : this.queue.size && this.queuedAt ? this.queuedAt : this.nextFallbackAt, error, retryAt: this.retryAt || null, fallbackMinutes: preferences(this.store).autoUploadEnabled ? preferences(this.store).autoUploadMinutes : null, lastUpload: cache.lastUpload || null, lastCheck: cache.checkedAt || null, lastSuccess: cache.lastUpload || null };
+        return { manualOperation: this.running && this.operation?.manual ? this.operation : this.lastManualOperation || null, needsReview: this.needsReview || null, started: this.store.local('syncStarted') !== false, operation: operation || null, configured, unlocked: this.passphrase !== null, queued: this.queue.size > 0, dirty: dirty.length > 0 || this.trashPending(), dirtyCount: dirty.length + Number(this.trashPending()),
+            phase: this.migrating ? 'migrating' : this.running ? 'syncing' : !configured ? 'unconfigured' : this.passphrase === null ? 'locked' : this.error ? this.store.local('syncStarted') === false ? 'failed' : 'retrying' : this.queue.size ? 'queued' : dirty.length || this.trashPending() ? 'local' : 'synced',
+            nextRunAt: this.needsReview || !dirty.length && !this.trashPending() || this.store.local('syncStarted') === false || this.passphrase === null || !configured ? null : this.retryAt > Date.now() ? this.retryAt : this.queue.size && this.queuedAt ? this.queuedAt : this.nextFallbackAt, error, retryAt: this.retryAt || null, fallbackMinutes: preferences(this.store).autoUploadEnabled ? preferences(this.store).autoUploadMinutes : null, lastUpload: cache.lastUpload || null, lastCheck: cache.checkedAt || null, lastSuccess: cache.lastUpload || null };
     }
     unlock(passphrase) { assert(typeof passphrase === 'string' && (passphrase.length === 0 || passphrase.length >= 12), 'Encryption passphrase needs at least 12 characters.'); this.passphrase = passphrase; this.error = null; this.retryAt = 0; this.failures = 0; this.rateLimitUntil = 0; if (this.queue.size) this.schedule([...this.queue]); this.reconcileTimer(); }
     lock() { this.queuedAt = null; this.passphrase = null; this.cloud.lock(); clearTimeout(this.timer); clearTimeout(this.retryTimer); clearTimeout(this.interval);this.interval=null;this.nextFallbackAt=null; }
@@ -100,22 +108,23 @@ export class AutoSync {
     }
     async flush(direction = 'queued', explicit = false, captured = false) {
         if (!explicit && this.store.local('syncStarted') === false) return null;
-        if (direction === 'queued' && !this.queue.size) return { published: 0, uploaded: 0 };
+        if (direction === 'queued' && !this.queue.size && !this.trashPending()) return { published: 0, uploaded: 0 };
         if (explicit && this.rateLimitUntil > Date.now()) throw new Error('Provider requested a pause. Try again after ' + new Date(this.rateLimitUntil).toLocaleTimeString());
         if (this.closed || !explicit && (this.migrating || this.needsReview || !preferences(this.store).autoUploadEnabled || this.retryAt > Date.now())) return null;
-        if (!explicit && direction !== 'pull' && !this.cloud.dirtyIds().length) return { published: 0, uploaded: 0 };
+        if (!explicit && direction !== 'pull' && !this.cloud.dirtyIds().length && !this.trashPending()) return { published: 0, uploaded: 0 };
         if (!this.readConfig()?.url || this.passphrase === null) {
             if (explicit) throw new Error('Configure WebDAV and unlock project sync first.');
             return null;
         }
-        if (!explicit && !this.run && direction !== 'pull') {
+        if (!explicit && !this.run && direction !== 'pull' && !this.trashPending()) {
             const known = new Set([...(this.cloud.cache().uploadedObjects || []), ...(this.cloud.cache().packs || []).flatMap(p=>p.refs)]);
-            const refs = new Set(this.store.exportGraph().revisions.flatMap(r=>r.refs));
+            const refs = new Set(bodyRefs(this.store.exportGraph()));
             const pending = [...refs].filter(h=>!known.has(h));
             const bytes = this.store.db.prepare('SELECT COALESCE(SUM(length(CAST(body AS BLOB))),0) AS bytes FROM objects WHERE hash IN (SELECT value FROM json_each(?))').get(JSON.stringify(pending)).bytes;
             if (pending.length > 2000 || bytes > 32 * 1024 * 1024) { this.needsReview = { records: pending.length, bytes }; this.reconcileTimer(); return { reviewRequired: true }; }
         }
         const result = await this.exclusive(async () => {
+            if(direction!=='pull')await this.syncTrash();
             if (direction !== 'pull' && !captured) await this.beforeUpload?.();
             if (direction === 'pull') {
                 const before=JSON.stringify(this.cloud.summaries());

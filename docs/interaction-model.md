@@ -145,4 +145,4 @@ Fork is a before-node operation. The root has no preceding context and offers no
 
 Project contents default to a seven-day visible window, with count-based or uncollapsed alternatives in Settings. Empty Ungrouped is absent from the directory; a nonempty Ungrouped remains pinned among recent projects. Sync runs directly with bounded inline progress. Activation and cross-agent conversion choose an existing directory through a local folder browser.
 
-Trash is a separate unresolved policy proposal; see [trash-design.md](trash-design.md). Existing Archived records are not automatically converted to deletions.
+Trash is implemented in 0.13; see [trash-design.md](trash-design.md). Existing Archived records are not automatically converted to deletions. New discard actions use Trash; legacy archives expose an explicit Move to Trash action.

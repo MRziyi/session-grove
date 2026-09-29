@@ -1,3 +1,6 @@
+import {claudeFork} from './claude.js';
+import {retainedGraph,bodyRefs,withForkMetadata} from './retention.js';
+import {deletedIds,isTrashed} from './trash.js';
 import { claudeTitle } from './claude-title.js';
 import { sessionExclusion, backgroundKind } from './session-kind.js';
 import { supportedHistory } from './codex-history.js';
@@ -42,11 +45,11 @@ export class Store {
     }
     invalidate() { this.version++; this.memoCache.clear(); this.graphCache=null; }
     memo(key, fn) { if (!this.memoCache.has(key)) this.memoCache.set(key, fn()); return this.memoCache.get(key); }
-    parsed(revisionId, agent) {
-        const key = agent + ':' + revisionId;
+    parsed(revisionId, agent, end) {
+        const key = agent + ':' + revisionId + (end===undefined?'':':'+end);
         if (this.parseCache.has(key)) { const entry = this.parseCache.get(key); this.parseCache.delete(key); this.parseCache.set(key, entry); return entry.value; }
         let size = 0;
-        const records = this.get('revision', revisionId).refs.map(h => {
+        const records = this.get('revision', revisionId).refs.slice(0,end).map(h => {
             let entry = this.recordCache.get(h);
             if (entry) { this.recordCache.delete(h); this.recordCache.set(h, entry); }
             else {
@@ -83,7 +86,7 @@ export class Store {
         if(this.summaryCache.size >= 4096) this.summaryCache.delete(this.summaryCache.keys().next().value);
         this.summaryCache.set(key,value); if (!revisionId.startsWith('scan:')) this.summaryWrite.run(revisionId, agent, JSON.stringify(value)); return value;
     }
-    activity(revisionId, agent) { const p = this.parsed(revisionId, agent), entry = this.parseCache.get(agent + ':' + revisionId); if (entry) return entry.ledger ||= ledger(p, agent); return ledger(p, agent); }
+    activity(revisionId, agent, end) { const p = this.parsed(revisionId, agent, end), entry = this.parseCache.get(agent + ':' + revisionId + (end===undefined?'':':'+end)); if (entry) return entry.ledger ||= ledger(p, agent); return ledger(p, agent); }
     close() { this.db.close(); }
     transaction(fn) {
         this.db.exec('BEGIN IMMEDIATE');
@@ -139,6 +142,7 @@ export class Store {
             this.insertObject.run(r.hash, r.body);
         return this.put('revision', { id: id(), parent, refs: [...inherited, ...refs.map(r => r.hash)], createdAt: now(), source: { deviceId: this.device.id, deviceName: this.device.name, deviceModel: this.device.model, devicePlatform: this.device.platform, deviceKind: this.device.kind, ...source } });
     }
+    availableRaw(revisionId) { return this.get('revision',revisionId).refs.map(h=>this.objectStatement.get(h)?.body||'\n').join(''); }
     raw(revisionId, end) {
         const rev = this.get('revision', revisionId);
         return rev.refs.slice(0, end ?? rev.refs.length).map(h => { const row = this.objectStatement.get(h); assert(row, `缺少历史对象 ${h}`, 409); return row.body; }).join('');
@@ -153,7 +157,7 @@ export class Store {
     }
     fork(branchId, { name, end, revisionId, nodeId, graphVersion }) {
         const parent = this.get('branch', branchId), rev = this.get('revision', revisionId || parent.head);
-        assert(!parent.excluded && !parent.archived && !(parent.projectId && this.get('project', parent.projectId).archived), 'Restore this session before organizing.');
+        assert(!isTrashed(this,parent.id) && !parent.excluded && !parent.archived && !(parent.projectId && this.get('project', parent.projectId).archived), 'Restore this session before organizing.');
         assert(this.ancestor(rev.id, parent.head), '检查点不属于该分支历史');
         const parsed = parse(this.raw(rev.id), parent.agent);
         end = Number(end);
@@ -209,6 +213,7 @@ export class Store {
         return this.put('branch', b);
     }
     detail(branchId) {
+        assert(!isTrashed(this,branchId),'This session is in Trash.',410);
         const b = this.get('branch', branchId), cached = this.parsed(b.head, b.agent), p = { ...cached, warnings: [...cached.warnings] };
         const lineage = [];
         let r = this.get('revision', b.head);
@@ -224,7 +229,7 @@ export class Store {
         return { ...b, nativeTitleSource: this.summary(b.head,b.agent).titleSource, ...pendingDetail(this, b, p), messages: p.messages, checkpoints: p.checkpoints, warnings: p.warnings, cwd: p.cwd, records: p.records.length, lineage, instances: this.instances().filter(i => i.branchId === b.id).map(({ baseline, observedHash, ...i }) => i) };
     }
     setCompaction(branchId, { eventId, enabled, head }) {
-        const b = this.get('branch', branchId); assert(!b.archived && !b.excluded && !(b.projectId && this.get('project', b.projectId).archived), 'Restore this session before organizing.');
+        const b = this.get('branch', branchId); assert(!isTrashed(this,b.id)&&!b.archived && !b.excluded && !(b.projectId && this.get('project', b.projectId).archived), 'Restore this session before organizing.');
         assert(b.head === head, 'Conversation changed. Refresh before organizing.', 409);
         assert(typeof enabled === 'boolean', 'Choose whether compaction is enabled.');
         const event = this.parsed(b.head, b.agent).context.compactions.find(e => e.id === eventId);
@@ -250,10 +255,11 @@ export class Store {
     moveItems(options) { return moveItems(this, options); }
     snapshot() { return this.memo('snapshot', () => this.buildSnapshot()); }
     buildSnapshot() {
-        return { ...this.collections(), device:this.device, projects:this.all('project'), branches:this.all('branch').filter(b=>!b.excluded),
+        return { ...this.collections(), device:this.device, projects:this.all('project'), branches:this.all('branch').filter(b=>!b.excluded&&!isTrashed(this,b.id)),
             instances:this.instances().filter(i=>!i.excluded).map(({baseline,observedHash,summaryJson,summaryRevision,summaryVersion,observedStamp,...i})=>i), conflicts:this.local('conflicts') || [] };
     }
 
+    isTrashed(id) { return isTrashed(this,id); }
     exportGraph() { return this.memo('exportGraph', () => this.buildExportGraph()); }
     buildExportGraph() {
         const all = this.all('branch'), wanted = new Set(this.syncCollections().items.flatMap(i => [i.id, ...i.sessionIds]));
@@ -269,7 +275,8 @@ export class Store {
         }
         for (const n of nodes)
             visit(n.revisionId);
-        return { schema: 3, layouts: this.all('layout').filter(l => branchIds.has(l.rootId)), projects: [...this.all('project'), ...(branches.some(b => b.projectId === INBOX_ID) ? [inboxProject()] : [])], branches, nodes, revisions: [...revisions.values()] };
+        const graph = { schema: 3, layouts: this.all('layout').filter(l => branchIds.has(l.rootId)), projects: [...this.all('project'), ...(branches.some(b => b.projectId === INBOX_ID) ? [inboxProject()] : [])], branches, nodes, revisions: [...revisions.values()] };
+        return this.local('trashState')||this.local('trashPending')?.length ? retainedGraph(withForkMetadata(graph,h=>this.objectStatement.get(h)?.body,claudeFork,deletedIds(this,graph)),deletedIds(this,graph)) : graph;
     }
     merge(graph, objects) {
         assert([1, 2, 3].includes(graph?.schema) && Array.isArray(graph.projects) && Array.isArray(graph.branches) && Array.isArray(graph.revisions), '不兼容的同步格式');
@@ -290,8 +297,10 @@ export class Store {
             }
             const checkedObjects = new Set(), checkedRevisions = new Set(), revisions = new Map(graph.revisions.map(r=>[r.id,r]));
             const objectExists = this.db.prepare('SELECT 1 FROM objects WHERE hash=?');
+            const retained=new Set(bodyRefs(graph));
+            if(graph.retention?.extras)this.local('retentionExtras',{...this.local('retentionExtras'),...graph.retention.extras});
             for (const r of graph.revisions) {
-                for (const h of r.refs) if (!checkedObjects.has(h)) { assert(objectExists.get(h), `缺少历史对象 ${h}`, 409); checkedObjects.add(h); }
+                for (const h of r.refs.filter(h=>retained.has(h))) if (!checkedObjects.has(h)) { assert(objectExists.get(h), `缺少历史对象 ${h}`, 409); checkedObjects.add(h); }
                 const visited = new Set(); let cursor = r;
                 while (cursor && !checkedRevisions.has(cursor.id)) {
                     assert(!visited.has(cursor.id), '版本图存在环'); visited.add(cursor.id);
@@ -320,6 +329,8 @@ export class Store {
                 if (b.projectId) this.get('project', b.projectId);
                 this.get('revision', b.head);
                 const old = this.all('branch').find(x => x.id === b.id);
+                if(isTrashed(this,b.id)&&!b.trashDependency)continue;
+                if(b.trashDependency){this.put('branch',{...b,layoutHead:old?.layoutHead||b.layoutHead});continue;}
                 if (!old) {
                     this.put('branch', b);
                     continue;

@@ -1,3 +1,4 @@
+import {bodyRefs} from './retention.js';
 import { hash, assert, mapConcurrent } from './util.js';
 import { sealAsync, unseal } from './sync.js';
 const digest = v => hash(JSON.stringify(v));
@@ -45,7 +46,7 @@ export async function uploadPacks(store, dav, key, refs, cache, save, progress) 
     return { packs, uploaded: pending.length };
 }
 export async function downloadRecords(store, dav, key, graph, progress, onKnown = () => {}) {
-    const refs = [...new Set(graph.revisions.flatMap(r => r.refs))], wanted = new Set(refs);
+    const refs = bodyRefs(graph), wanted = new Set(refs);
     const exists = store.db.prepare('SELECT 1 FROM objects WHERE hash=?');
     const missing = new Set(refs.filter(h => !exists.get(h))), packed = new Set();
     let completed = 0, buffer = {}, bufferedCount = 0, bytes = 0; const total = missing.size, started = Date.now();
@@ -54,7 +55,7 @@ export async function downloadRecords(store, dav, key, graph, progress, onKnown 
     try {
         const packs = (graph.packs || []).filter(p => p.refs?.some(h => missing.has(h)));
         await mapConcurrent(packs, async p => {
-            assert(validHash(p.ref) && Array.isArray(p.refs) && p.refs.every(h => validHash(h) && wanted.has(h)), 'Invalid record pack descriptor.');
+            assert(validHash(p.ref) && Array.isArray(p.refs) && p.refs.every(h => validHash(h)), 'Invalid record pack descriptor.');
             const blob = await dav.get('objects/' + p.ref + '.bin', p.wireBytes || p.bytes); assert(blob, 'Cloud record pack is missing.');
             const value = unseal(blob, key); assert(digest(value) === p.ref && value.schema === 'grove-record-pack-1' && value.objects && !Array.isArray(value.objects), 'Record pack integrity check failed.');
             assert(JSON.stringify(Object.keys(value.objects).sort()) === JSON.stringify([...p.refs].sort()), 'Record pack membership differs.');

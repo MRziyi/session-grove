@@ -20,7 +20,7 @@ Session Grove gives that work a structure:
 - **Name the work, not every message.** Turn a stretch of conversation into “Set up context”, “Draft the introduction” or “Test the alternative”. New conversation stays in Pending until you organize it.
 - **See the branch and read its context together.** The Transcript and Graph stay side by side, with color bands connecting the actual chats to your logical Nodes.
 - **Choose which context to continue with.** Use a recorded compaction result or restore the recorded history before it. The graph shows which earlier Nodes are superseded; choices apply when you activate or explicitly apply the context.
-- **Keep only useful sessions active.** Activate the path you want in your agent. Archive a finished path without losing its shared prefix or cluttering the tree you are still using.
+- **Keep only useful sessions active.** Activate the path you want in your agent. Move failed or unwanted paths to Trash. Keep useful older work in Projects.
 - **Pick up on another Mac.** Named projects and Ungrouped sync through your WebDAV storage. Sync refreshes the saved directory; open a cloud-only tree to download and keep its context locally.
 
 Grove manages the session library. **Codex and Claude Code remain where you actually talk to the agent.** It does not replace their editor integrations or send model requests on your behalf.
@@ -73,7 +73,7 @@ The library retains original session records. Node edits organize those records 
 
 ## Current scope
 
-**0.12.0 · experimental · macOS first.** Same-agent branching, cross-device continuation and cross-agent text conversion with three explicit context modes are supported.
+**0.13.0 · experimental · macOS first.** Same-agent branching, cross-device continuation and cross-agent text conversion with three explicit context modes are supported.
 
 **Context fidelity has limits.** Supported materialization preserves recorded tool calls/results, reasoning and instructions instead of rebuilding a conversation from visible prose. Codex paginated forks resolve their recorded prefix references and remain paginated on activation. Native New branch and Grove Fork have been compared at the same checkpoint, including tool/reasoning records and native projected items. Missing history segments still block context changes. Dynamic client instructions, opaque compaction and external assets prevent a promise of identical model requests. See the [requirements and fidelity audit](docs/requirements-audit.md).
 
@@ -123,3 +123,7 @@ One Sync action pulls before pushing with inline progress. Projects form a conti
 Browsing uses a saved directory. Only cloud-only sessions show a cloud icon; opening one downloads and retains it locally. Sync refreshes the directory and previously downloaded trees, then pushes local changes. Automatic Push starts only after local edits and does not refresh the browsing directory. Older projects collapse together (7/15/30/60 days), context modes show token estimates, and transcript selection preserves scrolling. See [rules and validation](docs/0.11-local-copies.md).
 
 Node selection now scrolls to its transcript segment without rebuilding the same path. Fork branches **before** a selected non-root Node, preserving the preceding completed context. Project contents default to folding sessions older than a week; Settings also supports a row-count limit. Activation uses a folder picker. See the [fidelity and resource audit](docs/0.12-validation.md) for tested boundaries and context modes.
+
+### Discarded work belongs in Trash
+
+Trash removes cloud conversation bodies on Sync and keeps a **local-only recovery copy for 30 days**, configurable in Settings. Shared context required by kept paths is preserved. Expired recovery copies are cleared while Grove runs or on its next startup. Existing archives remain under Previous archives until you explicitly move them to Trash. **Update every device to 0.13+ before the first Trash sync.** See the [Trash lifecycle and cleanup guarantees](docs/trash-design.md).

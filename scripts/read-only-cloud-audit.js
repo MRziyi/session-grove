@@ -8,7 +8,7 @@ const store=new Store(path.join(temp,'library')),config=JSON.parse(fs.readFileSy
 const rootDav=new WebDAV(config),metrics={requests:0,methods:{},bytesReceived:0},protect=dav=>{dav.request=async function(method,...args){assert(['GET','HEAD','PROPFIND'].includes(method),'Read-only audit attempted a mutation.');metrics.requests++;metrics.methods[method]=(metrics.methods[method]||0)+1;return WebDAV.prototype.request.call(this,method,...args);};return dav;};protect(rootDav);
 try{
  const bytes=await rootDav.get('vault.json'),vault=JSON.parse(bytes.toString()),key=vaultKey(vault,pass),dav=vault.generation?protect(rootDav.scoped('generations/'+vault.generation+'/')):rootDav;
- const cloud=new Cloud(store,()=>config);cloud.cacheKey='cloud:'+hash(rootDav.base+vault.salt);cloud.connection={dav,rootDav,key,vaultBytes:bytes};cloud.connect=async()=>cloud.connection;
+ const cloud=new Cloud(store,()=>config);cloud.cacheKey='cloud:'+hash(rootDav.base+vault.salt);cloud.connection={dav,rootDav,key,vaultBytes:bytes,protocol:vault.schema};cloud.connect=async()=>cloud.connection;
  const begin=performance.now();await cloud.catalog(pass);for(const p of cloud.summaries())await cloud.project(p.id,pass);
  const items=cloud.items();metrics.bytesReceived=rootDav.metrics.bytesReceived;const report={projects:cloud.summaries().length,trees:items.length,sessions:items.reduce((n,i)=>n+i.sessions.length,0),claudeTrees:items.filter(i=>i.sessions.some(s=>s.agent==='claude')).length,targetPresent:items.some(i=>targetName&&(i.name===targetName||i.sessions.some(s=>s.name===targetName))),catalogMs:Math.round(performance.now()-begin),metrics};
  if(process.argv.includes('--samples')){

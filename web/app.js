@@ -132,11 +132,11 @@ function renderNavigation() {
     const entry = (scope, name, count, css = '') => `<button class="nav-entry ${css} ${selectedScope === scope ? 'selected' : ''}" data-scope="${esc(scope)}" ${selectedScope === scope ? 'aria-current="page"' : ''}><span class="nav-name">${esc(name)}</span><span class="count">${count}</span></button>`;
     const projectTimes = new Map(projectGroups(d.items.filter(i=>!i.archived).map(i=>({...i,updatedAt:i.sessions.filter(s=>!s.archived).map(s=>s.updatedAt).sort().at(-1)||i.updatedAt})), d.projects).map(g=>[g.id,g.updatedAt]));
     const projects = d.projects.filter(p => !p.archived && (d.items.some(i => i.projectId === p.id && !i.archived) || p.count > 0));
-    const archivedProjects = d.projects.filter(p => p.archived && (d.items.some(i => i.projectId === p.id) || p.index));
+    const archivedProjects = d.projects.filter(p => p.archived && (d.items.some(i => i.projectId === p.id) || p.count>0));
     const archivedSessions = d.items.filter(i => !archivedProjects.some(p => p.id === i.projectId)).reduce((n, i) => n + i.sessions.filter(s => s.archived).length, 0);
     const directory = rows => rows.sort((a,b) => (projectTimes.get(b.id)||'').localeCompare(projectTimes.get(a.id)||'') || a.name.localeCompare(b.name)).map(p => entry(p.id, p.builtin ? t('Ungrouped') : p.name==='Scheduled & background'?t(p.name):p.name, Math.max(p.count || 0, d.items.filter(i => i.projectId === p.id && !i.archived).length))).join('');
     const recent = projects.filter(p=>p.builtin||!isInactive(projectTimes.get(p.id))), older = projects.filter(p=>!p.builtin&&isInactive(projectTimes.get(p.id)));
-    $('#navigation').innerHTML = `<section class="nav-group"><h2 class="nav-label">${t('Current Active')}</h2>${entry('active:codex', 'Codex', d.activeCounts.codex, 'codex')}${entry('active:claude', 'Claude', d.activeCounts.claude, 'claude')}</section><section class="nav-group project-directory"><h2 class="nav-label">${t('Projects')}</h2><div class="project-directory-scroll">${directory(recent)}${older.length?olderToggle(older.length)+(state.olderProjects?directory(older):''):''}</div></section><section class="nav-group"><h2 class="nav-label">${t('Archived')}</h2>${entry('archived', t('Archived items'), archivedProjects.length + archivedSessions)}</section>`;
+    $('#navigation').innerHTML = `<section class="nav-group"><h2 class="nav-label">${t('Current Active')}</h2>${entry('active:codex', 'Codex', d.activeCounts.codex, 'codex')}${entry('active:claude', 'Claude', d.activeCounts.claude, 'claude')}</section><section class="nav-group project-directory"><h2 class="nav-label">${t('Projects')}</h2><div class="project-directory-scroll">${directory(recent)}${older.length?olderToggle(older.length)+(state.olderProjects?directory(older):''):''}</div></section><section class="nav-group"><h2 class="nav-label">${t('Trash')}</h2>${entry('trash',t('Local recovery'),(d.trashEntries||[]).filter(e=>!e.restoredAt&&!e.expired).length)}${archivedProjects.length+archivedSessions?entry('archived',t('Previous archives'),archivedProjects.length+archivedSessions):''}</section>`;
     $('.project-directory-scroll').scrollTop = directoryScroll;
     $$('[data-scope]').forEach(el => el.onclick = () => navigate(el.dataset.scope));
     bindOlderProjects();
@@ -152,7 +152,7 @@ function renderCloudStatus(){
     $('#sync').disabled=offline;$('#sync').setAttribute('aria-busy',String(busy));
     const updating=operations.update?.state==='running'||state.uiBusy==='update';$('#collect').dataset.operation=updating?'running':'';$('#collect').disabled=offline||busy||working;
     $('#collect .button-label').textContent=t(updating?'Updating…':'Update');
-    $$('.actions button,button[data-compaction]').forEach(el=>el.disabled=offline||busy||working);
+    $$('.actions button,button[data-compaction],[data-trash-restore],[data-trash-native]').forEach(el=>el.disabled=offline||busy||working);
     renderTransfer();renderCountdowns();
     const ticking=!document.hidden&&!offline&&(d.update?.nextRunAt||d.cloud?.nextRunAt);
     if(ticking&&!clockTimer)clockTimer=setInterval(renderCountdowns,1000);if(!ticking&&clockTimer){clearInterval(clockTimer);clockTimer=null;}
@@ -196,14 +196,14 @@ function focusProject(id, scroll = true) {
     const tab=$$('[data-scope]').find(el=>el.dataset.scope===id); if(tab && !scroll) tab.scrollIntoView({block:'nearest'});
 }
 async function navigate(scope) {
-    const project = !scope.startsWith('active:') && scope !== 'archived';
+    const project = !scope.startsWith('active:') && scope !== 'archived' && scope !== 'trash';
     const focus = project ? (scope === PROJECTS ? state.projectFocus : scope) : null;
     if(project && state.scope===PROJECTS && !state.tree && !state.query){focusProject(focus);return;}
     ++requestId; opening=false;state.scope=project?PROJECTS:scope;state.projectFocus=focus;state.tree=null;state.list={items:[],sessionCount:0};state.query='';state.selected.clear();clearRange();$('#search').value='';
     render();$('#session-list').innerHTML=`<p class="empty">${t('Loading project index…')}</p>`;
     try {await refresh();if(project&&focus)focusProject(focus);}catch(e){toast(e.message);}
 }
-function title() { if(state.scope === PROJECTS) return t('Projects'); if(state.scope === INBOX) return t('Ungrouped'); return state.scope === 'active:codex' ? t('Active Codex Sessions') : state.scope === 'active:claude' ? t('Active Claude Code Sessions') : state.scope === 'archived' ? t('Archived') : currentProject()?.name || t('Projects'); }
+function title() { if(state.scope==='trash')return t('Trash'); if(state.scope === PROJECTS) return t('Projects'); if(state.scope === INBOX) return t('Ungrouped'); return state.scope === 'active:codex' ? t('Active Codex Sessions') : state.scope === 'active:claude' ? t('Active Claude Code Sessions') : state.scope === 'archived' ? t('Archived') : currentProject()?.name || t('Projects'); }
 function groups() {
     if(state.scope === PROJECTS) return projectGroups(state.list.items,state.data.projects);
     if(state.scope === INBOX && !state.query) {
@@ -224,20 +224,22 @@ function itemMeta(item) {
     return item.sessions[0]?.chats == null ? t('Transcript in cloud') : t('{count} chats', { count: item.sessions[0].chats });
 }
 function renderList() {
+    if(state.scope==='trash'){renderTrash();return;}
     $('#list-title').textContent = title();
-    const pending = state.list.pendingDeactivation || []; $('#active-notice').hidden = !pending.length;
+    const pending = state.list.pendingDeactivation || [],discarded=(state.data.trashNative||[]).filter(i=>i.active&&state.scope==='active:'+i.agent); $('#active-notice').hidden = !pending.length&&!discarded.length;
     $('#active-notice').innerHTML = pending.length ? `<span>${t('{count} archived sessions are still active on this device.',{count:pending.length})}</span><button id="deactivate-archived">${t('Deactivate archived sessions')}</button>` : '';
+    if(discarded.length){$('#active-notice').insertAdjacentHTML('beforeend',`<span>${t('{count} discarded native copies still need cleanup.',{count:discarded.length})}</span><button id="open-trash">${t('Open Trash')}</button>`);$('#open-trash').onclick=()=>navigate('trash');}
     if(pending.length)$('#deactivate-archived').onclick=()=>run(()=>api('/manage','POST',{action:'deactivate',branchIds:pending.map(s=>s.id)}));
     $('#list-count').textContent = t('{count} sessions', { count: state.list.sessionCount || 0 });
     const selected = state.list.items.filter(i => state.selected.has(i.id));
     const organizing = !state.scope.startsWith('active:') && state.scope !== 'archived';
-    $('#list-actions').innerHTML = (organizing?'<button id="select-all"></button>':'') + (selected.length ? `<span class="selection-count">${t('{count} selected',{count:selected.length})}</span>${state.scope==='archived'?'<button id="restore-items"></button>':organizing?'<button id="move-items"></button><button id="archive-items"></button>':'<button id="deactivate-items"></button>'}`:'');
+    $('#list-actions').innerHTML = (organizing?'<button id="select-all"></button>':'') + (selected.length ? `<span class="selection-count">${t('{count} selected',{count:selected.length})}</span>${state.scope==='archived'?'<button id="restore-items"></button><button id="archive-items"></button>':organizing?'<button id="move-items"></button><button id="archive-items"></button>':'<button id="deactivate-items"></button>'}`:'');
     button('#select-all','Select all',()=>{const items=state.scope===PROJECTS&&state.projectFocus?state.list.items.filter(i=>(i.projectId||INBOX)===state.projectFocus):state.list.items;const all=items.every(i=>state.selected.has(i.id));for(const i of items)all?state.selected.delete(i.id):state.selected.add(i.id);renderList();});
     button('#move-items','Move to project',()=>moveDialog([...state.selected]));
-    button('#archive-items','Archive',()=>modal('Archive selected sessions',`<p>${t('Archive {count} selected trees and sessions?',{count:selected.length})}</p>`,async()=>{await api('/manage','POST',{action:'archive',itemIds:[...state.selected]});state.selected.clear();},'Archive'));
+    button('#archive-items','Move to Trash',()=>trashDialog({itemIds:[...state.selected],view:state.scope==='archived'?'archived':'in-use'},selected.length));
     button('#restore-items','Restore',()=>restore({itemIds:[...state.selected]}));
     button('#deactivate-items','Deactivate',()=>run(()=>api('/manage','POST',{action:'deactivate',itemIds:[...state.selected],agent:state.scope.slice(7)})));
-    const row=i=>`<article class="session-row ${state.selected.has(i.id)?'checked':''}" data-item="${esc(i.id)}"><button class="row-open" data-open="${esc(i.id)}">${icon(i.kind)}<span class="row-text"><span class="row-title">${esc(i.name)} ${cloudMark(i)}</span><span class="row-meta">${itemMeta(i)} ${sourceTags(i)}</span></span><time class="row-date">${date(i.updatedAt)}</time></button>${state.scope==='archived'?'':`<input type="checkbox" data-select="${esc(i.id)}" aria-label="${esc(t('Select {name}',{name:i.name}))}" ${state.selected.has(i.id)?'checked':''}>`}</article>`;
+    const row=i=>`<article class="session-row ${state.selected.has(i.id)?'checked':''}" data-item="${esc(i.id)}"><button class="row-open" data-open="${esc(i.id)}">${icon(i.kind)}<span class="row-text"><span class="row-title">${esc(i.name)} ${cloudMark(i)}</span><span class="row-meta">${itemMeta(i)} ${sourceTags(i)}</span></span><time class="row-date">${date(i.updatedAt)}</time></button>${`<input type="checkbox" data-select="${esc(i.id)}" aria-label="${esc(t('Select {name}',{name:i.name}))}" ${state.selected.has(i.id)?'checked':''}>`}</article>`;
     const groupHtml = g=>{const initial=foldedItems(g.items,state.data.preferences),limited=state.scope===PROJECTS&&!state.query&&initial.length<g.items.length,expanded=state.expandedProjects.has(g.id)||g.items.some(i=>state.selected.has(i.id));const shown=limited&&!expanded?initial:g.items;return `<section class="list-group project-group" data-project-group="${esc(g.id||INBOX)}"><h2>${esc(g.name==='Scheduled & background'?t(g.name):g.name)}<span>${g.items.length}</span></h2>${shown.map(row).join('')}${limited?`<button class="show-project" data-expand-project="${esc(g.id)}">${t(expanded?'Show fewer':'Show all {count}',{count:g.items.length})}</button>`:''}</section>`;};
     const allGroups = groups(), older = state.scope===PROJECTS&&!state.query ? allGroups.filter(g=>isInactive(g.updatedAt)) : [], olderIds = new Set(older.map(g=>g.id));
     $('#session-list').innerHTML = allGroups.filter(g=>!olderIds.has(g.id)).map(groupHtml).join('') + (older.length ? `<section class="older-projects">${olderToggle(older.length)}${state.olderProjects?older.map(groupHtml).join(''):''}</section>` : '') || `<p class="empty">${t(state.query?'No matching sessions':'No sessions here.')}</p>`;
@@ -303,7 +305,7 @@ function renderDetailActions() {
     const archived = p.archived || state.data.projects.find(v => v.id === state.tree.projectId)?.archived;
     const editable = !archived && state.scope !== 'archived';
     const dissolve = state.tree.nodes.some(n => !n.pending && n.chatIds.some(id => state.chats.has(id)));
-    $('#detail-actions').innerHTML = state.chats.size ? `<span>${t('{count} selected', { count: state.chats.size })}</span>${editable && state.rangeEnd !== null && canCombine() ? '<button id="combine"></button>' : ''}${editable && state.rangeEnd !== null && dissolve ? '<button id="dissolve"></button>' : ''}<button id="clear-selection"></button>` : node ? `${editable && !node.empty ? '<button id="rename-node"></button>' : ''}${terminal ? archived ? '<button id="restore-session"></button>' : `${p.active || (!p.active && p.canActivate) ? '<button id="toggle-active"></button>' : ''}<button id="archive-path"></button>` : ''}${editable && forkCheckpoint() ? '<button id="fork"></button>' : ''}` : '';
+    $('#detail-actions').innerHTML = state.chats.size ? `<span>${t('{count} selected', { count: state.chats.size })}</span>${editable && state.rangeEnd !== null && canCombine() ? '<button id="combine"></button>' : ''}${editable && state.rangeEnd !== null && dissolve ? '<button id="dissolve"></button>' : ''}<button id="clear-selection"></button>` : node ? `${editable && !node.empty ? '<button id="rename-node"></button>' : ''}${terminal ? archived ? '<button id="restore-session"></button><button id="archive-path"></button>' : `${p.active || (!p.active && p.canActivate) ? '<button id="toggle-active"></button>' : ''}<button id="archive-path"></button>` : ''}${editable && forkCheckpoint() ? '<button id="fork"></button>' : ''}` : '';
     if (!state.chats.size && editable && p.active && p.contextPending && p.canRewriteContext && p.canActivate) $('#detail-actions').innerHTML = '<button id="apply-context"></button>' + $('#detail-actions').innerHTML;
     if (!state.chats.size && editable && terminal) $('#detail-actions').insertAdjacentHTML('beforeend', '<button id="convert-session"></button>');
     button('#convert-session', 'Activate as…', () => conversionDialog(p));
@@ -315,7 +317,7 @@ function renderDetailActions() {
     button('#restore-session', 'Restore', () => restore({ branchIds: [p.branchId] }));
     button('#fork', 'Fork', forkDialog);
     button('#rename-node', 'Rename', renameNode);
-    button('#archive-path', 'Archive', archivePath);
+    button('#archive-path', 'Move to Trash', archivePath);
 }
 function excerpt(text, expanded) {
     if (expanded || text.length < 380) return `<div class="markdown">${markdown(text)}</div>`;
@@ -519,13 +521,21 @@ function renameNode() {
         await api('/trees/' + state.tree.id, 'POST', { action: 'rename', nodeId: n.id, pathId: state.branchId, version: state.tree.version, name: form.get('name') });
     }, n.pending ? 'Save node' : 'Rename');
 }
-function archivePath() {
-    const p = route(), node = selectedNode();
-    if (!node?.endBranchIds.includes(p.branchId)) return;
-    modal('Archive session', `<p>${esc(p.name)}</p><p class="dialog-copy">${t('Archive this complete path, including its shared prefix. Other in-use paths stay visible.')}</p>`, async () => {
-        await api('/manage', 'POST', { action: 'archive', branchIds: [p.branchId], nodeId: node.id, version: state.tree.version }); state.nodeId = null;
-    }, 'Archive');
+function trashDialog(target,count=1){
+    const days=state.data.preferences?.trashRetentionDays||30;
+    modal('Move to Trash',`<p>${t('Discard {count} complete paths or trees?',{count})}</p><p class="dialog-copy">${t('Cloud copies are removed on Sync. Recovery stays only on this device for {days} days. Shared context is protected.',{days})}</p><p class="dialog-copy">${t('All devices need Session Grove 0.13 or newer after the first Trash sync.')}</p>`,async()=>{await api('/trash','POST',target);state.tree=null;state.selected.clear();clearRange();},'Move to Trash');
 }
+function archivePath(){const p=route(),node=selectedNode();if(!node?.endBranchIds.includes(p.branchId))return;trashDialog({branchIds:[p.branchId],nodeId:node.id,version:state.tree.version});}
+function renderTrash(){
+    $('#list-title').textContent=t('Trash');$('#list-actions').innerHTML='';$('#active-notice').hidden=true;
+    const query=state.query.toLocaleLowerCase(),entries=(state.data.trashEntries||[]).filter(e=>!e.restoredAt&&(!query||e.names.some(n=>n.toLocaleLowerCase().includes(query)))),native=(state.data.trashNative||[]).filter(i=>!query||(i.title||i.agent).toLocaleLowerCase().includes(query));
+    $('#list-count').textContent=t('Recovery copies on this device');$('#search').placeholder=t('Search discarded titles…');
+    $('#session-list').innerHTML=`<p class="trash-note">${t('Trash is for discarded work. Useful history belongs in Projects.')}</p>`+entries.filter(e=>!e.restoredAt).map(e=>`<article class="trash-row"><div><strong>${esc(e.names.join(', '))}</strong><small>${t(({pending:'Waiting for Sync',removed:'Cloud removed · cleanup pending',cleaned:'Cloud space reclaimed'})[e.state]||'Waiting for Sync')} · ${e.expired?t('Recovery expired'):t('Local recovery until {date}',{date:new Date(e.expiresAt).toLocaleString(locale()==='zh'?'zh-CN':'en-US',{dateStyle:'medium',timeStyle:'short'})})}</small></div>${!e.expired?`<button data-trash-restore="${esc(e.id)}">${t('Restore as a new session')}</button>`:''}</article>`).join('')+(!entries.length?`<p class="empty">${t('No local recovery copies.')}</p>`:'')+(native.length?`<section class="trash-native"><h2>${t('Native copies on this device')}</h2><p>${t('Close the corresponding agent before removing native copies. Referenced prefixes and changed files are kept for review.')}</p>${native.map(i=>`<article class="trash-row"><span>${esc(i.title||i.agent)}<small>${t(i.active?'Still active in the native client':'Deactivated native copy')}</small></span><button data-trash-native="${esc(i.branchId)}">${t('Remove native copy')}</button></article>`).join('')}</section>`:'');
+    $$('[data-trash-restore]').forEach(el=>el.onclick=async()=>{let target;await run(async()=>{const r=await api('/trash/restore','POST',{id:el.dataset.trashRestore});target=r.projectIds[0];state.scope=PROJECTS;state.tree=null;state.projectFocus=target;state.olderProjects=true;for(const id of r.projectIds)state.expandedProjects.add(id);state.query='';$('#search').value='';toast(t(r.background?'Restored locally. Background visibility still follows Settings.':'Restored to Projects. It is not activated.'));});if(target)focusProject(target);});
+    $$('[data-trash-native]').forEach(el=>el.onclick=()=>run(async()=>{const r=await api('/trash/native','POST',{branchIds:[el.dataset.trashNative]});if(r.blocked.length)toast(r.blocked.map(b=>t(b.reason)).join('\n'));}));
+    renderCloudStatus();
+}
+
 function directoryField(value) { return `<label class="field">${t('Working directory')}<span class="directory-field"><input name="cwd" readonly value="${esc(value||'')}"><button type="button" id="choose-directory">${t('Choose folder')}</button></span></label>`; }
 function bindDirectoryPicker() {
     $('#choose-directory').onclick=async()=>{
@@ -630,7 +640,7 @@ async function settings(options = {}) {
             ${c.encryptionReady && !state.data.cloud.started ? `<p class="setup-hint">${t('Ready. Close Settings and click Sync to review cloud synchronization.')}</p>` : ''}
             <div id="settings-progress" role="status" hidden></div>
           </section>` : ''}
-          <section class="settings-card"><h3>${t('Project contents')}</h3><label class="field">${t('Collapse older sessions')}<select name="projectFoldMode">${[['time','By age'],['count','By count'],['none','Show all']].map(([v,l])=>`<option value="${v}" ${p.projectFoldMode===v?'selected':''}>${t(l)}</option>`).join('')}</select></label>${p.projectFoldMode==='time'?`<label class="field">${t('Keep recent days')}<input type="number" name="projectFoldDays" min="1" max="365" value="${p.projectFoldDays}"></label>`:p.projectFoldMode==='count'?`<label class="field">${t('Visible sessions per project')}<input type="number" name="projectFoldCount" min="1" max="365" value="${p.projectFoldCount}"></label>`:''}</section><section class="settings-card"><h3>${t('Automatic updates')}</h3><div class="timer-row"><label><input type="checkbox" name="showScheduledSessions" ${p.showScheduledSessions?'checked':''}>${t('Show scheduled and background sessions')}</label></div><p class="dialog-copy">${t('Changes save immediately. Native files are never deleted.')}</p>
+          <section class="settings-card"><h3>${t('Trash')}</h3><label class="field">${t('Local recovery days')}<input type="number" name="trashRetentionDays" min="1" max="365" value="${p.trashRetentionDays}"></label><p class="dialog-copy">${t('Applies to newly discarded sessions. Expired copies are removed automatically when Grove runs.')}</p></section><section class="settings-card"><h3>${t('Project contents')}</h3><label class="field">${t('Collapse older sessions')}<select name="projectFoldMode">${[['time','By age'],['count','By count'],['none','Show all']].map(([v,l])=>`<option value="${v}" ${p.projectFoldMode===v?'selected':''}>${t(l)}</option>`).join('')}</select></label>${p.projectFoldMode==='time'?`<label class="field">${t('Keep recent days')}<input type="number" name="projectFoldDays" min="1" max="365" value="${p.projectFoldDays}"></label>`:p.projectFoldMode==='count'?`<label class="field">${t('Visible sessions per project')}<input type="number" name="projectFoldCount" min="1" max="365" value="${p.projectFoldCount}"></label>`:''}</section><section class="settings-card"><h3>${t('Automatic updates')}</h3><div class="timer-row"><label><input type="checkbox" name="showScheduledSessions" ${p.showScheduledSessions?'checked':''}>${t('Show scheduled and background sessions')}</label></div><p class="dialog-copy">${t('Changes save immediately. Native files are never deleted.')}</p>
             <label class="field">${t('Collapse inactive projects after')}<select name="inactiveProjectDays" aria-label="${t('Collapse inactive projects after')}">${[[7,'One week'],[15,'Half a month'],[30,'One month'],[60,'Two months']].map(([days,label])=>`<option value="${days}" ${days===p.inactiveProjectDays?'selected':''}>${t(label)}</option>`).join('')}</select></label>
             ${[['localUpdate', 'Read local sessions', p.localUpdateEnabled, p.localUpdateMinutes], ['autoUpload', 'Automatically upload local changes', p.autoUploadEnabled, p.autoUploadMinutes]].map(([key,label,on,minutes]) => `<div class="timer-row"><label><input type="checkbox" name="${key}Enabled" ${on ? 'checked' : ''}>${t(label)}</label><label class="timer-interval"><input type="number" name="${key}Minutes" value="${minutes}" min="1" max="1440" ${!on ? 'disabled' : ''}><span>${t('minutes')}</span></label></div>`).join('')}
             <p class="dialog-copy">${t('Every upload reads local sessions first. No changes means no scheduled cloud request.')}</p><button type="button" id="save-timers" hidden>${t('Save preferences')}</button>
@@ -675,7 +685,7 @@ async function settings(options = {}) {
         if(c.job?.state==='running') trackJob().catch(e=>$('#dialog-error').textContent=e.message);
         if($('#recover-settings')) $('#recover-settings').onclick=e=>busy(e.currentTarget,async()=>{await api('/settings/recover','POST',{});await refresh();await settings();});
         enhanceSelect($('[name=projectFoldMode]'));
-        for(const el of $$('[name=projectFoldMode],[name=projectFoldDays],[name=projectFoldCount]'))el.onchange=async()=>{try{await api('/settings/timers','POST',{[el.name]:el.name==='projectFoldMode'?el.value:Number(el.value)});state.expandedProjects.clear();await refresh();await settings(options);}catch(e){$('#dialog-error').textContent=e.message;}};
+        for(const el of $$('[name=projectFoldMode],[name=projectFoldDays],[name=projectFoldCount],[name=trashRetentionDays]'))el.onchange=async()=>{try{await api('/settings/timers','POST',{[el.name]:el.name==='projectFoldMode'?el.value:Number(el.value)});state.expandedProjects.clear();await refresh();await settings(options);}catch(e){$('#dialog-error').textContent=e.message;}};
         const timers = () => ({inactiveProjectDays:Number($('[name=inactiveProjectDays]').value),showScheduledSessions:$('[name=showScheduledSessions]').checked, ...Object.fromEntries(['localUpdate','autoUpload'].flatMap(k=>[[k+'Enabled',$(`[name=${k}Enabled]`).checked],[k+'Minutes',Number($(`[name=${k}Minutes]`).value)]]))});
         const validateTimers=()=>{const v=timers();for(const k of ['localUpdate','autoUpload']) $(`[name=${k}Minutes]`).disabled=!v[k+'Enabled'];$('#save-timers').hidden=Object.entries(v).every(([key,value])=>p[key]===value)||Object.entries(v).some(([k,n])=>k.endsWith('Minutes')&&(!Number.isInteger(n)||n<1||n>1440));};
         enhanceSelect($('[name=inactiveProjectDays]'));

@@ -1,3 +1,4 @@
+import {isTrashed} from './trash.js';
 import { preferences } from './preferences.js';
 import { INBOX_ID, inboxProject, cloudProjectId } from './inbox.js';
 import { contentOrigin } from './device.js';
@@ -10,6 +11,8 @@ import { rootOf, treeMembers } from './organization.js';
 // Native threads, collection rows, and logical nodes are distinct projections.
 export const isActive = i => i.applied && !i.missing && !i.excluded && i.cwdAvailable !== false;
 export function visibleSession(store, b, forSync = false) {
+    if(isTrashed(store,b.id)||b.trashed)return false;
+    if(forSync&&store.memo('retention-preserve-remote',()=>new Set(store.local('preserveRemoteForRetention')||[])).has(b.id))return !b.synthetic;
     const show = forSync ? false : preferences(store).showScheduledSessions;
     if ((b.scheduled || b.background) && !show) return false;
     if (b.synthetic || b.excluded && !(show && ['scheduled', 'agent-owned', 'background'].includes(b.excluded))) return false;
@@ -66,18 +69,18 @@ export function listing(store, scope = 'active:codex', query = '') {
 // and materialized path changes never invalidate a user's organization.
 export function buildGraph(store, branchId) {
     const root = rootOf(store, branchId), members = treeMembers(store, root.id), cache = new Map(), messages = new Map();
-    function pathFor(b, revisionId = b.head) {
-        const key = `${b.id}:${revisionId}`;
+    function pathFor(b, revisionId = b.head, end) {
+        const key = `${b.id}:${revisionId}:${end??"all"}`;
         if (cache.has(key)) return cache.get(key);
-        const p = store.parsed(revisionId, b.agent), inventory = store.activity(revisionId, b.agent), visible = p.messages.filter(m => m.role !== 'tool');
+        const p = store.parsed(revisionId, b.agent, end), inventory = store.activity(revisionId, b.agent, end), visible = p.messages.filter(m => m.role !== 'tool');
         const byChat = new Map();
         for (const e of inventory.entries) { if (!byChat.has(e.chatLine)) byChat.set(e.chatLine, []); byChat.get(e.chatLine).push(e); }
         let inherited = [];
         if (b.parentId && b.forkRevision && b.forkEnd > 0) {
             const parent = store.get('branch', b.parentId);
-            const parentPath = pathFor(parent, b.forkRevision);
+            const parentPath = pathFor(parent, b.forkRevision, b.forkParentEnd??b.forkEnd);
             const childPrefix = visible.filter(m => m.line <= b.forkEnd);
-            const parentPrefix = parentPath.filter(m => m.line <= (b.forkParentEnd ?? b.forkEnd));
+            const parentPrefix = parentPath.filter(m => m.line <= (b.forkParentEnd ?? b.forkEnd)).slice(0,childPrefix.length);
             // Rewritten native history must not be mistaken for its former prefix.
             if (childPrefix.length === parentPrefix.length && childPrefix.every((m, i) => m.role === parentPrefix[i].role && m.text === parentPrefix[i].text))
                 inherited = parentPrefix.map((m, i) => ({ ...m, line: childPrefix[i].line }));
@@ -196,6 +199,7 @@ export function buildGraph(store, branchId) {
 export function treeGraph(store, branchId, view = 'all') {
     assert(['all', 'in-use', 'archived'].includes(view), 'Unknown tree view.');
     const root = rootOf(store, branchId);
+    if(isTrashed(store,root.id)&&!treeMembers(store,root.id).some(b=>visibleSession(store,b)))return{id:root.id,name:root.name,view,version:'trashed',paths:[],nodes:[],edges:[],assignments:{},chatCount:0,pendingCount:0};
     // Keep only one full graph: large libraries otherwise retain every visited tree.
     if (store.graphRoot !== root.id) { if (store.graphRoot) { store.memoCache.delete('graph:' + store.graphRoot); for (const key of store.memoCache.keys()) if (key.startsWith('wire:')) store.memoCache.delete(key); } store.graphRoot = root.id; }
     const graph = store.memo('graph:' + root.id, () => buildGraph(store, root.id));

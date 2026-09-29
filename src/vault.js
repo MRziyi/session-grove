@@ -1,5 +1,5 @@
 import { randomBytes, scryptSync } from 'node:crypto';
-import { seal, unseal, WebDAV } from './sync.js';
+import { seal, unseal, WebDAV, assertDavListing } from './sync.js';
 import { assert, hash, mapConcurrent } from './util.js';
 export const APP_FOLDER = '/Session-Grove';
 export function connectionConfig(input, previous = {}) {
@@ -18,10 +18,11 @@ export function createVault(passphrase, generation) {
     return { vault: { schema: 2, mode: key ? 'encrypted' : 'plain', salt, ...(generation ? { generation } : {}), check: seal('session-grove', key).toString('base64') }, key };
 }
 export function vaultKey(vault, passphrase) {
-    assert([1, 2].includes(vault.schema) && /^[a-f0-9]{32}$/.test(vault.salt), 'Unsupported cloud vault.');
+    assert([1, 2, 3].includes(vault.schema) && /^[a-f0-9]{32}$/.test(vault.salt), 'Unsupported cloud vault.');
+    if(vault.schema===3)assert(vault.retentionVersion===1&&typeof vault.generation==='string','Unsupported retention vault.');
     assert(!vault.generation || /^[a-f0-9]{32}$/.test(vault.generation), 'Invalid cloud generation.');
     assert(vault.schema === 1 || ['encrypted', 'plain'].includes(vault.mode), 'Unsupported encryption mode.');
-    const key = vault.schema === 2 && vault.mode === 'plain' ? null : scryptSync(passphrase, vault.salt, 32);
+    const key = vault.schema >= 2 && vault.mode === 'plain' ? null : scryptSync(passphrase, vault.salt, 32);
     assert(unseal(Buffer.from(vault.check, 'base64'), key) === 'session-grove', 'Incorrect encryption passphrase.');
     return key;
 }
@@ -38,9 +39,9 @@ const dirs = ['objects/', 'trees/', 'projects/', 'heads/', 'commits/'];
 async function files(dav) {
     const result = [];
     for (const dir of dirs) { const r = await dav.request('PROPFIND', dir, undefined, { Depth: '1' }); if (r.status === 404) continue; assert(r.ok, 'Could not list cloud objects.');
-        const xml = (await dav.readResponse(r)).toString();
+        const xml = (await dav.readResponse(r)).toString();assertDavListing(xml);
         for (const m of xml.matchAll(/<(?:[\w-]+:)?href[^>]*>([^<]+)<\/(?:[\w-]+:)?href>/g)) { const name = decodeURIComponent(m[1].split('/').at(-1)); if (/^[a-f0-9T-]+\.bin$/.test(name)) result.push(dir + name); }
-    } return [...new Set(result)].sort();
+    } if(await dav.get('trash-state.bin'))result.push('trash-state.bin'); return [...new Set(result)].sort();
 }
 // Stage all objects in a new namespace, verify every read-back, then publish one
 // conditional vault pointer. Until that switch, the previous vault stays readable.
@@ -53,6 +54,7 @@ export async function migrateVault(sourceConfig, destinationConfig, oldPassphras
     const lease = Buffer.from(JSON.stringify({ id: randomBytes(16).toString('hex'), startedAt: new Date().toISOString() }));
     assert(await source.put('migration.json', lease, true), 'Another migration is in progress.');
     const generation = randomBytes(16).toString('hex'), { vault, key } = createVault(newPassphrase, generation);
+    if(oldVault.schema===3){vault.schema=3;vault.retentionVersion=1;}
     const from = oldVault.generation ? source.scoped('generations/' + oldVault.generation + '/') : source;
     let committed = false, lockToken = null;
     try {

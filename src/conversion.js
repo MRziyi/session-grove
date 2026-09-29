@@ -22,7 +22,7 @@ export function prepareConversion(store, branchId, { target, mode, cwd }) {
     const branch = store.get('branch', branchId);
     assert(['codex', 'claude'].includes(target) && target !== branch.agent, 'Choose the other agent.');
     assert(['full', 'lean', 'messages'].includes(mode), 'Choose a context mode.');
-    assert(!branch.excluded && !branch.archived && !branch.synthetic, 'Select an in-use native session.');
+    assert(!store.isTrashed(branchId)&&!branch.excluded && !branch.archived && !branch.synthetic, 'Select an in-use native session.');
     assert(!branch.projectId || !store.get('project', branch.projectId).archived, 'Restore the project first.');
     const raw = store.raw(branch.head), parsed = store.parsed(branch.head, branch.agent);
     assert(!parsed.errors.length && parsed.complete, 'Wait for a complete session or fork at a completed turn.');

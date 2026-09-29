@@ -29,6 +29,16 @@ export function unseal(buffer, key) {
         throw new Error('解密或完整性校验失败，请检查加密口令');
     }
 }
+export function davStatuses(response,body) {
+    if(response.status!==207)return [response.status];
+    return [...String(body||'').matchAll(/HTTP\/[^\s<]+\s+(\d{3})/g)].map(m=>Number(m[1]));
+}
+export function assertDavListing(xml){
+    const resourceStatuses=String(xml).replace(/<(?:[\w-]+:)?propstat\b[^>]*>[\s\S]*?<\/(?:[\w-]+:)?propstat>/gi,'');
+    const failed=[...resourceStatuses.matchAll(/<(?:[\w-]+:)?status[^>]*>\s*HTTP\/[^\s<]+\s+(\d{3})/g)].map(m=>Number(m[1])).filter(n=>n>=400);
+    assert(!failed.length,'WebDAV directory listing failed ('+failed.join(',')+').');
+}
+export function davSucceeded(response,body){const statuses=davStatuses(response,body);return response.ok && (response.status!==207 || statuses.length>0&&statuses.every(s=>s<400));}
 export class WebDAV {
     constructor(config) {
         const url = new URL(config.url);
@@ -46,7 +56,8 @@ export class WebDAV {
         const started = performance.now(); this.metrics.requests++; this.metrics.methods[method] = (this.metrics.methods[method] || 0) + 1; this.metrics.bytesSent += body ? Buffer.byteLength(body) : 0;
         const size = body ? Buffer.byteLength(body) : Number.isFinite(expectedBytes) && expectedBytes > 0 ? expectedBytes : 0;
         const timeout = /^(objects|trees|projects)\//.test(key) || size>262144 ? Math.min(600000, Math.max(180000, 30000 + Math.ceil(size / 32768) * 1000)) : 30000;
-        const response = await fetch(this.base + key.split('/').map(encodeURIComponent).join('/'), { method, body, headers: { Authorization: this.authorization, 'Accept-Encoding': 'identity', ...extra }, redirect: 'error', signal: AbortSignal.any([this.controller.signal, AbortSignal.timeout(timeout)]) });
+        const held=this.lockContext?.active?this.lockContext:null;
+        const response = await fetch(this.base + key.split('/').map(encodeURIComponent).join('/'), { method, body, headers: { ...(held && !['LOCK','UNLOCK'].includes(method) ? {If:'<'+held.uri+'> ('+held.token+')'} : {}), Authorization: this.authorization, 'Accept-Encoding': 'identity', ...extra }, redirect: 'error', signal: AbortSignal.any([this.controller.signal, AbortSignal.timeout(timeout)]) });
         this.metrics.requestMs += performance.now() - started;
         if ([429, 503].includes(response.status)) {
             const retry = response.headers.get('retry-after'), seconds = retry && /^\d+$/.test(retry) ? Number(retry) : retry ? Math.max(0, (Date.parse(retry) - Date.now()) / 1000) : 60;
@@ -60,6 +71,7 @@ export class WebDAV {
             try {
                 const r = await this.request('GET', key, undefined, {}, expectedBytes);
                 if (r.status === 404) return null;
+                if(r.status===207){const body=await this.readResponse(r,1048576);throw new Error('WebDAV GET failed ('+davStatuses(r,body).join(',')+').');}
                 assert(r.ok, `WebDAV GET 失败 (${r.status})`);
                 return await this.readResponse(r);
             } catch(e) {
@@ -82,21 +94,22 @@ export class WebDAV {
     }
     async put(key, body, exclusive = false) {
         const r = await this.request('PUT', key, body, exclusive ? { 'If-None-Match': '*' } : {});
-        await this.readResponse(r, 1024 * 1024);
+        const responseBody=await this.readResponse(r, 1024 * 1024);
         if (exclusive && r.status === 412)
             return false;
-        assert(r.ok, `WebDAV PUT 失败 (${r.status})`);
+        assert(davSucceeded(r,responseBody), `WebDAV PUT 失败 (${davStatuses(r,responseBody).join(',')||r.status})`);
         return true;
     }
     async mkdir(key = '') {
         const r = await this.request('MKCOL', key);
-        await this.readResponse(r, 1024 * 1024);
-        assert(r.ok || r.status === 405, `WebDAV 创建目录失败 (${r.status})`);
+        const body=await this.readResponse(r, 1024 * 1024);
+        assert(davSucceeded(r,body) || r.status === 405, `WebDAV 创建目录失败 (${r.status})`);
     }
     async list(directory = 'commits/', pattern = /^[0-9T-]+-[a-f0-9-]+\.bin$/) {
         const r = await this.request('PROPFIND', directory, undefined, { Depth: '1' });
         assert(r.ok, `WebDAV 列出版本失败 (${r.status})`);
         const xml = (await this.readResponse(r, 16 * 1024 * 1024)).toString();
+        assertDavListing(xml);
         assert(xml.length < 16 * 1024 * 1024, '远端目录过大');
         const result = [];
         for (const m of xml.matchAll(/<(?:[\w-]+:)?href(?:\s[^>]*)?>([\s\S]*?)<\/(?:[\w-]+:)?href>/g)) {

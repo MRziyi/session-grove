@@ -1,15 +1,43 @@
-# Trash proposal — not enabled
+# Trash lifecycle (0.13)
 
-Useful older work belongs in ordinary History projects. Throwaway work can use a separate Trash lifecycle. Local-only archive does not remove remote storage or other devices' copies.
+Trash is discarded work, not a history archive. Keep useful older sessions in Projects.
 
-Proposed behavior, awaiting the user's choice:
+## User behavior
 
-- Moving a whole path or tree to Trash publishes a small deletion marker across devices. The operation device retains a local-only recovery copy for 30 days. Other Grove caches are removed after receiving the marker.
-- Shared prefix records remain while any kept path references them. A deleted path's unique suffix is eligible for cleanup.
-- A running native session is not rewritten or removed silently; deactivate it before native cleanup.
-- Existing Archived records are not automatically migrated, purged or reclassified.
-- Show separate states for logical removal and completed storage cleanup. A restore creates a newer explicit operation and reuploads retained local content.
+- Move a complete path or the visible paths of a tree to Trash. It disappears from in-use views immediately, including cached cloud listings.
+- A private recovery copy stays on the operation device for **30 days by default**. Settings accepts 1–365 days and applies the choice to future discards. Expired copies are removed while Grove is running or on its next startup, independently of the local-update timer.
+- Sync removes discarded conversation bodies from cloud storage. There is no cloud recovery period. Small identity/deletion markers remain so offline devices cannot resurrect the old identity.
+- Shared context, native metadata and companion assets still required by kept paths remain. A whole discarded tree is not kept just to preserve its visible prefix.
+- Restore creates **new session identities**, keeps logical labels, returns them to Projects and does not activate them. Recovery files are not uploaded.
+- An unchanged cache on another device is removed after Sync. Genuinely unsynced local content is rescued locally before removal, without automatically republishing it.
+- Existing **Previous archives** remain unchanged. Selecting them and choosing Move to Trash is an explicit migration.
 
-Safe implementation needs versioned deletion markers that defeat resurrection by offline devices, a stable snapshot of every device head, and validated reachability of immutable manifests/records. Packs may mix live and deleted records and must be rewritten with retained records before the old pack can be removed. Generation publication and conditional writes/locks must prevent races with uploads. Old clients must fail closed instead of republishing a deleted branch. Old native and cloud histories must not be deleted merely because an index row disappears.
+The UI distinguishes **Waiting for Sync**, **Cloud removed · cleanup pending**, and **Cloud space reclaimed**. An error does not falsely report reclaimed space.
 
-The current changes do not perform this remote garbage collection or delete existing cloud data. Archive semantics must not be advertised as reclaiming space until these checks and multi-device recovery tests exist.
+## Native copies
+
+The explicit Trash action uses the existing native deactivation/archive path where it succeeds. Busy or changed native copies remain intact, with a cleanup entry in Trash. Background cloud cleanup does not write native stores. The explicit native-cleanup action requires the corresponding agent to be closed and checks its file identity/hash. Native forks still referencing a file, changed copies, and companion directories needing review are retained rather than removed blindly.
+
+The recovery deadline governs Grove's recovery files. Independently retained native copies must be cleaned through this safe native path; it is not a promise to erase files still required by a native client. Successful native transaction journals shed their duplicate rollback payloads; unfinished journals remain recoverable.
+
+## Cloud protocol and concurrency
+
+**Every device needs Session Grove 0.13+ after the first Trash sync.** Trash upgrades the vault to schema 3 / retention version 1 and publishes schema-6 device heads. Older clients reject the new vault instead of writing stale sessions back.
+
+The cleanup coordinator:
+
+1. Acquires a depth-infinity write lock on the dedicated protocol collection and verifies that unaffiliated writes/overwrites are blocked. Lock tokens are tagged with the locked root URI, including descendant requests. The lease renews during long operations.
+2. Reads all current device indexes, resolves retained branches and native prefix requirements, and stages a new generation containing only retained bodies. Existing archives are preserved even if newer visibility/upload policies would hide them.
+3. Verifies staged records and manifests, publishes deletion markers, then switches the vault pointer under the lock.
+4. Removes obsolete protocol directories/generations and compacts local object storage. Shared immutable revision identities remain for ancestry comparisons, with explicit retained-body ranges rather than keeping discarded suffixes.
+5. Marks cleanup complete only after reclamation. A private cleanup journal supports retry after publication, including when another device has subsequently completed a newer generation.
+
+HTTP 207 is not blanket success: embedded per-resource failures are checked. The implementation accepts no destructive fallback on providers that cannot enforce collection locking. The cloud operation is confined to the configured Session-Grove protocol namespace; unrelated DAV directories are untouched.
+
+Staging can require temporary cloud space for retained data and can be substantial for a large vault. If it fails before publication, the prior generation remains authoritative. If cleanup fails afterward, the new generation stays usable and cleanup can be retried. Interrupted work can leave a temporary generation until retry; no failed attempt is represented as completed reclamation.
+
+## Fidelity and validation
+
+Conversation records retain their original bytes. Sparse manifests specify required ranges and additional native fork metadata. In particular, Claude can inherit metadata located after the chosen checkpoint; those referenced records are retained without keeping the discarded conversation suffix.
+
+Tests cover shared-prefix reclamation, cloud-generation fencing, stale and divergent offline clients, configurable local expiry/startup expiry, legacy archives, native-copy guards, logical labels, HTTP 207 failures, lock renewal, interrupted cleanup and successive cleanup generations. The real Teracloud test uses only a newly created synthetic self-check folder and removes that folder afterward.

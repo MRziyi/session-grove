@@ -22,7 +22,9 @@ export class Settings {
     }
     async verify(body) {
         assert(!this.job || !['running'].includes(this.job.state), 'Settings migration in progress.');
-        const old = this.read(), config = connectionConfig(body, old), result = await verifyConnection(config);
+        const old = this.read(), config = connectionConfig(body, old);
+        assert(!fs.existsSync(path.join(this.root,'trash-cleanup.json'))||config.url===old.url,'Finish Trash cleanup before changing cloud providers.');
+        const result = await verifyConnection(config);
         if (old.url && config.url !== old.url) assert(!result.vault, 'Destination already has a vault. Choose an empty application folder.');
         this.draft = { config, vault: result.vault }; return this.status();
     }

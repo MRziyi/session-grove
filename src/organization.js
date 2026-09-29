@@ -1,3 +1,4 @@
+import {isTrashed} from './trash.js';
 import { id, now, hash, assert, text } from './util.js';
 import { parse } from './transcript.js';
 export function metadata(value, patch) {
@@ -138,7 +139,7 @@ export function detectFamilies(store) {
     const parsed = b => store.parsed(b.head, b.agent);
     const signaturesById = new Map();
     const get = b => { if (!signaturesById.has(b.id)) signaturesById.set(b.id, signatures(parsed(b), b.agent)); return signaturesById.get(b.id); };
-    const branches = store.all('branch').filter(b => !b.synthetic && !b.excluded && !b.background), byId = new Map(branches.map(b => [b.id,b])), nativeParents = new Map();
+    const branches = store.all('branch').filter(b => !isTrashed(store,b.id) && !b.synthetic && !b.excluded && !b.background), byId = new Map(branches.map(b => [b.id,b])), nativeParents = new Map();
     for (const i of store.instances()) if (byId.has(i.branchId)) nativeParents.set(i.nativeId, byId.get(i.branchId));
     for (const b of branches) { const p = store.summary(b.head,b.agent); if (p.nativeId && !nativeParents.has(p.nativeId)) nativeParents.set(p.nativeId,b); }
     // Native pointers already identify the parent and exact prefix. Pin those
@@ -170,12 +171,12 @@ export function detectFamilies(store) {
         grouped++;
     }
     // Only automatically organize the unfiled inbox; user project structure is authoritative.
-    let roots = store.all('branch').filter(b => !b.projectId && !b.parentId && !b.archived && !b.excluded);
+    let roots = store.all('branch').filter(b => !isTrashed(store,b.id) && !b.projectId && !b.parentId && !b.archived && !b.excluded);
     // Native forks can arrive after their parent was filed or organized. Keep
     // the existing family root and its annotations when adopting such a fork.
     for (const fresh of [...roots]) {
         if (fresh.synthetic || fresh.layoutHead || fresh.nodeHead) continue;
-        const candidates = store.all('branch').filter(b => b.id !== fresh.id && b.agent === fresh.agent && !b.archived && !b.excluded && (b.projectId || b.parentId || b.synthetic || b.layoutHead || b.nodeHead) && rootOf(store, b.id).id !== fresh.id);
+        const candidates = store.all('branch').filter(b => !isTrashed(store,b.id) && b.id !== fresh.id && b.agent === fresh.agent && !b.archived && !b.excluded && (b.projectId || b.parentId || b.synthetic || b.layoutHead || b.nodeHead) && rootOf(store, b.id).id !== fresh.id);
         if (!candidates.length) continue;
         const x = get(fresh);
         let best = null;

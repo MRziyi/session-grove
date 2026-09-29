@@ -64,3 +64,7 @@ A private copy of the real 12-session library (about 52 MB of current native log
 ## 0.8.2: dirty-only upload clock and separate download
 
 The main Download action uses pull only. Upload changes lives in the adjacent hover/click/keyboard menu. There is no upload fallback timer while clean: local capture or management starts it on the first dirty observation; repeated status reads do not restart it. Successful publication clears the deadline. Remote freshness checks remain on startup, focus and explicit navigation; this is not a WebDAV push subscription. Transfer progress reports completed verified records and an approximate **current-stage** ETA, throttled to at most five intermediate local UI events per second. Unknown-size preparation and index publication stay indeterminate.
+
+## Trash synchronization (0.13)
+
+A local discard queues deletion work under the existing dirty-only sync policy. Manual Sync can apply it immediately. Cleanup runs before normal publication, uses a verified renewable collection lock, and fences older clients with vault schema 3. Recovery copies stay local; cloud bodies are reclaimed as soon as that Sync completes, without a 30-day cloud retention window. Expiry is a separate local timer and startup check. See [Trash lifecycle](trash-design.md).
