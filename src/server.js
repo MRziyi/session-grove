@@ -1,3 +1,4 @@
+import os from 'node:os';
 import { recordPreview } from './record-preview.js';
 import { VERSION } from './version.js';
 import { INBOX_ID, inboxProject } from './inbox.js';
@@ -95,6 +96,14 @@ export function createApp({ root, roots, guard, demo = false }) {
             }
             if (req.method === 'GET' && route === '/api/events') {
                 res.writeHead(200, {'Content-Type':'text/event-stream','Cache-Control':'no-store','X-Content-Type-Options':'nosniff'}); res.write(': connected\n\n'); streams.add(res); req.on('close',()=>streams.delete(res)); return;
+            }
+            if(req.method==='GET'&&route==='/api/directories'){
+                let directory=url.searchParams.get('path')||os.homedir();
+                if(!path.isAbsolute(directory)||!fs.existsSync(directory))directory=os.homedir();
+                directory=await fs.promises.realpath(directory);assert((await fs.promises.stat(directory)).isDirectory(),'Choose a directory.');
+                const entries=await fs.promises.readdir(directory,{withFileTypes:true});
+                const folders=entries.filter(e=>e.isDirectory()&&!e.name.startsWith('.')).map(e=>({name:e.name,path:path.join(directory,e.name)})).sort((a,b)=>a.name.localeCompare(b.name));
+                return send(200,{path:directory,parent:path.dirname(directory),home:os.homedir(),folders});
             }
             if (req.method === 'GET' && route === '/api/status') return send(200, { ...timing(), cloud: autoSync.status() });
             if (req.method === 'POST' && route === '/api/synchronize/plan') return send(200, await autoSync.prepareSync());

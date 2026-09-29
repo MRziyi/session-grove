@@ -5,7 +5,7 @@
   <title>Session Grove</title><link rel="stylesheet" href="/style.css">
 </head>
 <body>
-  <header class="banner"><a class="brand" href="/">Session Grove</a><span id="demo-badge"></span><div class="banner-actions"><div id="sync-control" class="sync-control"><button id="transfer-progress" class="transfer-inline" type="button" hidden aria-live="polite"></button><span id="cloud-status" role="status"></span><button id="sync"></button></div><button id="collect"></button><button id="settings"></button></div></header>
+  <header class="banner"><a class="brand" href="/">Session Grove</a><span id="demo-badge"></span><div class="banner-actions"><div id="sync-control" class="sync-control"><div id="transfer-progress" class="transfer-inline" hidden role="status" aria-live="polite"></div><span id="cloud-status" role="status"></span><button id="sync"></button></div><button id="collect"></button><button id="settings"></button></div></header>
   <div id="layout" class="layout">
     <aside class="navigation"><button id="toggle-navigation" class="pane-toggle" title="Collapse projects">‹</button><nav id="navigation" aria-label="Navigation"></nav><footer class="nav-footer"><button id="about">About</button><button id="information" aria-label="Information">ⓘ</button></footer></aside>
     <aside id="session-rail" class="session-rail" hidden><button id="toggle-rail" class="pane-toggle">‹</button><div id="rail-content"></div></aside>
@@ -13,7 +13,7 @@
     <section id="detail-page" hidden><div class="detail-heading"><button id="back"></button><h1 id="session-title"></h1><span id="session-meta"></span><button id="source"></button></div><div class="toolbar"><span id="detail-count"></span><div id="detail-actions" class="actions"></div></div><div id="editor" class="editor"><section class="transcript-panel"><div class="panel-heading"><h2 id="transcripts-title"></h2><select id="branch-picker" aria-label="Session branch"></select></div><div id="range-hint"></div><div id="transcripts" tabindex="0"></div></section><div id="ribbon-lane" role="separator" aria-label="Resize transcript and graph" aria-orientation="vertical" tabindex="0"><svg id="ribbons"></svg></div><section class="graph-panel"><div class="panel-heading"><h2 id="graph-title"></h2><div class="graph-controls"><button id="zoom-out" aria-label="Zoom out">−</button><span id="zoom-label">100%</span><button id="zoom-in" aria-label="Zoom in">+</button><button id="graph-fit">Fit tree</button><button id="graph-reset">Reset view</button></div></div><div id="graph-scroll"><div id="graph"></div></div></section></div></section></main>
   </div>
   <dialog id="dialog"><form id="dialog-form"><div class="dialog-heading"><h2 id="dialog-title"></h2><button type="button" id="dialog-close" aria-label="Close">×</button></div><div id="dialog-content"></div><p id="dialog-error" role="alert"></p><div class="dialog-actions"><button type="button" id="dialog-cancel"></button><button type="submit" id="dialog-submit" class="primary"></button></div></form></dialog>
-  <dialog id="sync-dialog"><div class="dialog-heading"><h2>Sync</h2><button id="sync-close" type="button">×</button></div><div id="sync-detail"></div><p id="sync-error" role="alert"></p><div class="dialog-actions"><button id="sync-cancel" type="button">Cancel</button><button id="sync-confirm" class="primary" type="button">Sync now</button></div></dialog>
+
   <div id="toast" role="status" aria-live="polite"></div><script type="module" src="/app.js"></script>
 </body>
 </html>

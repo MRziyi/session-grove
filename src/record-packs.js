@@ -3,11 +3,13 @@ import { sealAsync, unseal } from './sync.js';
 const digest = v => hash(JSON.stringify(v));
 const validHash = h => typeof h === 'string' && /^[a-f0-9]{64}$/.test(h);
 export async function uploadPacks(store, dav, key, refs, cache, save, progress) {
-    const wanted = new Set(refs), singles = new Set(cache.uploadedObjects || []);
+    const wanted = new Set(refs);
     const reused = (cache.packs || []).filter(p => p.refs.every(h => wanted.has(h)));
-    const covered = new Set([...singles, ...reused.flatMap(p => p.refs)]);
+    // A changed tree is republished with packs even if some records were once
+    // uploaded as single objects. Clean trees never enter this path.
+    const covered = new Set(reused.flatMap(p => p.refs));
     const pending = refs.filter(h => !covered.has(h)).sort(), packs = [...reused];
-    let completed = 0, batch = {}, bytes = 0, transferredBytes = 0, failure = null, sinceSave = 0;
+    let completed = 0, batch = {}, batchCount = 0, bytes = 0, transferredBytes = 0, failure = null, sinceSave = 0;
     const total = pending.length, started = Date.now(), inFlight = new Set();
     const send = async value => {
         const ref = digest(value), descriptor = { ref, refs: Object.keys(value.objects), bytes: Buffer.byteLength(JSON.stringify(value)) };
@@ -21,8 +23,8 @@ export async function uploadPacks(store, dav, key, refs, cache, save, progress) 
         progress(completed, total, started, { bytes: transferredBytes, requestsSaved: Math.max(0, completed - packs.length) });
     };
     const stage = async () => {
-        if (!Object.keys(batch).length) return;
-        const value = { schema: 'grove-record-pack-1', objects: batch }; batch = {}; bytes = 0;
+        if (!batchCount) return;
+        const value = { schema: 'grove-record-pack-1', objects: batch }; batch = {}; batchCount = 0; bytes = 0;
         const work = send(value).catch(e => { failure ||= e; }).finally(() => inFlight.delete(work));
         inFlight.add(work);
         // Keep all four slots useful: a large pack must not hold a wave barrier
@@ -35,8 +37,8 @@ export async function uploadPacks(store, dav, key, refs, cache, save, progress) 
             if (failure) throw failure;
             const body = store.objectStatement.get(h)?.body; assert(typeof body === 'string', 'Missing local transcript.');
             const size = Buffer.byteLength(body);
-            if (bytes && (bytes + size > 2 * 1024 * 1024 || Object.keys(batch).length >= 256)) await stage();
-            batch[h] = body; bytes += size;
+            if (bytes && (bytes + size > 2 * 1024 * 1024 || batchCount >= 256)) await stage();
+            batch[h] = body; batchCount++; bytes += size;
         }
         await stage(); await Promise.all(inFlight); if (failure) throw failure;
     } finally { await Promise.all(inFlight); save(); }
@@ -46,9 +48,9 @@ export async function downloadRecords(store, dav, key, graph, progress, onKnown 
     const refs = [...new Set(graph.revisions.flatMap(r => r.refs))], wanted = new Set(refs);
     const exists = store.db.prepare('SELECT 1 FROM objects WHERE hash=?');
     const missing = new Set(refs.filter(h => !exists.get(h))), packed = new Set();
-    let completed = 0, buffer = {}, bytes = 0; const total = missing.size, started = Date.now();
-    const checkpoint = () => { if (!Object.keys(buffer).length) return; store.transaction(() => { for (const [h, body] of Object.entries(buffer)) store.insertObject.run(h, body); }); buffer = {}; bytes = 0; };
-    const accept = (h, body) => { assert(validHash(h) && typeof body === 'string' && hash(body) === h, 'Transcript integrity check failed.'); if (!missing.delete(h)) return; buffer[h] = body; bytes += Buffer.byteLength(body); completed++; if (bytes >= 4 * 1024 * 1024 || Object.keys(buffer).length >= 128) checkpoint(); progress(completed, total, started); };
+    let completed = 0, buffer = {}, bufferedCount = 0, bytes = 0; const total = missing.size, started = Date.now();
+    const checkpoint = () => { if (!bufferedCount) return; store.transaction(() => { for (const [h, body] of Object.entries(buffer)) store.insertObject.run(h, body); }); buffer = {}; bufferedCount = 0; bytes = 0; };
+    const accept = (h, body) => { assert(validHash(h) && typeof body === 'string' && hash(body) === h, 'Transcript integrity check failed.'); if (!missing.delete(h)) return; buffer[h] = body; bufferedCount++; bytes += Buffer.byteLength(body); completed++; if (bytes >= 4 * 1024 * 1024 || bufferedCount >= 128) checkpoint(); progress(completed, total, started); };
     try {
         const packs = (graph.packs || []).filter(p => p.refs?.some(h => missing.has(h)));
         await mapConcurrent(packs, async p => {

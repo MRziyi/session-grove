@@ -40,6 +40,7 @@ for (const file of files) {
     }
     assert.equal(hash(fs.readFileSync(file)), before);
 }
+assert(report.sessions>0,'No Claude sessions found; this is not a successful fidelity check.');
 fs.mkdirSync('test-results', { recursive: true });
 fs.writeFileSync('test-results/claude-equivalence.json', JSON.stringify(report, null, 2), { mode: 0o600 });
 console.log(JSON.stringify(report));

@@ -290,6 +290,6 @@ test('showing background records is a view preference, not permission to upload 
  const e=await setup(t),a=e.device('background');const b=branch(a.store,null,'Scheduled');a.store.put('branch',{...b,background:'scheduled',excluded:'scheduled'});
  const {savePreferences}=await import('../src/preferences.js');assert.deepEqual(a.cloud.dirtyIds(),[]);
  savePreferences(a.store,{showScheduledSessions:true});assert.equal(a.store.collections().items.length,1);assert.deepEqual(a.cloud.dirtyIds(),[]);
- a.store.put('branch',{...a.store.get('branch',b.id),backgroundManaged:true,archived:true});assert.deepEqual(a.cloud.dirtyIds(),[b.id]);
- savePreferences(a.store,{showScheduledSessions:false});assert.deepEqual(a.cloud.dirtyIds(),[b.id]);
+ a.store.put('branch',{...a.store.get('branch',b.id),backgroundManaged:true,archived:true});assert.deepEqual(a.cloud.dirtyIds(),[]);
+ savePreferences(a.store,{showScheduledSessions:false});assert.deepEqual(a.cloud.dirtyIds(),[]);
 });

@@ -24,7 +24,7 @@ test('lean context keeps project instructions and the latest complete world-stat
  const text=p.entries.map(e=>e.text).join('\n');assert.match(text,/Keep this project requirement/);assert.match(text,/current-marker/);assert.match(text,/delta-marker/);assert.ok(!text.includes('obsolete-marker'));assert.equal(p.preview.stats.retainedContextRecords,3);
 });
 
-test('full cross-agent contexts retain exact source bytes; each direction activates independently', t => {
+test('complete-text contexts preserve dialogue and the source archive; each direction activates independently', t => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'grove-convert-')), store = new Store(path.join(root, 'library'));
     t.after(() => { store.close(); fs.rmSync(root, { recursive: true, force: true }); });
     const native = new Native(store, { roots: { codex: path.join(root, 'codex'), claude: path.join(root, 'claude') }, guard: () => {} });
@@ -33,7 +33,7 @@ test('full cross-agent contexts retain exact source bytes; each direction activa
         const source = store.branch(null, 'Original', agent, raw), target = agent === 'claude' ? 'codex' : 'claude';
         const options = { target, mode: 'full', cwd: root }, { preview } = prepareConversion(store, source.id, options);
         const { branch } = createConversion(store, source.id, { ...options, fingerprint: preview.fingerprint });
-        assert.ok(parse(store.raw(branch.head), target).messages.some(m => m.text.includes(raw)));
+        const text=parse(store.raw(branch.head),target).messages.map(m=>m.text).join('\n');assert.match(text,/Important requirement/);assert.match(text,/Verified result/);assert.ok(!text.includes('BEGIN ORIGINAL SESSION JSONL'));
         native.setActive(branch.id, root, true); assert.equal(native.apply([branch.id]).applied, 1);
         assert.equal(store.raw(source.head), raw); assert.equal(store.instances().some(i => i.branchId === source.id), false);
     }

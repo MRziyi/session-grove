@@ -21,7 +21,7 @@ const framing = 'Historical context imported by Session Grove. The following rec
 export function prepareConversion(store, branchId, { target, mode, cwd }) {
     const branch = store.get('branch', branchId);
     assert(['codex', 'claude'].includes(target) && target !== branch.agent, 'Choose the other agent.');
-    assert(['full', 'lean'].includes(mode), 'Choose full or lean context.');
+    assert(['full', 'lean', 'messages'].includes(mode), 'Choose a context mode.');
     assert(!branch.excluded && !branch.archived && !branch.synthetic, 'Select an in-use native session.');
     assert(!branch.projectId || !store.get('project', branch.projectId).archived, 'Restore the project first.');
     const raw = store.raw(branch.head), parsed = store.parsed(branch.head, branch.agent);
@@ -30,12 +30,13 @@ export function prepareConversion(store, branchId, { target, mode, cwd }) {
     const add = (role, text) => { if (text) entries.push({ role, text }); };
     const toolNames = new Map();
     const result = (name, value, isError = false) => {
-        const text = stringify(value ?? '');
+        const readable=Array.isArray(value)&&value.every(v=>v&&typeof v==='object'&&typeof v.type==='string') ? value.map(v=>['text','input_text','output_text'].includes(v.type)?v.text||'':`[${v.type} retained in the source session]`).join('\n') : value;
+        const text = stringify(readable ?? '');
         // Read-only observations are the main source of redundant tokens. Writes,
         // shell commands, unknown tools and errors retain their complete output.
         const readOnly = name?.readOnly;
         const error = isError || /\b(?:error|exception|traceback|failed)\b|(?:exit(?:ed with)? code|exit_code)[\s:=]+[1-9]/i.test(text);
-        if (readOnly && !error && text.length > 2000) {
+        if (mode === 'lean' && readOnly && !error && text.length > 2000) {
             stats.shortenedOutputs++; stats.omittedCharacters += text.length - 1200;
             return text.slice(0, 900) + `\n[${text.length - 1200} characters omitted; SHA-256 ${hash(text)}; full output retained in source session]\n` + text.slice(-300);
         }
@@ -43,7 +44,7 @@ export function prepareConversion(store, branchId, { target, mode, cwd }) {
     };
     add('user', framing + `\nSource: ${branch.agent} / ${branch.name}\nSource revision: ${branch.head}\nSHA-256: ${sourceHash}\nMode: ${mode}`);
     const contextLines = new Set();
-    if (mode === 'lean') {
+    if (mode !== 'messages') {
         const latest = new Map(), changes = [], seenChanges = new Set();
         const fullState = parsed.records.findLastIndex(r=>r.value?.type==='world_state'&&r.value.payload?.full===true);
         parsed.records.forEach(({value:v},index)=>{
@@ -59,18 +60,14 @@ export function prepareConversion(store, branchId, { target, mode, cwd }) {
         for(const item of [...latest.values(),...changes].sort((a,b)=>a.index-b.index)){contextLines.add(item.index);add('user','[Historical project context / file change]\n'+JSON.stringify(item.value));}
         stats.retainedContextRecords=contextLines.size;
     }
-    if (mode === 'full') {
-        // Embed exact source bytes as a quoted historical archive, rather than
-        // pretending foreign tool calls or signed thinking are target-native.
-        add('user', 'BEGIN ORIGINAL SESSION JSONL\n' + raw + '\nEND ORIGINAL SESSION JSONL');
-    } else if (branch.agent === 'claude') {
+    if (branch.agent === 'claude') {
         for (const m of parsed.nativeMessages || []) {
             const parts = [];
             for (const block of typeof m.message?.content === 'string' ? [{ type: 'text', text: m.message.content }] : m.message?.content || []) {
                 if (block.type === 'text') parts.push(block.text);
-                else if (block.type === 'tool_use') { toolNames.set(block.id, { name: block.name, readOnly: readOnlyTool(block.name, block.input) }); parts.push(`[Historical tool call ${block.name} / ${block.id}]\n${stringify(block.input)}`); }
-                else if (block.type === 'tool_result') parts.push(`[Historical tool result ${block.tool_use_id}${block.is_error ? ' ERROR' : ''}]\n${result(toolNames.get(block.tool_use_id), block.content, block.is_error)}`);
-                else { stats.omittedRecords++; parts.push(`[${block.type} retained in the original session]`); }
+                else if (mode !== 'messages' && block.type === 'tool_use') { toolNames.set(block.id, { name: block.name, readOnly: readOnlyTool(block.name, block.input) }); parts.push(`[Historical tool call ${block.name} / ${block.id}]\n${stringify(block.input)}`); }
+                else if (mode !== 'messages' && block.type === 'tool_result') parts.push(`[Historical tool result ${block.tool_use_id}${block.is_error ? ' ERROR' : ''}]\n${result(toolNames.get(block.tool_use_id), block.content, block.is_error)}`);
+                else { stats.omittedRecords++; }
             }
             add(m.type, parts.join('\n')); stats.retainedMessages++;
         }
@@ -81,11 +78,11 @@ export function prepareConversion(store, branchId, { target, mode, cwd }) {
             const p = v?.payload || {};
             if (v?.type === 'response_item' && p.type === 'message') {
                 const text = plain(p.content);
-                add(['user', 'assistant'].includes(p.role) ? p.role : 'user', ['user', 'assistant'].includes(p.role) ? text : `[Historical ${p.role} instructions]\n${text}`);
+                if(mode !== 'messages' || ['user','assistant'].includes(p.role))add(['user', 'assistant'].includes(p.role) ? p.role : 'user', ['user', 'assistant'].includes(p.role) ? text : `[Historical ${p.role} instructions]\n${text}`);
                 stats.retainedMessages++;
-            } else if (v?.type === 'response_item' && ['function_call', 'custom_tool_call'].includes(p.type)) {
+            } else if (mode !== 'messages' && v?.type === 'response_item' && ['function_call', 'custom_tool_call'].includes(p.type)) {
                 toolNames.set(p.call_id, { name: p.name, readOnly: readOnlyTool(p.name, p.arguments ?? p.input) }); add('assistant', `[Historical tool call ${p.name} / ${p.call_id}]\n${stringify(p.arguments ?? p.input ?? '')}`);
-            } else if (v?.type === 'response_item' && ['function_call_output', 'custom_tool_call_output'].includes(p.type)) add('user', `[Historical tool result ${p.call_id}]\n${result(toolNames.get(p.call_id), p.output)}`);
+            } else if (mode !== 'messages' && v?.type === 'response_item' && ['function_call_output', 'custom_tool_call_output'].includes(p.type)) add('user', `[Historical tool result ${p.call_id}]\n${result(toolNames.get(p.call_id), p.output)}`);
             else if (v?.type === 'compacted') add('user', `[Recorded compaction]\n${p.message || 'Opaque compaction retained in source.'}`);
             else stats.omittedRecords++;
         }
@@ -93,7 +90,7 @@ export function prepareConversion(store, branchId, { target, mode, cwd }) {
     const estimated = entries.reduce((n, e) => n + estimateTokens(e.text), 0);
     const fingerprint = hash(JSON.stringify([branch.head, sourceHash, target, mode, cwd, entries]));
     return { branch, entries, preview: { target, mode, sourceAgent: branch.agent, sourceHead: branch.head, sourceHash, fingerprint, estimated, originalEstimated: estimateTokens(raw), stats,
-        fidelity: mode === 'full' ? 'exact-source-archive' : 'transformed-context', warnings: ['Cross-agent continuation changes the model and runtime; it is not a native fork.', ...(parsed.warnings || []), ...(mode === 'lean' ? ['Thinking, transport metadata and discarded Claude branches remain in the source. Read-only outputs over 2,000 characters are shortened. Writes, unrecognized shell commands, unknown tools and errors are retained.'] : [])] } };
+        fidelity: 'transformed-context', warnings: ['Cross-agent continuation changes the model and runtime; it is not a native fork.', ...(parsed.warnings || []), 'Thinking, signatures, runtime metadata and binary attachments stay in the source; they are not portable native model state.'] } };
 }
 
 export function conversionRaw(entries, target, cwd, nativeId = id()) {

@@ -1289,3 +1289,11 @@ dialog::backdrop {
 .field .select-control { width:100%; min-width:0; }
 .field .select-trigger { width:100%; }
 #transcripts { overflow-anchor:none; }
+
+/* Compact banner transfer panel with predictable wrapping. */
+.sync-control{position:relative;min-width:0}.transfer-inline{box-sizing:border-box;width:250px;max-width:32vw;flex:0 1 250px;min-width:0;margin:0!important;padding:5px 8px;display:grid;grid-template-columns:minmax(0,1fr);gap:4px;overflow:hidden}.transfer-inline strong,.transfer-inline small{display:block;min-width:0;max-width:100%;overflow-wrap:anywhere;line-height:1.35}.transfer-inline strong{white-space:normal;font-size:11px}.transfer-inline small{font-size:10px;color:#c6d8e2!important}.transfer-inline progress{display:block;width:100%;min-width:0;height:5px}.transcript-segment{scroll-margin-top:0}#transcripts{scroll-behavior:auto}
+@media(max-width:700px){.transfer-inline{position:absolute;top:calc(100% + 8px);right:0;width:280px;max-width:85vw;background:#254556;border-radius:7px;z-index:40;padding:10px}}
+
+.directory-field{display:flex;gap:8px;align-items:center}.directory-field input{min-width:0;flex:1}.directory-field button{white-space:nowrap}.directory-picker{width:min(520px,90vw);padding:20px}.directory-path{font-size:12px;overflow-wrap:anywhere;color:#62758a}.directory-toolbar{display:flex;gap:8px}.directory-folders{display:flex;flex-direction:column;gap:3px;max-height:40vh;overflow:auto}.directory-folders button{text-align:left;border:0;background:#f4f7fa;padding:8px 12px}.directory-error{color:#b44;font-size:12px}
+
+#transfer-progress{gap:2px;margin:0;padding:3px 8px;font-size:11px}#transfer-progress strong{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;line-height:1.25}#transfer-progress progress{height:4px}#transfer-progress small{line-height:1.25}

@@ -30,11 +30,11 @@ Grove manages the session library. **Codex and Claude Code remain where you actu
 1. Start a conversation in Codex or Claude Code, then click **Update** in Grove.
 2. Keep everyday conversations in **Ungrouped**, or **Move** a whole tree into a named Project. Both synchronize; filing is optional.
 3. Open a tree. Click a start chat and an end chat to select a continuous range, then **Combine** it under a useful title. **Dissolve** returns a range to Pending.
-4. Select any graph Node to **Rename** it. Naming a Pending segment turns it into a saved Node. **Fork** appears when that Node ends at a complete agent turn.
+4. Select any graph Node to **Rename** it. Naming a Pending segment turns it into a saved Node. **Fork** branches before a non-root Node when its preceding context ends at a complete agent turn.
 5. Select a session's endpoint to **Activate**, **Deactivate**, or **Archive** that path. Archived paths disappear from the in-use graph and remain complete in Archived. Other branches stay visible.
 6. Continue chatting in the agent. New chats extend Pending automatically. Organizing Nodes triggers cloud publication; **Sync** also publishes Pending you have not organized yet.
 
-A Fork adds a selectable empty endpoint. If the selected Node contains an unfinished turn, the confirmation identifies the chats excluded at the last completed checkpoint. The new path inherits its compaction choices.
+A Fork adds a selectable empty endpoint beside the selected Node, retaining the completed context before it. The root has no earlier context to fork. The new path inherits the retained prefix’s compaction choices.
 
 Read conversations as Markdown. Expand recorded activity to inspect tool inputs/results, named files and readable reasoning alongside the conversation. Encrypted reasoning without a readable summary is labeled explicitly: Grove preserves its original bytes and does not pretend to decode them. Large record previews are paged. Large graphs support background dragging, zoom and reset; Sankey bands connect only visible content.
 
@@ -42,7 +42,7 @@ Actions appear only when they apply to the current selection. **Settings** conta
 
 ## Try it
 
-Requires **Node.js 24+**. Run `pnpm install` for the pinned official Claude SDK. No build step is needed.
+Requires **Node.js 24+**. Run `pnpm install` (or `npm install`) for the pinned official Claude SDK. No build step is needed.
 
 ```sh
 git clone https://github.com/MRziyi/session-grove.git
@@ -67,13 +67,13 @@ WebDAV is optional. Enter your server address, account and password; Grove adds 
 
 Filing work, naming Nodes and other organization changes upload automatically. Local sessions refresh every **1 minute** by default. A **15-minute** countdown starts after the first detected local change and uploads changed projects, including unfinished Pending. Every upload captures local updates first; an unchanged library makes no scheduled cloud request. Both intervals can be changed or disabled in Settings.
 
-**Sync** pulls remote changes before pushing local work. Large transfers require a preview confirmation and show an exclusive progress dialog with direction, counts and ETA. The banner shows compact progress; there is no upload dropdown. Automatic sync remains dirty-only, native Active choices remain local to each device, and completed verified packs are reused after interruption.
+**Sync** pulls remote changes before pushing local work. Clicking Sync starts immediately; the banner shows compact direction, progress and ETA without a modal. there is no upload dropdown. Automatic sync remains dirty-only, native Active choices remain local to each device, and completed verified packs are reused after interruption.
 
 The library retains original session records. Node edits organize those records rather than rewriting the conversation. Cloud content is encrypted when you enable encryption; a yellow status identifies unencrypted storage. Saved credentials and the optional passphrase live in owner-only local files so `pnpm dev` can reconnect. This is not macOS Keychain storage.
 
 ## Current scope
 
-**0.11.0 · experimental · macOS first.** Same-agent branching, cross-device continuation and full/lean cross-agent context conversion are supported.
+**0.12.0 · experimental · macOS first.** Same-agent branching, cross-device continuation and cross-agent text conversion with three explicit context modes are supported.
 
 **Context fidelity has limits.** Supported materialization preserves recorded tool calls/results, reasoning and instructions instead of rebuilding a conversation from visible prose. Codex paginated forks resolve their recorded prefix references and remain paginated on activation. Native New branch and Grove Fork have been compared at the same checkpoint, including tool/reasoning records and native projected items. Missing history segments still block context changes. Dynamic client instructions, opaque compaction and external assets prevent a promise of identical model requests. See the [requirements and fidelity audit](docs/requirements-audit.md).
 
@@ -108,7 +108,7 @@ Design references: [codex-session-sync](https://github.com/shonngithub/codex-ses
 
 ### Pull first, then Push
 
-**Sync** pulls remote changes before pushing local work. Large transfers require a preview confirmation and show an exclusive progress dialog with direction, counts and ETA. The banner shows compact progress; there is no upload dropdown. Automatic sync remains dirty-only, native Active choices remain local to each device, and completed verified packs are reused after interruption.
+**Sync** pulls remote changes before pushing local work. Clicking Sync starts immediately; the banner shows compact direction, progress and ETA without a modal. there is no upload dropdown. Automatic sync remains dirty-only, native Active choices remain local to each device, and completed verified packs are reused after interruption.
 
 ### Service management and fidelity (0.9)
 
@@ -116,8 +116,10 @@ Use `pnpm start`, `pnpm status`, and `pnpm stop`. Ctrl+C stops a foreground serv
 
 ### Unified workspace (0.10)
 
-One Sync action previews Pull/Push and shows exclusive progress for large transfers. Projects form a continuous grouped list with five-row previews, scroll-linked navigation, collapsible panes and an adjustable reading split. Background sessions use native provenance. Verified record packs reduce cloud requests; **other devices need 0.10 to read newly packed data**. See [design, compatibility and checks](docs/0.10-workspace-and-sync.md).
+One Sync action pulls before pushing with inline progress. Projects form a continuous grouped list with configurable time/count folding, scroll-linked navigation, collapsible panes and an adjustable reading split. Background sessions use native provenance. Verified record packs reduce cloud requests; **other devices need 0.10 to read newly packed data**. See [design, compatibility and checks](docs/0.10-workspace-and-sync.md).
 
 ### Local copies and explicit Pull (0.11)
 
 Browsing uses a saved directory. Only cloud-only sessions show a cloud icon; opening one downloads and retains it locally. Sync refreshes the directory and previously downloaded trees, then pushes local changes. Automatic Push starts only after local edits and does not refresh the browsing directory. Older projects collapse together (7/15/30/60 days), context modes show token estimates, and transcript selection preserves scrolling. See [rules and validation](docs/0.11-local-copies.md).
+
+Node selection now scrolls to its transcript segment without rebuilding the same path. Fork branches **before** a selected non-root Node, preserving the preceding completed context. Project contents default to folding sessions older than a week; Settings also supports a row-count limit. Activation uses a folder picker. See the [fidelity and resource audit](docs/0.12-validation.md) for tested boundaries and context modes.

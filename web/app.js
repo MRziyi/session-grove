@@ -1,4 +1,4 @@
-import { projectGroups, selectRange, inactiveProject } from './library-view.js';
+import { foldedItems, pendingLabels, forkBeforeNode, projectGroups, selectRange, inactiveProject } from './library-view.js';
 import { markdown } from './markdown.js';
 import { enhanceSelect } from './select.js';
 import { t, locale, setLocale, errorText } from './i18n.js';
@@ -76,7 +76,8 @@ const date = value => value ? new Date(value).toLocaleString(locale() === 'zh' ?
 const currentProject = () => state.data.projects.find(p => p.id === state.scope);
 const route = () => state.tree?.paths.find(p => p.branchId === state.branchId);
 const selectedNode = () => state.tree?.nodes.find(n => n.id === state.nodeId);
-const nodeName = n => n.name || `${t('Pending')} ${state.tree.nodes.filter(v => v.pending).findIndex(v => v.id === n.id) + 1}`;
+let labeledTree, nodeLabels;
+const nodeName = n => { if(labeledTree!==state.tree){labeledTree=state.tree;nodeLabels=pendingLabels(state.tree.nodes);}return n.name||`${t('Pending')} ${nodeLabels.get(n.id)}`; };
 function toast(message) { $('#toast').textContent = message; $('#toast').classList.add('show'); clearTimeout(toastTimer); toastTimer = setTimeout(() => $('#toast').classList.remove('show'), 6000); }
 async function api(path, method = 'GET', body, retried = false) {
     let r;
@@ -130,11 +131,11 @@ function renderNavigation() {
     const selectedScope = state.scope === PROJECTS ? state.projectFocus : state.scope;
     const entry = (scope, name, count, css = '') => `<button class="nav-entry ${css} ${selectedScope === scope ? 'selected' : ''}" data-scope="${esc(scope)}" ${selectedScope === scope ? 'aria-current="page"' : ''}><span class="nav-name">${esc(name)}</span><span class="count">${count}</span></button>`;
     const projectTimes = new Map(projectGroups(d.items.filter(i=>!i.archived).map(i=>({...i,updatedAt:i.sessions.filter(s=>!s.archived).map(s=>s.updatedAt).sort().at(-1)||i.updatedAt})), d.projects).map(g=>[g.id,g.updatedAt]));
-    const projects = d.projects.filter(p => !p.archived && (p.builtin || d.items.some(i => i.projectId === p.id && !i.archived) || p.count > 0));
+    const projects = d.projects.filter(p => !p.archived && (d.items.some(i => i.projectId === p.id && !i.archived) || p.count > 0));
     const archivedProjects = d.projects.filter(p => p.archived && (d.items.some(i => i.projectId === p.id) || p.index));
     const archivedSessions = d.items.filter(i => !archivedProjects.some(p => p.id === i.projectId)).reduce((n, i) => n + i.sessions.filter(s => s.archived).length, 0);
     const directory = rows => rows.sort((a,b) => (projectTimes.get(b.id)||'').localeCompare(projectTimes.get(a.id)||'') || a.name.localeCompare(b.name)).map(p => entry(p.id, p.builtin ? t('Ungrouped') : p.name==='Scheduled & background'?t(p.name):p.name, Math.max(p.count || 0, d.items.filter(i => i.projectId === p.id && !i.archived).length))).join('');
-    const recent = projects.filter(p=>!isInactive(projectTimes.get(p.id))), older = projects.filter(p=>isInactive(projectTimes.get(p.id)));
+    const recent = projects.filter(p=>p.builtin||!isInactive(projectTimes.get(p.id))), older = projects.filter(p=>!p.builtin&&isInactive(projectTimes.get(p.id)));
     $('#navigation').innerHTML = `<section class="nav-group"><h2 class="nav-label">${t('Current Active')}</h2>${entry('active:codex', 'Codex', d.activeCounts.codex, 'codex')}${entry('active:claude', 'Claude', d.activeCounts.claude, 'claude')}</section><section class="nav-group project-directory"><h2 class="nav-label">${t('Projects')}</h2><div class="project-directory-scroll">${directory(recent)}${older.length?olderToggle(older.length)+(state.olderProjects?directory(older):''):''}</div></section><section class="nav-group"><h2 class="nav-label">${t('Archived')}</h2>${entry('archived', t('Archived items'), archivedProjects.length + archivedSessions)}</section>`;
     $('.project-directory-scroll').scrollTop = directoryScroll;
     $$('[data-scope]').forEach(el => el.onclick = () => navigate(el.dataset.scope));
@@ -163,13 +164,11 @@ function transferHtml(value) {
     return `<strong>${direction} · ${t(p.phase)}</strong><progress ${total?'max="'+total+'" value="'+count+'"':''}></progress><small>${total?count.toLocaleString()+' / '+total.toLocaleString()+' · '+Math.floor(count/total*100)+'% · ':''}${eta}</small>`;
 }
 function renderTransfer() {
-    if(state.connected===false&&$('#sync-dialog').open){state.syncOperation=null;$('#sync-detail').textContent=t('Service disconnected');$('#sync-close').hidden=false;$('#sync-cancel').hidden=false;$('#sync-confirm').hidden=true;$('#sync-cancel').textContent=t('Close');return;}
-    const latest=state.data.cloud.operation||operations.sync,manual=state.data.cloud.manualOperation;
-    const value=state.syncOperation&&manual?.id===state.syncOperation?manual:latest,box=$('#transfer-progress'),running=latest?.state==='running';
-    box.hidden=!running;if(running)box.innerHTML=transferHtml(latest);
-    if($('#sync-dialog').open&&state.syncOperation){
-        $('#sync-detail').innerHTML=transferHtml(value);
-        if(value&&value.state!=='running'&&value.id===state.syncOperation){state.syncOperation=null;$('#sync-error').textContent=value.state==='error'?state.data.cloud.error||t('Sync failed'):'';$('#sync-detail').innerHTML=`<p>${t(value.state==='success'?'Sync complete':'Sync failed')}</p>`;$('#sync-close').hidden=false;$('#sync-cancel').hidden=false;$('#sync-cancel').textContent=t('Close');refresh().catch(()=>{});}
+    const value=state.data.cloud.operation||operations.sync,box=$('#transfer-progress'),running=value?.state==='running';
+    box.hidden=!running&&!state.syncPreparing;
+    if(!box.hidden)box.innerHTML=transferHtml(running?value:null);
+    if(state.syncOperation&&state.data.cloud.manualOperation?.id===state.syncOperation&&state.data.cloud.manualOperation.state!=='running'){
+        const done=state.data.cloud.manualOperation;state.syncOperation=null;toast(done.state==='error'?done.error||t('Sync failed'):t('Sync complete'));
     }
 }
 function renderCountdowns(){
@@ -239,7 +238,7 @@ function renderList() {
     button('#restore-items','Restore',()=>restore({itemIds:[...state.selected]}));
     button('#deactivate-items','Deactivate',()=>run(()=>api('/manage','POST',{action:'deactivate',itemIds:[...state.selected],agent:state.scope.slice(7)})));
     const row=i=>`<article class="session-row ${state.selected.has(i.id)?'checked':''}" data-item="${esc(i.id)}"><button class="row-open" data-open="${esc(i.id)}">${icon(i.kind)}<span class="row-text"><span class="row-title">${esc(i.name)} ${cloudMark(i)}</span><span class="row-meta">${itemMeta(i)} ${sourceTags(i)}</span></span><time class="row-date">${date(i.updatedAt)}</time></button>${state.scope==='archived'?'':`<input type="checkbox" data-select="${esc(i.id)}" aria-label="${esc(t('Select {name}',{name:i.name}))}" ${state.selected.has(i.id)?'checked':''}>`}</article>`;
-    const groupHtml = g=>{const limited=state.scope===PROJECTS&&!state.query&&g.items.length>5,expanded=state.expandedProjects.has(g.id)||g.items.some(i=>state.selected.has(i.id));const shown=limited&&!expanded?g.items.slice(0,5):g.items;return `<section class="list-group project-group" data-project-group="${esc(g.id||INBOX)}"><h2>${esc(g.name==='Scheduled & background'?t(g.name):g.name)}<span>${g.items.length}</span></h2>${shown.map(row).join('')}${limited?`<button class="show-project" data-expand-project="${esc(g.id)}">${t(expanded?'Show fewer':'Show all {count}',{count:g.items.length})}</button>`:''}</section>`;};
+    const groupHtml = g=>{const initial=foldedItems(g.items,state.data.preferences),limited=state.scope===PROJECTS&&!state.query&&initial.length<g.items.length,expanded=state.expandedProjects.has(g.id)||g.items.some(i=>state.selected.has(i.id));const shown=limited&&!expanded?initial:g.items;return `<section class="list-group project-group" data-project-group="${esc(g.id||INBOX)}"><h2>${esc(g.name==='Scheduled & background'?t(g.name):g.name)}<span>${g.items.length}</span></h2>${shown.map(row).join('')}${limited?`<button class="show-project" data-expand-project="${esc(g.id)}">${t(expanded?'Show fewer':'Show all {count}',{count:g.items.length})}</button>`:''}</section>`;};
     const allGroups = groups(), older = state.scope===PROJECTS&&!state.query ? allGroups.filter(g=>isInactive(g.updatedAt)) : [], olderIds = new Set(older.map(g=>g.id));
     $('#session-list').innerHTML = allGroups.filter(g=>!olderIds.has(g.id)).map(groupHtml).join('') + (older.length ? `<section class="older-projects">${olderToggle(older.length)}${state.olderProjects?older.map(groupHtml).join(''):''}</section>` : '') || `<p class="empty">${t(state.query?'No matching sessions':'No sessions here.')}</p>`;
     bindOlderProjects();
@@ -289,14 +288,8 @@ function renderDetail() {
     enhanceSelect($('#branch-picker'));
     renderDetailActions(); renderTranscript(); renderGraph(); scheduleRibbons();
 }
-function forkCheckpoint() {
-    const p = route(), n = selectedNode(); if (!p || !n) return null;
-    if(n.empty) return null;
-    const messages = p.messages.filter(m => n.chatIds.includes(m.id)), first = messages[0], last = messages.at(-1);
-    const next = p.messages[p.messages.findIndex(m => m.id === last?.id) + 1];
-    const checkpoint = p.checkpoints.findLast(c => c.end >= first?.line && (!next || c.end < next.line));
-    return checkpoint ? {...checkpoint, omitted: messages.filter(m=>m.line>checkpoint.end).length} : null;
-}
+function forkCheckpoint() { return forkBeforeNode(route(),selectedNode()); }
+
 function canCombine() {
     const p = route(), positions = p.messages.map((m, i) => state.chats.has(m.id) ? i : -1).filter(i => i >= 0);
     if (!positions.length || positions.at(-1) - positions[0] + 1 !== positions.length) return false;
@@ -434,20 +427,21 @@ function renderGraph() {
     applyCamera();
 }
 function selectNode(id, scrollTranscript = true) {
-    const n = state.tree.nodes.find(n => n.id === id);
-    if (!n.branchIds.includes(state.branchId)) { state.branchId = n.branchIds.find(id => !state.tree.paths.find(p => p.branchId === id).archived) || n.branchIds[0]; state.chats.clear(); }
-    clearRange(); state.compactionId = null; state.nodeId = id;
-    const top = $('#transcripts').scrollTop;
-    // Focusing a caption must not destroy transcript layout and its scroll anchor.
-    if (!scrollTranscript) { renderDetailActions(); renderGraph(); } else renderDetail();
-    if (scrollTranscript) $(`[data-segment="${id}"]`)?.scrollIntoView({ block: 'start', behavior: 'smooth' });
-    else { $('#transcripts').scrollTop = top; revealNode(id); }
+    const n=state.tree.nodes.find(n=>n.id===id);if(!n)return;
+    const oldPath=state.branchId, hadSelection=state.chats.size>0;
+    if(!n.branchIds.includes(state.branchId))state.branchId=n.branchIds.find(id=>!state.tree.paths.find(p=>p.branchId===id).archived)||n.branchIds[0];
+    clearRange();state.compactionId=null;state.nodeId=id;
+    if(oldPath!==state.branchId||hadSelection)renderDetail();else{renderDetailActions();renderGraph();}
+    if(scrollTranscript){
+        const target=$(`[data-segment="${id}"]`),pane=$('#transcripts');
+        if(target){const align=()=>{if(state.nodeId!==id)return;pane.scrollTop+=target.getBoundingClientRect().top-pane.getBoundingClientRect().top;};align();requestAnimationFrame(()=>{align();scheduleRibbons();});}
+    }else revealNode(id);
     scheduleRibbons();
 }
 let ribbonFrame = 0;
 function scheduleRibbons() { if (!ribbonFrame) ribbonFrame = requestAnimationFrame(() => { ribbonFrame = 0; drawRibbons(); }); }
 function drawRibbons() {
-    if (!state.tree || $('#ribbon-lane').offsetWidth === 0) return;
+    if (!state.tree || !route() || $('#ribbon-lane').offsetWidth === 0) return;
     const lane = $('#editor').getBoundingClientRect(), view = $('#transcripts').getBoundingClientRect(), graphView = $('#graph-scroll').getBoundingClientRect();
     $('#ribbons').setAttribute('viewBox', `0 0 ${lane.width} ${lane.height}`);
     $('#ribbons').innerHTML = route().nodeIds.map(id => {
@@ -532,11 +526,23 @@ function archivePath() {
         await api('/manage', 'POST', { action: 'archive', branchIds: [p.branchId], nodeId: node.id, version: state.tree.version }); state.nodeId = null;
     }, 'Archive');
 }
+function directoryField(value) { return `<label class="field">${t('Working directory')}<span class="directory-field"><input name="cwd" readonly value="${esc(value||'')}"><button type="button" id="choose-directory">${t('Choose folder')}</button></span></label>`; }
+function bindDirectoryPicker() {
+    $('#choose-directory').onclick=async()=>{
+        const input=$('[name=cwd]'),picker=document.createElement('dialog');picker.className='directory-picker';document.body.append(picker);
+        let selected=input.value,request=0;
+        picker.innerHTML=`<div class="dialog-heading"><h2>${t('Working directory')}</h2><button type="button" data-close>×</button></div><div class="directory-toolbar"><button type="button" data-home>${t('Home')}</button><button type="button" data-parent>${t('Parent folder')}</button></div><p class="directory-path"></p><div class="directory-folders"></div><p class="directory-error" role="alert"></p><div class="dialog-actions"><button type="button" data-choose>${t('Use this folder')}</button></div>`;
+        picker.querySelector('[data-close]').onclick=()=>picker.close();picker.onclose=()=>picker.remove();picker.showModal();
+        const choose=picker.querySelector('[data-choose]');choose.disabled=true;
+        async function load(directory){const ticket=++request;choose.disabled=true;try{const data=await api('/directories?path='+encodeURIComponent(directory||''));if(!picker.open||request!==ticket)return;selected=data.path;picker.querySelector('.directory-path').textContent=data.path;picker.querySelector('.directory-error').textContent='';picker.querySelector('.directory-folders').innerHTML=data.folders.map((f,i)=>`<button type="button" data-folder="${i}">${esc(f.name)}</button>`).join('');picker.querySelectorAll('[data-folder]').forEach(el=>el.onclick=()=>load(data.folders[el.dataset.folder].path));picker.querySelector('[data-parent]').disabled=data.parent===data.path;picker.querySelector('[data-parent]').onclick=()=>load(data.parent);picker.querySelector('[data-home]').onclick=()=>load(data.home);choose.disabled=false;}catch(e){picker.querySelector('.directory-error').textContent=e.message;}}
+        choose.onclick=()=>{input.value=selected;input.dispatchEvent(new Event('input',{bubbles:true}));picker.close();};await load(selected);
+    };
+}
 async function activateDialog(p, actionLabel = 'Activate') {
     try {
         const d = await api('/branches/' + p.branchId), local = state.data.instances.filter(i => i.branchId === p.branchId).find(i => i.applied) || state.data.instances.filter(i => i.branchId === p.branchId).at(-1);
         let checkedPath = null, checked = null;
-        modal(actionLabel, `${field('Working directory', 'cwd', local?.cwd || d.cwd)}<p class="dialog-copy">${t('Source')}: ${esc(d.lineage[0]?.source.deviceName || '')}<br>${esc(d.cwd)}</p><div id="activation-budget" role="status"></div>`, async form => {
+        modal(actionLabel, `${directoryField(local?.cwd || d.cwd)}<p class="dialog-copy">${t('Source')}: ${esc(d.lineage[0]?.source.deviceName || '')}<br>${esc(d.cwd)}</p><div id="activation-budget" role="status"></div>`, async form => {
             const cwd = form.get('cwd');
             if (!checked || checkedPath !== cwd) { checked = await api('/activation-check', 'POST', { branchId: p.branchId, cwd }); checkedPath = cwd; showBudget(checked); if (checked.risk) return false; }
             await api('/manage', 'POST', { action: 'activate', branchIds: [p.branchId], cwd, contextAcknowledgement: checked.fingerprint });
@@ -549,38 +555,41 @@ async function activateDialog(p, actionLabel = 'Activate') {
             $('#activation-budget').innerHTML = c.risk ? `<p class="warning">${t('Context may be near its limit: about {used} tokens, planning limit {limit}.', { used: compactNumber(c.estimated), limit: compactNumber(c.window || c.compactAt) })}<br>${esc(c.source || '')}</p>` : c.basis === 'incomplete-after-compaction' ? `<p class="dialog-copy">${t('The compacted context size is not recorded. The native agent will manage its context window.')}</p>` : c.unknown ? `<p class="dialog-copy">${t('No reliable context limit was found in the local configuration.')}</p>` : `<p class="dialog-copy">≈ ${compactNumber(c.estimated)} / ${compactNumber(c.window || c.compactAt)} tokens · ${esc(c.source || '')}</p>`;
             $('#dialog-submit').textContent = t(c.risk ? 'Activate anyway' : actionLabel);
         }
+        bindDirectoryPicker();
         checkedPath = local?.cwd || d.cwd; checked = await api('/activation-check', 'POST', { branchId: p.branchId, cwd: checkedPath }); showBudget(checked);
         $('[name=cwd]').oninput = () => { checked = null; $('#activation-budget').textContent = ''; $('#dialog-submit').textContent = t('Check & activate'); };
     } catch (e) { toast(e.message); }
 }
-const contextCopy = mode => t(mode === 'full' ? 'Full history embeds the exact original JSONL as historical context. Foreign tools are not replayed.' : 'Lean keeps conversation text and tool calls. Long read-only outputs are shortened; errors, writes and other shell output stay complete. Thinking and transport metadata remain in the source.');
+const modeName = mode => ({lean:'Balanced',full:'Complete text',messages:'Messages only'})[mode];
+const contextCopy = mode => t(({lean:'Keeps messages, tool calls and errors. Shortens long read-only results.',full:'Keeps messages and full tool inputs/results.',messages:'Keeps user and assistant messages. Omits tool calls and results.'})[mode]);
 async function conversionDialog(p) {
     try {
         const d = await api('/branches/' + p.branchId), target = p.agent === 'claude' ? 'codex' : 'claude';
         let previews = {}, checkedCwd = null, generation = 0, timer;
-        modal('Activate as…', `<p>${p.agent==='claude'?'Claude':'Codex'} → ${target==='claude'?'Claude':'Codex'}</p>${field('Working directory', 'cwd', d.cwd)}<p class="dialog-copy">${t('Uses the source working directory. If it moved or is missing on this device, choose its current local folder. Project files are not downloaded with the session.')}</p><label class="field">${t('Context mode')}<select name="mode" aria-label="${t('Context mode')}"><option value="lean">${t('Lean context')} · ${t('Estimating…')}</option><option value="full">${t('Full history')} · ${t('Estimating…')}</option></select></label><p class="dialog-copy">${t('The source stays intact. A separate session is created in the target agent.')}</p><div id="conversion-preview" role="status"></div>`, async form => {
+        modal('Activate as…', `<p>${p.agent==='claude'?'Claude':'Codex'} → ${target==='claude'?'Claude':'Codex'}</p>${directoryField(d.cwd)}<label class="field">${t('Context mode')}<select name="mode" aria-label="${t('Context mode')}">${['lean','full','messages'].map(mode=>`<option value="${mode}">${t(modeName(mode))}</option>`).join('')}</select></label><p class="dialog-copy">${t('Creates a separate session. Thinking and attachments stay in the original.')}</p><div id="conversion-preview" role="status"></div>`, async form => {
             const mode=form.get('mode'), cwd=form.get('cwd'), preview=previews[mode];
             if(!preview || checkedCwd!==cwd){await estimate();return false;}
             const result=await api('/convert','POST',{branchId:p.branchId,target,mode,cwd,fingerprint:preview.fingerprint,contextAcknowledgement:preview.budget.fingerprint});
             state.tree=null;state.branchId=result.branch.id;state.itemId=result.branch.id;toast(t('Open the active continuation from your agent’s session list.'));
         }, 'Activate');
+        bindDirectoryPicker();
         const ticket=modalVersion, select=$('[name=mode]'), cwd=$('[name=cwd]');
         enhanceSelect(select);
         function show(){
             const preview=previews[select.value]; $('#dialog-submit').disabled=!preview || checkedCwd!==cwd.value;
-            $('#conversion-preview').innerHTML=`<p class="dialog-copy">${contextCopy(select.value)}</p>${preview?`<p>≈ ${preview.estimated.toLocaleString()} tokens · ${t('Shortened outputs')}: ${preview.stats.shortenedOutputs} · ${t('Omitted records')}: ${preview.stats.omittedRecords}</p>${preview.budget.risk?`<p class="warning">${t('Context may be near its limit: about {used} tokens, planning limit {limit}.',{used:compactNumber(preview.estimated),limit:compactNumber(preview.budget.window||preview.budget.compactAt)})}</p>`:''}`:''}<p class="dialog-copy">${t('Counts estimate packaged text, not exact model billing or live context. Target instructions and files may add tokens.')}</p><p class="dialog-copy">${t('Cross-agent continuation changes the model and runtime; it is not a native fork.')}</p>`;
+            $('#conversion-preview').innerHTML=`<p class="dialog-copy">${contextCopy(select.value)}</p>${preview?`<p>≈ ${preview.estimated.toLocaleString()} tokens · ${preview.stats.shortenedOutputs ? t('{count} shortened results',{count:preview.stats.shortenedOutputs}):''}</p>${preview.budget.risk?`<p class="warning">${t('Context may be near its limit: about {used} tokens, planning limit {limit}.',{used:compactNumber(preview.estimated),limit:compactNumber(preview.budget.window||preview.budget.compactAt)})}</p>`:''}`:''}`;
             $('#dialog-submit').textContent=t(preview?.budget.risk?'Activate anyway':'Activate');
         }
         async function estimate(){
-            const turn=++generation, directory=cwd.value;previews={};show();
-            try{const values=await Promise.all(['lean','full'].map(mode=>api('/conversion-check','POST',{branchId:p.branchId,target,mode,cwd:directory})));
+            const turn=++generation, directory=cwd.value;show();
+            try{const values=await Promise.all([api('/conversion-check','POST',{branchId:p.branchId,target,mode:select.value,cwd:directory})]);
                 if(ticket!==modalVersion||turn!==generation||!$('#dialog').open)return;
-                checkedCwd=directory;previews=Object.fromEntries(values.map(v=>[v.mode,v]));
-                for(const option of select.options)option.textContent=t(option.value==='lean'?'Lean context':'Full history')+' · ≈ '+previews[option.value].estimated.toLocaleString()+' tokens';
+                checkedCwd=directory;previews={...previews,...Object.fromEntries(values.map(v=>[v.mode,v]))};
+                for(const option of select.options)option.textContent=t(modeName(option.value))+(previews[option.value]?' · ≈ '+previews[option.value].estimated.toLocaleString()+' tokens':'');
                 enhanceSelect(select);show();
             }catch(e){if(ticket===modalVersion&&turn===generation)$('#dialog-error').textContent=e.message;}
         }
-        select.onchange=show;cwd.oninput=()=>{generation++;previews={};show();clearTimeout(timer);timer=setTimeout(estimate,350);};
+        select.onchange=()=>{show();if(!previews[select.value])estimate();};cwd.oninput=()=>{generation++;previews={};show();clearTimeout(timer);timer=setTimeout(estimate,350);};
         await estimate();
     } catch(e){toast(e.message);}
 }
@@ -594,8 +603,8 @@ function combineDialog() {
 function forkDialog() {
     const p = route(), checkpoint = forkCheckpoint();
     if (!checkpoint) return toast(t('Fork at a node ending with a completed turn.'));
-    modal('Create a branch', field('Branch name', 'name') + (checkpoint.omitted ? `<p class="warning">${t('Fork from the last completed turn. {count} chats from the unfinished turn will stay on the original path.',{count:checkpoint.omitted})}</p>` : ''), async form => {
-        const b = await api('/branches/' + p.branchId + '/fork', 'POST', { name: form.get('name'), end: checkpoint.end, revisionId: p.head });
+    modal('Create a branch', field('Branch name', 'name') + `<p class="dialog-copy">${t('Fork before this node. Its preceding context is kept.')}</p>` + (checkpoint.omitted ? `<p class="warning">${t('Fork from the last completed turn. {count} chats from the unfinished turn will stay on the original path.',{count:checkpoint.omitted})}</p>` : ''), async form => {
+        const b = await api('/branches/' + p.branchId + '/fork', 'POST', { name: form.get('name'), end: checkpoint.end, revisionId: p.head, nodeId:state.nodeId, graphVersion:state.tree.version });
         state.branchId = b.id; state.nodeId='empty-'+b.id; clearRange(); toast(t('Branch created'));
     }, 'Create branch');
 }
@@ -621,7 +630,7 @@ async function settings(options = {}) {
             ${c.encryptionReady && !state.data.cloud.started ? `<p class="setup-hint">${t('Ready. Close Settings and click Sync to review cloud synchronization.')}</p>` : ''}
             <div id="settings-progress" role="status" hidden></div>
           </section>` : ''}
-          <section class="settings-card"><h3>${t('Automatic updates')}</h3><div class="timer-row"><label><input type="checkbox" name="showScheduledSessions" ${p.showScheduledSessions?'checked':''}>${t('Show scheduled and background sessions')}</label></div><p class="dialog-copy">${t('Changes save immediately. Native files are never deleted.')}</p>
+          <section class="settings-card"><h3>${t('Project contents')}</h3><label class="field">${t('Collapse older sessions')}<select name="projectFoldMode">${[['time','By age'],['count','By count'],['none','Show all']].map(([v,l])=>`<option value="${v}" ${p.projectFoldMode===v?'selected':''}>${t(l)}</option>`).join('')}</select></label>${p.projectFoldMode==='time'?`<label class="field">${t('Keep recent days')}<input type="number" name="projectFoldDays" min="1" max="365" value="${p.projectFoldDays}"></label>`:p.projectFoldMode==='count'?`<label class="field">${t('Visible sessions per project')}<input type="number" name="projectFoldCount" min="1" max="365" value="${p.projectFoldCount}"></label>`:''}</section><section class="settings-card"><h3>${t('Automatic updates')}</h3><div class="timer-row"><label><input type="checkbox" name="showScheduledSessions" ${p.showScheduledSessions?'checked':''}>${t('Show scheduled and background sessions')}</label></div><p class="dialog-copy">${t('Changes save immediately. Native files are never deleted.')}</p>
             <label class="field">${t('Collapse inactive projects after')}<select name="inactiveProjectDays" aria-label="${t('Collapse inactive projects after')}">${[[7,'One week'],[15,'Half a month'],[30,'One month'],[60,'Two months']].map(([days,label])=>`<option value="${days}" ${days===p.inactiveProjectDays?'selected':''}>${t(label)}</option>`).join('')}</select></label>
             ${[['localUpdate', 'Read local sessions', p.localUpdateEnabled, p.localUpdateMinutes], ['autoUpload', 'Automatically upload local changes', p.autoUploadEnabled, p.autoUploadMinutes]].map(([key,label,on,minutes]) => `<div class="timer-row"><label><input type="checkbox" name="${key}Enabled" ${on ? 'checked' : ''}>${t(label)}</label><label class="timer-interval"><input type="number" name="${key}Minutes" value="${minutes}" min="1" max="1440" ${!on ? 'disabled' : ''}><span>${t('minutes')}</span></label></div>`).join('')}
             <p class="dialog-copy">${t('Every upload reads local sessions first. No changes means no scheduled cloud request.')}</p><button type="button" id="save-timers" hidden>${t('Save preferences')}</button>
@@ -665,6 +674,8 @@ async function settings(options = {}) {
         }
         if(c.job?.state==='running') trackJob().catch(e=>$('#dialog-error').textContent=e.message);
         if($('#recover-settings')) $('#recover-settings').onclick=e=>busy(e.currentTarget,async()=>{await api('/settings/recover','POST',{});await refresh();await settings();});
+        enhanceSelect($('[name=projectFoldMode]'));
+        for(const el of $$('[name=projectFoldMode],[name=projectFoldDays],[name=projectFoldCount]'))el.onchange=async()=>{try{await api('/settings/timers','POST',{[el.name]:el.name==='projectFoldMode'?el.value:Number(el.value)});state.expandedProjects.clear();await refresh();await settings(options);}catch(e){$('#dialog-error').textContent=e.message;}};
         const timers = () => ({inactiveProjectDays:Number($('[name=inactiveProjectDays]').value),showScheduledSessions:$('[name=showScheduledSessions]').checked, ...Object.fromEntries(['localUpdate','autoUpload'].flatMap(k=>[[k+'Enabled',$(`[name=${k}Enabled]`).checked],[k+'Minutes',Number($(`[name=${k}Minutes]`).value)]]))});
         const validateTimers=()=>{const v=timers();for(const k of ['localUpdate','autoUpload']) $(`[name=${k}Minutes]`).disabled=!v[k+'Enabled'];$('#save-timers').hidden=Object.entries(v).every(([key,value])=>p[key]===value)||Object.entries(v).some(([k,n])=>k.endsWith('Minutes')&&(!Number.isInteger(n)||n<1||n>1440));};
         enhanceSelect($('[name=inactiveProjectDays]'));
@@ -674,7 +685,7 @@ async function settings(options = {}) {
     } catch(e) { toast(e.message); }
 }
 function information() {
-    modal('Information', `<details><summary>${t('When can I use each action?')}</summary><ul class="action-guide"><li>${t('Update reads local sessions. Sync pulls remote changes before pushing local work, including Pending.')}</li><li>${t('Move belongs to the session list. Select items before choosing a project.')}</li><li>${t('In a transcript, select a start and end to Combine or Dissolve a continuous range.')}</li><li>${t('Select a graph node to Rename it. Naming Pending makes it a saved node.')}</li><li>${t('Fork appears only at a completed turn. Activate, Deactivate and Archive belong to a complete session endpoint.')}</li><li>${t('Archived shows only archived paths with their prefixes. Restore returns a path to its project without activating it.')}</li></ul><p class="dialog-copy">${t('Token counts are estimates. Local configuration and recorded usage inform activation warnings; unknown limits are not guessed.')}</p><p class="dialog-copy">${t('Close running agents before changing native activation. Browsing and organization remain available.')}</p></details><details><summary>${t('Sync and local copies')}</summary><p>${t('Browsing uses the saved directory. Cloud icons mean the session is not on this device. Open it once to download and keep it locally. Sync refreshes the directory and downloaded sessions; unopened sessions remain cloud-only. Local edits start an automatic Push countdown.')}</p></details><details><summary>${t('Context mode')}</summary><p><strong>${t('Lean context')}</strong> — ${contextCopy('lean')}</p><p><strong>${t('Full history')}</strong> — ${contextCopy('full')}</p><p>${t('Counts estimate packaged text, not exact model billing or live context. Target instructions and files may add tokens.')}</p></details><details><summary>${t('Diagnostics')}</summary><p class="dialog-copy">${t('Logs contain timings, operation types and error references; no conversation text, passwords, URLs or working paths.')}</p><button type="button" id="download-diagnostics">${t('Download diagnostics')}</button></details>${(state.data.plan?.pendingRecovery||[]).map(id=>`<button type="button" data-recover="${esc(id)}">${t('Recover interrupted operation')}</button>`).join('')}${state.data.conflicts.map((c,i)=>`<div class="conflict">${t('Conflict')}: ${esc(c.local.name)}<button type="button" data-conflict="${i}" data-choice="local">${t('Keep local')}</button><button type="button" data-conflict="${i}" data-choice="remote">${t('Use remote')}</button></div>`).join('')}`,null);
+    modal('Information', `<details><summary>${t('When can I use each action?')}</summary><ul class="action-guide"><li>${t('Update reads local sessions. Sync pulls remote changes before pushing local work, including Pending.')}</li><li>${t('Move belongs to the session list. Select items before choosing a project.')}</li><li>${t('In a transcript, select a start and end to Combine or Dissolve a continuous range.')}</li><li>${t('Select a graph node to Rename it. Naming Pending makes it a saved node.')}</li><li>${t('Fork appears only at a completed turn. Activate, Deactivate and Archive belong to a complete session endpoint.')}</li><li>${t('Archived shows only archived paths with their prefixes. Restore returns a path to its project without activating it.')}</li></ul><p class="dialog-copy">${t('Token counts are estimates. Local configuration and recorded usage inform activation warnings; unknown limits are not guessed.')}</p><p class="dialog-copy">${t('Close running agents before changing native activation. Browsing and organization remain available.')}</p></details><details><summary>${t('Sync and local copies')}</summary><p>${t('Browsing uses the saved directory. Cloud icons mean the session is not on this device. Open it once to download and keep it locally. Sync refreshes the directory and downloaded sessions; unopened sessions remain cloud-only. Local edits start an automatic Push countdown.')}</p></details><details><summary>${t('Context mode')}</summary>${['lean','full','messages'].map(m=>`<p><strong>${t(modeName(m))}</strong> — ${contextCopy(m)}</p>`).join('')}<p>${t('Counts estimate packaged text, not exact model billing or live context. Target instructions and files may add tokens.')}</p></details><details><summary>${t('Diagnostics')}</summary><p class="dialog-copy">${t('Logs contain timings, operation types and error references; no conversation text, passwords, URLs or working paths.')}</p><button type="button" id="download-diagnostics">${t('Download diagnostics')}</button></details>${(state.data.plan?.pendingRecovery||[]).map(id=>`<button type="button" data-recover="${esc(id)}">${t('Recover interrupted operation')}</button>`).join('')}${state.data.conflicts.map((c,i)=>`<div class="conflict">${t('Conflict')}: ${esc(c.local.name)}<button type="button" data-conflict="${i}" data-choice="local">${t('Keep local')}</button><button type="button" data-conflict="${i}" data-choice="remote">${t('Use remote')}</button></div>`).join('')}`,null);
     $('#download-diagnostics').onclick=async()=>{try{const report=await api('/diagnostics'),url=URL.createObjectURL(new Blob([JSON.stringify(report,null,2)],{type:'application/json'})),link=document.createElement('a');link.href=url;link.download='session-grove-diagnostics.json';link.click();setTimeout(()=>URL.revokeObjectURL(url),1000);}catch(e){$('#dialog-error').textContent=e.message;}};
     $$('[data-conflict]').forEach(el=>el.onclick=()=>run(async()=>{await api('/conflicts/resolve','POST',{index:Number(el.dataset.conflict),choice:el.dataset.choice});$('#dialog').close();}));
     $$('[data-recover]').forEach(el=>el.onclick=()=>run(async()=>{await api('/recover','POST',{id:el.dataset.recover});$('#dialog').close();}));
@@ -682,22 +693,15 @@ function information() {
 function about() {
     modal('About', `<div class="about"><h3>Session Grove <small>${esc(state.data.appVersion || '')}</small></h3><p>${t('Organize agent conversations by project. Keep the context, choose the branch, continue your work.')}</p><p>${t('Developed by')} Ziyi Zhang</p><div class="about-links"><a href="https://ziyi-zhang.vercel.app" target="_blank" rel="noopener noreferrer" aria-label="Ziyi Zhang website" title="Ziyi Zhang">${icon('website')}</a><a href="https://github.com/MRziyi/session-grove" target="_blank" rel="noopener noreferrer" aria-label="GitHub repository" title="GitHub">${icon('github')}</a></div></div>`,null);
 }
-async function sync() {
+async function sync(){
     if(!state.data.cloud.configured||!state.data.cloud.unlocked)return settings();
-    $('#sync-dialog').showModal();$('#sync-error').textContent='';$('#sync-confirm').hidden=true;$('#sync-cancel').textContent=t('Cancel');
-    const active=state.data.cloud.operation;
-    if(state.data.cloud.phase==='syncing'&&active?.manual){state.syncOperation=active.id;$('#sync-close').hidden=true;$('#sync-cancel').hidden=true;renderTransfer();return;}
-    $('#sync-detail').innerHTML=transferHtml(null);$('#sync-close').hidden=false;$('#sync-cancel').hidden=false;
-    try {while(state.data.cloud.phase==='syncing'){if(!$('#sync-dialog').open)return;await new Promise(r=>setTimeout(r,1000));}const plan=await api('/synchronize/plan','POST',{});if(!$('#sync-dialog').open)return;state.syncPlan=plan;
-        $('#sync-detail').innerHTML=`<p>${t('Sync pulls server changes first, then pushes local changes.')}</p><div class="sync-plan"><strong>↓ Pull</strong><span>${plan.pull.trees} ${t('trees')} · ${plan.pull.records.toLocaleString()} ${t('records')}</span><strong>↑ Push</strong><span>${plan.push.trees} ${t('trees')} · ${plan.push.records.toLocaleString()} ${t('records')} · ${(plan.push.bytes/1048576).toFixed(1)} MB</span></div>${plan.large?'<p class="warning">'+t('This is a large transfer. Continue to synchronize before returning to the library.')+'</p>':''}`;
-        if(plan.large){$('#sync-confirm').hidden=false;$('#sync-confirm').textContent=t('Sync now');}else await beginSync();
-    }catch(e){$('#sync-error').textContent=e.message;}
+    if(state.syncPreparing||state.data.cloud.phase==='syncing')return;
+    state.syncPreparing=true;renderTransfer();$('#sync').disabled=true;
+    try{const plan=await api('/synchronize/plan','POST',{});const result=await api('/synchronize/start','POST',{planId:plan.id,confirmed:true});state.syncOperation=result.operationId;await refresh();}
+    catch(e){toast(e.message);}finally{state.syncPreparing=false;renderCloudStatus();}
 }
-async function beginSync(){try{$('#sync-confirm').hidden=true;$('#sync-close').hidden=true;$('#sync-cancel').hidden=true;const result=await api('/synchronize/start','POST',{planId:state.syncPlan.id,confirmed:true});state.syncOperation=result.operationId;state.syncPlan=null;$('#sync-detail').innerHTML=transferHtml(null);}catch(e){$('#sync-error').textContent=e.message;$('#sync-close').hidden=false;$('#sync-cancel').hidden=false;}}
-$('#about').onclick=about;$('#information').onclick=information;$('#sync').onclick=sync;$('#transfer-progress').onclick=sync;$('#settings').onclick=()=>settings();
-$('#sync-confirm').onclick=beginSync;
-$('#sync-close').onclick=$('#sync-cancel').onclick=()=>{if(!state.syncOperation)$('#sync-dialog').close();};
-$('#sync-dialog').oncancel=e=>{if(state.syncOperation)e.preventDefault();};
+$('#about').onclick=about;$('#information').onclick=information;$('#sync').onclick=sync;$('#settings').onclick=()=>settings();
+
 function applyPanePreferences(){
     const layout=$('#layout');layout.classList.toggle('nav-collapsed',localStorage.getItem('grove-nav-collapsed')==='true');layout.classList.toggle('rail-collapsed',localStorage.getItem('grove-rail-collapsed')==='true');
     $('#toggle-navigation').textContent=layout.classList.contains('nav-collapsed')?'›':'‹';$('#toggle-rail').textContent=layout.classList.contains('rail-collapsed')?'›':'‹';for(const [id,key,label]of [['toggle-navigation','nav','projects'],['toggle-rail','rail','session list']]){const expanded=!layout.classList.contains(key+'-collapsed');$('#'+id).setAttribute('aria-expanded',String(expanded));$('#'+id).title=t((expanded?'Collapse ':'Expand ')+label);}
@@ -744,7 +748,7 @@ try {
             const next = await api('/status');
             if(next.cloud.operation)showOperation('sync',next.cloud.operation);
             if(next.update.operation)showOperation('update',next.update.operation);
-            const canRefresh = !working && !opening && !$('#dialog').open && !$('#sync-dialog').open && !state.chats.size;
+            const canRefresh = !working && !opening && !$('#dialog').open && !state.chats.size;
             if (next.stateVersion !== state.data.stateVersion && canRefresh) await refresh();
             else { state.data.cloud = next.cloud; state.data.update = next.update; renderCloudStatus(); }
         } catch { /* Explicit Update reports connection errors. */ }

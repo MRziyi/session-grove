@@ -15,3 +15,14 @@ test('inactive project boundaries include the recent edge and keep unknown dates
  for(const days of [7,15,30,60]){assert.equal(inactiveProject(new Date(at-days*86400000).toISOString(),days,at),false);assert.equal(inactiveProject(new Date(at-days*86400000-1).toISOString(),days,at),true);}
  assert.equal(inactiveProject(undefined,30,at),false);
 });
+
+test('project folding defaults to a week and supports count limits without reordering',async()=>{
+ const {foldedItems}=await import('../web/library-view.js'),at=Date.parse('2026-09-28T12:00:00Z');const items=[0,2,7,8,30].map((days,id)=>({id,updatedAt:new Date(at-days*86400000).toISOString()}));
+ assert.deepEqual(foldedItems(items,{},at).map(i=>i.id),[0,1,2]);assert.equal(foldedItems(items,{projectFoldMode:'count',projectFoldCount:4},at).length,4);assert.equal(foldedItems(items,{projectFoldMode:'none'},at).length,5);
+});
+test('pending names follow depth and Fork selects the preceding completed node',async()=>{
+ const {pendingLabels,forkBeforeNode}=await import('../web/library-view.js'),nodes=[{id:'a',depth:0,chatIds:['1','2']},{id:'b',depth:1,chatIds:['3','4']},{id:'c',depth:1,chatIds:[]},{id:'d',depth:2,chatIds:[]}];
+ assert.deepEqual([...pendingLabels(nodes).values()],['1','2.1','2.2','3.1']);const p={nodeIds:['a','b','d'],messages:[{id:'1',line:2},{id:'2',line:3},{id:'3',line:6},{id:'4',line:7}],checkpoints:[{end:4},{end:8}]};
+ assert.equal(forkBeforeNode(p,nodes[0]),null);assert.equal(forkBeforeNode(p,nodes[1]).end,4);assert.equal(forkBeforeNode(p,nodes[3]).end,8);
+ p.checkpoints=[{end:8}];assert.equal(forkBeforeNode(p,nodes[1]),null,'never invent a tool-completion boundary');
+});

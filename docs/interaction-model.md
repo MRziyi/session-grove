@@ -138,3 +138,11 @@ Countdowns use server-provided deadlines and a local one-second clock. No HTTP o
 - Fork ends at a complete native checkpoint; if trailing chats are unfinished, the confirmation makes the cutoff explicit. Every new fork has a selectable, zero-chat Pending endpoint.
 - Tool/device labels are compact pills. Scheduled/background sessions are hidden by provenance by default, with a Settings filter applied on Update; title keywords are not used to guess automation.
 - Reasoning with encrypted content but no text says “no readable summary, original preserved.” Expanded context records are bounded and paged, while storage and activation keep original contents.
+
+## 0.12 interaction corrections
+
+Fork is a before-node operation. The root has no preceding context and offers no Fork; a later node offers it only when the preceding content ends at a complete native checkpoint. Activate applies to session endpoints. Pending labels use depth plus sibling position. Selecting a node keeps the existing transcript DOM when the path is unchanged and scrolls its own pane to the segment start.
+
+Project contents default to a seven-day visible window, with count-based or uncollapsed alternatives in Settings. Empty Ungrouped is absent from the directory; a nonempty Ungrouped remains pinned among recent projects. Sync runs directly with bounded inline progress. Activation and cross-agent conversion choose an existing directory through a local folder browser.
+
+Trash is a separate unresolved policy proposal; see [trash-design.md](trash-design.md). Existing Archived records are not automatically converted to deletions.

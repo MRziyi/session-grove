@@ -2,11 +2,12 @@
 // messages, synthetic attachment messages and native UUID remapping. No query()
 // or agent subprocess is used here.
 import { workerData } from 'node:worker_threads';
-import { getSessionMessages, forkSession } from '@anthropic-ai/claude-agent-sdk';
+
 const { port } = workerData;
 port.on('message', async ({ raw, action, options, signal }) => {
     const done = new Int32Array(signal);
     try {
+        const {getSessionMessages,forkSession}=await import('@anthropic-ai/claude-agent-sdk');
         const rows = raw.split('\n').filter(line => line.trim()).map(JSON.parse);
         const sessionId = rows.find(r => r.sessionId)?.sessionId;
         let forked;

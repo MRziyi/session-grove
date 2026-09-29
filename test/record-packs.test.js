@@ -10,3 +10,11 @@ test('a slow first pack does not prevent free slots from sending later packs',as
  const result=await uploadPacks({objectStatement:{get:h=>({body:rows.get(h)})}},dav,null,[...rows.keys()],{},()=>{},()=>{});clearTimeout(timeout);
  assert.equal(fifthWhileFirstBlocked,true);assert.ok(maxActive<=4);assert.equal(result.uploaded,rows.size);assert.equal(result.packs.length,6);
 });
+
+test('republishing legacy single records packs them once and reuses the verified pack afterward',async()=>{
+ const body='{"type":"sample"}\n',ref=hash(body),cache={uploadedObjects:[ref]},remote=new Map();let puts=0;
+ const dav={put:async(k,b)=>{puts++;remote.set(k,b);return true;},get:async k=>remote.get(k)};
+ const store={objectStatement:{get:()=>({body})}};
+ const first=await uploadPacks(store,dav,null,[ref],cache,()=>{},()=>{});assert.equal(first.packs.length,1);assert.equal(puts,1);
+ const again=await uploadPacks(store,dav,null,[ref],cache,()=>{},()=>{});assert.equal(again.uploaded,0);assert.equal(puts,1);
+});

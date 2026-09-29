@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.12.0
+
+- Restore dependency installation under the existing release-age policy; surface missing Claude SDK dependencies immediately.
+- Run manual Sync without a blocking dialog and constrain inline transfer progress.
+- Add one-week/default and count-based project content folding; hide an empty Ungrouped entry.
+- Fork before non-root logical Nodes, use depth-based Pending labels, and preserve transcript DOM/scroll anchoring on node selection.
+- Replace raw-JSON cross-agent prompts with Balanced, Complete text and Messages only; use a directory picker and on-demand token estimates.
+- Exclude managed background records from upload and consolidate legacy single objects into packs on subsequent changed-tree publication.
+- Add native-reader equivalence, real read-only cloud sample checks, a browser workflow and a reproducible CPU/memory/network audit.
+- Trash/deletion remains a separate proposal; no existing cloud data is purged.
+
 ## 0.11.0
 
 - Make browsing local and Pull explicit; retain opened cloud sessions, show cloud icons only for missing local copies, and keep automatic Push separate from directory refresh.

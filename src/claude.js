@@ -1,3 +1,4 @@
+import { createRequire } from 'node:module';
 import { Worker, MessageChannel, receiveMessageOnPort } from 'node:worker_threads';
 import { hash, assert } from './util.js';
 let worker, port;
@@ -5,6 +6,7 @@ const cache = new Map();
 let cacheBytes = 0;
 function call(raw, action, options = {}) {
     if (!worker) {
+        try { createRequire(import.meta.url).resolve('@anthropic-ai/claude-agent-sdk'); } catch { throw new Error('Claude session support needs dependencies. Run pnpm install or npm install in Session Grove.'); }
         const channel = new MessageChannel(); port = channel.port1;
         worker = new Worker(new URL('./claude-worker.js', import.meta.url), { workerData: { port: channel.port2 }, transferList: [channel.port2], execArgv: [] });
         worker.on('error', () => {}); worker.unref(); port.unref();
