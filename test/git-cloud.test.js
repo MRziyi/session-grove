@@ -264,8 +264,8 @@ test('discard recovers an older verified baseline from local Git after the worki
  const remote=a.cloud.connection.remote,run=remote.run.bind(remote),lookups=[];remote.run=async(args,options)=>{
   assert.ok(!['fetch','push','ls-remote'].includes(args[0]),'discard must stay offline');
   const result=await run(args,options);let parsed=false,verified=false;
-  if(args[0]==='show')try{const graph=JSON.parse(result.stdout);parsed=true;verified=hash(JSON.stringify(graph))===a.cloud.cache().ack[b.id];}catch{}
-  lookups.push({command:args[0],code:result.code,bytes:result.stdout.length,parsed,verified});return result;
+  if(args[0]==='cat-file')try{const graph=JSON.parse(result.stdout);parsed=true;verified=hash(JSON.stringify(graph))===a.cloud.cache().ack[b.id];}catch{}
+  lookups.push({command:args[0],code:result.code,bytes:result.stdout.length,parsed,verified,stderrKind:/invalid object name|bad object|not a valid object/.test(result.stderr)?'invalid-object':/does not exist|exists on disk|not in/.test(result.stderr)?'missing-path':result.stderr?'other':null});return result;
  };
  try{await discardChanges(a.store,a.cloud,{collect:()=>({errors:[]})},a.cloud.pendingItems());assert.equal(a.store.get('branch',b.id).name,'Sample');assert.equal(a.cloud.pendingItems().length,0);}
  catch(error){

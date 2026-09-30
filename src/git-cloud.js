@@ -194,7 +194,13 @@ export class GitCloud extends Cloud {
         const env={GIT_NO_LAZY_FETCH:'1'},head=this.cache().gitHead;
         const history=await remote.run(['log','--all','--max-count=64','--format=%H','--',file],{accepted:[0,128],env});
         for(const commit of new Set([head,...history.stdout.split(/\s+/)].filter(v=>/^[a-f0-9]{40,64}$/.test(v||'')))){
-            const result=await remote.run(['show',commit+':'+file],{accepted:[0,128],env});
+            // Resolve a literal tree entry before reading its blob. In particular,
+            // do not pass a commit:path argument through platform path handling.
+            const tree=await remote.run(['ls-tree','-z','--full-tree',commit,'--',file],{accepted:[0,128],env});
+            if(tree.code)continue;
+            const entry=tree.stdout.split('\0').map(line=>/^100644 blob ([a-f0-9]{40,64})\t(.+)$/.exec(line)).find(row=>row?.[2]===file);
+            if(!entry)continue;
+            const result=await remote.run(['cat-file','blob',entry[1]],{accepted:[0,128],env});
             if(result.code)continue;
             try{const candidate=JSON.parse(result.stdout);if(digest(candidate)===ack){this.rememberBaseline(id,candidate);return candidate;}}catch{}
         }
