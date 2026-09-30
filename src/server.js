@@ -385,12 +385,12 @@ export function createApp({ root, roots, guard, demo = false }) {
             catch(error){trashOperation={...trashOperation,state:'error',error:error.message,finishedAt:Date.now()};throw error;}
             finally{if(trashOperation.progress)diagnostics.record('trash-phase',{phase:trashOperation.progress.phase,durationMs:Date.now()-phaseStartedAt});operation('trash',trashOperation);}
         })();
-        try{return await trashPromise;}finally{trashPromise=null;}
+        try{return await trashPromise;}finally{trashPromise=null;intelligence.kick();}
     }
     function captureLocal() {
         if(trashPromise)return trashPromise.catch(()=>{}).then(()=>captureLocal());
         if(capturePromise) return capturePromise;
-        capturePromise = performCapture().finally(()=>{capturePromise=null;}); return capturePromise;
+        capturePromise = performCapture().finally(()=>{capturePromise=null;intelligence.kick();}); return capturePromise;
     }
     async function performCapture() {
         const startedAt = Date.now(); updateOperation = { id: id(), state: 'running', startedAt }; operation('update', updateOperation);

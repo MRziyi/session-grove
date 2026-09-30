@@ -119,7 +119,7 @@ test('HTTP Update finishes while naming runs; status is visible and local edits 
  const b=app.store.branch(null,'Before','codex',codexSample(root,[['Real request','First response']]));
  const api=async(route,method='GET',body)=>{const r=await fetch('http://127.0.0.1:'+app.server.address().port+'/api/'+route,{method,headers:{'X-Grove-Token':app.token,'Content-Type':'application/json'},...(body?{body:JSON.stringify(body)}:{})});return {status:r.status,body:await r.json()};};
  assert.equal((await api('collect','POST',{})).status,200);
- for(let i=0;i<50&&!resolve;i++)await new Promise(r=>setTimeout(r,10));assert.ok(resolve,'background request started');
+ await waitFor(()=>!!resolve);
  const status=(await api('status')).body;assert.equal(status.intelligence.running,true);assert.equal(status.intelligence.phase,'Classifying session');assert.equal(status.intelligence.current,'Before');assert.equal(status.update.operation.state,'success');
  const settings=(await api('settings')).body;assert.equal(settings.intelligence.hasKey,true);assert.ok(!JSON.stringify(settings).includes('http-test-secret'));
  assert.equal((await api('branches/'+b.id,'PATCH',{name:'Manual during request'})).status,200);
