@@ -5,7 +5,7 @@ const tests=fs.readdirSync('test').filter(file=>file.endsWith('.test.js')).flatM
     const source=fs.readFileSync('test/'+file,'utf8');
     return [...source.matchAll(/\btest\(\s*(['"])([^\r\n]+?)\1/g)].map(match=>({name:match[2],file:'test/'+file,line:source.slice(0,match.index).split('\n').length}));
 });
-const files=[...new Set(tests.map(test=>test.file))];let cursor=0,failedFiles=0;
+const files=fs.readdirSync('test').filter(file=>file.endsWith('.test.js')).map(file=>'test/'+file);let cursor=0,failedFiles=0;
 function run(file){return new Promise(resolve=>{
     console.log('Testing '+file);
     const child=spawn(process.execPath,['--test','--test-timeout=90000','--test-reporter=spec',file],{stdio:['ignore','pipe','pipe'],windowsHide:true,detached:process.platform!=='win32'});
