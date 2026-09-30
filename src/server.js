@@ -6,6 +6,7 @@ import { VERSION } from './version.js';
 import { INBOX_ID, inboxProject } from './inbox.js';
 import { GitSettings as Settings } from './git-settings.js';
 import { preferences } from './preferences.js';
+import { Intelligence } from './intelligence.js';
 import http from 'node:http';
 import { performance } from 'node:perf_hooks';
 import { Diagnostics } from './diagnostics.js';
@@ -49,7 +50,8 @@ export function createApp({ root, roots, guard, demo = false }) {
     const instance = id();
     const operation = (kind, value) => { for (const res of streams) res.write('event: operation\ndata: ' + JSON.stringify({kind, ...value}) + '\n\n'); };
     autoSync.onOperation = value => operation('sync', {...value, status:autoSync.status()});
-    const timing = () => ({ trashOperation, appVersion: VERSION, serverNow: Date.now(), stateVersion: diagnostics.startedAt + ':' + store.version + ':' + store.cloudVersion, update: { nextRunAt: nextCaptureAt, lastRunAt: lastCaptureAt, started: !!store.local('localUpdateStarted'), operation: updateOperation } });
+    const intelligence = new Intelligence(store, { onChange: id => autoSync.schedule([id]), onStatus: value => operation('intelligence', value), canApply: () => !capturePromise && !trashPromise && !stopping });
+    const timing = () => ({ intelligence: intelligence.status(), trashOperation, appVersion: VERSION, serverNow: Date.now(), stateVersion: diagnostics.startedAt + ':' + store.version + ':' + store.cloudVersion, update: { nextRunAt: nextCaptureAt, lastRunAt: lastCaptureAt, started: !!store.local('localUpdateStarted'), operation: updateOperation } });
     let expiryTimer;const configureExpiry=()=>{clearTimeout(expiryTimer);const entries=expireTrash(store),next=entries.filter(e=>!e.expired).map(e=>Date.parse(e.expiresAt)).sort((a,b)=>a-b)[0];if(next){expiryTimer=setTimeout(configureExpiry,Math.max(1000,Math.min(2147483647,next-Date.now())));expiryTimer.unref();}};configureExpiry();
     const trashSnapshot = () => ({ trashEntries:(store.local('trashEntries')||[]).filter(e=>!e.expired&&!e.restoredAt), trashNative:nativeTrashCandidates(store) });
     const snapshot = () => ({ ...autoSync.decorate(store.snapshot()), preferences: preferences(store), ...trashSnapshot() });
@@ -58,7 +60,7 @@ export function createApp({ root, roots, guard, demo = false }) {
         const beforeManagement = req.method !== 'GET' && /^\/api\/(trees|move|manage|projects|branches|conflicts)(?:\/|$)/.test(req.url) ? management() : null;
         const send = (status, value, type = 'application/json') => { let output = type === 'application/json' ? JSON.stringify(value) : value; const compressed = Buffer.byteLength(output) > 262144 && /\bgzip\b/.test(req.headers['accept-encoding'] || ''); if (compressed) output = gzipSync(output, { level: 1 }); diagnostics.request(req.method, req.url.split('?')[0], status, performance.now() - started, requestId); res.writeHead(status, { ...(compressed ? { 'Content-Encoding': 'gzip', Vary: 'Accept-Encoding' } : {}), 'Content-Type': type, 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff', 'Referrer-Policy': 'no-referrer', 'Content-Security-Policy': "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'" }); res.end(output); if (beforeManagement && status < 400 && !req.url.startsWith('/api/sync') && !['/api/collect', '/api/webdav'].includes(req.url)) {
             const changed = [...management()].filter(([id, value]) => beforeManagement.get(id) !== value).map(([id]) => id);
-            if (changed.length) autoSync.schedule(changed);
+            if (changed.length) { autoSync.schedule(changed); intelligence.observe(); }
         } };
         try {
             const expected = `127.0.0.1:${server.address().port}`;
@@ -120,7 +122,9 @@ export function createApp({ root, roots, guard, demo = false }) {
             if (req.method === 'GET' && route === '/api/diagnostics') return send(200, { ...diagnostics.report(), git: { commit: autoSync.cloud.connection?.remote.head || null, progress: autoSync.status().operation?.progress || null }, fallbackMinutes: autoSync.status().fallbackMinutes });
             if (req.method === 'GET' && route === '/api/discover')
                 return send(200, native.discover());
-            if (req.method === 'GET' && ['/api/webdav', '/api/settings'].includes(route)) return send(200, settings.status());
+            if (req.method === 'GET' && ['/api/webdav', '/api/settings'].includes(route)) return send(200, { ...settings.status(), intelligence: intelligence.status() });
+            if (req.method === 'POST' && route === '/api/settings/intelligence') return send(200, await intelligence.save(body));
+            if (req.method === 'POST' && route === '/api/intelligence/retry') return send(200, intelligence.retry());
             if (req.method === 'POST' && route === '/api/settings/verify') return send(200, await settings.verify(body));
             if (req.method === 'POST' && route === '/api/settings/confirm') return send(200, await settings.start(body));
             if (req.method === 'POST' && route === '/api/settings/recover') return send(200, await settings.recover());
@@ -182,7 +186,7 @@ export function createApp({ root, roots, guard, demo = false }) {
                 const before = store.instances();
                 try { native.setActive(branch.id, body.cwd, true, { nodeName: check.nodeName }); native.apply([branch.id]); }
                 catch (e) { store.local('instances', before); if (check.createsContinuation) e.message = 'Continuation saved, but activation failed: ' + e.message; throw e; }
-                autoSync.schedule([branch.id]);
+                autoSync.schedule([branch.id]); intelligence.observe();
                 return send(201, { branch, title: check.title, nodeId: check.createsContinuation ? 'empty-' + branch.id : selected.node.id });
             }
             if (req.method === 'POST' && ['/api/conversion-check', '/api/convert'].includes(route)) {
@@ -393,6 +397,7 @@ export function createApp({ root, roots, guard, demo = false }) {
             const start = performance.now(), r = native.refreshLocal(); lastCaptureAt = Date.now();
             diagnostics.record('capture', { updated: r.updates.length, discovered: r.discovered, count: r.errors.length, durationMs: Math.round(performance.now() - start) });
             for (const [phase, durationMs] of Object.entries(r.timings || {})) diagnostics.record('capture-phase', { phase, durationMs });
+            intelligence.observe();
             updateOperation = { ...updateOperation, state: r.errors.length ? 'error' : 'success', finishedAt: Date.now() };
             return r;
         } catch(e) { updateOperation = { ...updateOperation, state: 'error', finishedAt: Date.now() }; throw e; }
@@ -409,14 +414,14 @@ export function createApp({ root, roots, guard, demo = false }) {
     }
     configureCapture();
     server.on('close', () => { clearInterval(interval);clearTimeout(expiryTimer); autoSync.close(); store.close(); });
-    const app = { server, store, native, autoSync, diagnostics, settings, token, instance, quiesce() {
-        stopping = true; clearTimeout(interval);clearTimeout(expiryTimer); autoSync.closed = true;
+    const app = { server, store, native, autoSync, diagnostics, settings, intelligence, token, instance, quiesce() {
+        stopping = true; intelligence.close(); clearTimeout(interval);clearTimeout(expiryTimer); autoSync.closed = true;
         clearTimeout(autoSync.timer); clearTimeout(autoSync.retryTimer); clearTimeout(autoSync.interval);
         if (settings.job?.state !== 'running') autoSync.cloud.connection?.dav.controller?.abort(new Error('Server is stopping.'));
     }, close(callback) {
         app.quiesce();
         for(const res of streams)res.end(); streams.clear();
-        if(capturePromise||trashPromise)Promise.allSettled([capturePromise,trashPromise]).finally(()=>server.close(callback)); else server.close(callback);
+        if(capturePromise||trashPromise||intelligence.pending)Promise.allSettled([capturePromise,trashPromise,intelligence.pending]).finally(()=>server.close(callback)); else server.close(callback);
     } };
     return app;
 }

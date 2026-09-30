@@ -7,7 +7,7 @@ import { supportedHistory } from './codex-history.js';
 import { assert, hash, id as newId, now } from './util.js';
 import { estimateTokens } from './context.js';
 import { policyHash } from './context-policy.js';
-import { rootOf, treeMembers, nativePrefixBoundary } from './organization.js';
+import { rootOf, treeMembers, nativePrefixBoundary, metadata } from './organization.js';
 
 // Native threads, collection rows, and logical nodes are distinct projections.
 export const isActive = i => i.applied && !i.missing && !i.excluded && i.cwdAvailable !== false;
@@ -268,8 +268,7 @@ export function moveItems(store, { itemIds, projectId, projectName }) {
         for (const id of roots) {
             for (const b of treeMembers(store, id)) {
                 // Written directly here to keep project creation and all moves atomic.
-                store.put('branch', { ...b, projectId: project.id === INBOX_ID ? null : project.id, group: '', metaVersion: newId(),
-                    metaAncestors: [...new Set([...(b.metaAncestors || []), b.metaVersion].filter(Boolean))] });
+                store.put('branch', metadata(b, { projectId: project.id === INBOX_ID ? null : project.id, group: '' }));
             }
         }
         return { projectId: project.id, moved: roots.length };

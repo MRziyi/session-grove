@@ -42,6 +42,7 @@ let clockTimer = null, modalVersion = 0;
 const operations = {}, operationTimers = {}, seenOperations={};
 let activityGroups=[];
 function showOperation(kind, value) {
+    if(kind==='intelligence'){if(state.data)state.data.intelligence=value;renderCloudStatus();return;}
     const signature=value.id+':'+value.state+':'+JSON.stringify(value.progress||null); if(seenOperations[kind]===signature)return;seenOperations[kind]=signature;
     if (value.finishedAt && Date.now() - value.finishedAt > 3500) { if(kind==='trash'){delete operations.trash;if(state.data)state.data.trashOperation=value;renderCloudStatus();} return; }
     operations[kind] = value;
@@ -164,6 +165,17 @@ function positionSyncPanel(panel, anchor) {
 function showSyncPanel(panel, anchor) { panel.hidden = false; panel.showPopover?.(); positionSyncPanel(panel, anchor); }
 function hideSyncPanel(panel) { panel.hidePopover?.(); panel.hidden = true; }
 const transferPhaseNames={'Fetching Git changes':'Checking for updates','Importing session from Git cache':'Updating local sessions','Pulling sessions':'Updating local sessions','Preparing Git commit':'Preparing changes','Pushing Git commit':'Sending changes','Receiving objects':'Receiving changes','Writing objects':'Sending changes','Counting objects':'Counting changes','Compressing objects':'Compressing changes','Resolving deltas':'Applying differences','Downloading records':'Pulling changes','Uploading records':'Pushing changes','Applying downloaded changes':'Updating sessions','Updating downloaded sessions':'Updating sessions','Checking cloud directory':'Checking for changes','Reading cloud session manifests':'Checking shared history','Publishing project indexes':'Saving changes','Publishing cloud directory':'Finishing push','Download complete':'Pull complete','Preparing upload snapshot':'Preparing changes to push','Preparing shared history':'Preparing remaining sessions','Reclaiming cloud space':'Cleaning up removed sessions'};
+
+function renderIntelligence(){
+    const value=state.data?.intelligence,button=$('#smart-status');if(!button)return;
+    button.hidden=!value?.running&&!value?.error;
+    button.textContent=t(value?.error?'Smart organization needs attention':value?.phase||'Smart organization');
+    button.title=value?.error?[value.current,errorText(value.error)].filter(Boolean).join(' · '):[value?.current,value?.pending?t('{count} remaining',{count:value.pending}):''].filter(Boolean).join(' · ');
+    button.classList.toggle('has-error',!!value?.error);button.onclick=()=>settings();
+    const detail=$('#intelligence-status');if(detail)detail.textContent=value?.error?[value.current,errorText(value.error)].filter(Boolean).join(' · '):value?.running?[t(value.phase),value.current,t('{count} remaining',{count:value.pending})].filter(Boolean).join(' · '):value?.pending?t('{count} remaining',{count:value.pending}):'';
+    if($('#retry-intelligence'))$('#retry-intelligence').hidden=!value?.error;
+}
+
 function renderCloudStatus(){
     const d=state.data;if(!d)return;
     const offline=state.connected===false, operation=d.cloud.operation || operations.sync, busy=operation?.state==='running'||['syncing','migrating'].includes(d.cloud.phase), step=operation?.step || 'pull';
@@ -180,7 +192,7 @@ function renderCloudStatus(){
     const updating=operations.update?.state==='running'||state.uiBusy==='update';$('#collect').dataset.operation=updating?'running':'';$('#collect').disabled=offline||working||updating;
     $('#collect .button-label').textContent=t(updating?'Updating…':'Update');
     $$('.actions button,button[data-compaction],[data-trash-restore],[data-trash-native]').forEach(el=>el.disabled=actionDisabled(el));
-    renderTransfer();renderCountdowns();renderTrashProgress();
+    renderTransfer();renderCountdowns();renderTrashProgress();renderIntelligence();
     const ticking=!document.hidden&&!offline&&(d.update?.nextRunAt||d.cloud?.nextRunAt||busy);
     if(ticking&&!clockTimer)clockTimer=setInterval(()=>{renderCountdowns();renderTransfer();},1000);if(!ticking&&clockTimer){clearInterval(clockTimer);clockTimer=null;}
 }
@@ -767,21 +779,36 @@ async function showSource() {
 async function settings(options = {}) {
     try {
         const c = await api('/settings'), edit = options.editConnection || !c.verified;
-        const p = c.preferences;
+        const p = c.preferences, smart=c.intelligence||{};
         modal('Settings', `
           <section class="settings-card"><div class="settings-section-heading"><h3>${t('Git repository')}</h3>${!edit ? `<span class="setting-ok">✓ ${t('Connected')}</span><button type="button" id="modify-connection">${t('Modify')}</button>` : ''}</div>
           <label class="field">${t('Repository address')}<input name="url" type="text" value="${esc(c.url)}" placeholder="git@github.com:owner/repository.git" ${!edit ? 'disabled' : ''}></label>
 
           ${edit ? `<button type="button" id="verify-connection" class="primary">${t('Verify and connect')}</button>` : ''}
 </section>
+          <section class="settings-card" id="intelligence-settings"><div class="settings-section-heading"><h3>${t('Smart organization')}</h3><span class="context-limit">GPT-6 Luna</span></div>
+          <label class="field">${t('OpenAI API key')}<input type="password" name="intelligenceKey" autocomplete="off" placeholder="${t(smart.hasKey?'Key saved':'Add an API key')}" value=""></label>
+          <div class="intelligence-key-actions"><button type="button" id="save-intelligence-key">${t('Verify and save')}</button>${smart.hasKey?`<button type="button" id="remove-intelligence-key">${t('Remove key')}</button>`:''}</div>
+          <label class="timer-row"><span>${t('Classify and name new sessions')}</span><input type="checkbox" name="smartClassify" ${smart.classify?'checked':''} ${!smart.hasKey?'disabled':''}></label>
+          <label class="timer-row"><span>${t('Name new branch points')}</span><input type="checkbox" name="smartNodes" ${smart.nameNodes?'checked':''} ${!smart.hasKey?'disabled':''}></label>
+          <p class="dialog-copy">${t('Selected messages are sent to OpenAI when enabled.')}</p><p id="intelligence-status" role="status"></p><button type="button" id="retry-intelligence" ${!smart.error?'hidden':''}>${t('Retry')}</button>
+          </section>
           <section class="settings-card"><h3>${t('Trash')}</h3><label class="field">${t('Local recovery days')}<input type="number" name="trashRetentionDays" min="1" max="365" value="${p.trashRetentionDays}"></label></section><section class="settings-card"><h3>${t('Project contents')}</h3><label class="field">${t('Collapse older sessions')}<select name="projectFoldMode">${[['time','By age'],['count','By count'],['none','Show all']].map(([v,l])=>`<option value="${v}" ${p.projectFoldMode===v?'selected':''}>${t(l)}</option>`).join('')}</select></label>${p.projectFoldMode==='time'?`<label class="field">${t('Keep recent days')}<input type="number" name="projectFoldDays" min="1" max="365" value="${p.projectFoldDays}"></label>`:p.projectFoldMode==='count'?`<label class="field">${t('Visible sessions per project')}<input type="number" name="projectFoldCount" min="1" max="365" value="${p.projectFoldCount}"></label>`:''}</section><section class="settings-card"><h3>${t('Automatic updates')}</h3><div class="timer-row"><label><input type="checkbox" name="showScheduledSessions" ${p.showScheduledSessions?'checked':''}>${t('Show scheduled and background sessions')}</label></div>
             <label class="timer-row collapse-setting"><span>${t('Collapse projects after')}</span><select name="inactiveProjectDays" aria-label="${t('Collapse projects after')}">${[[7,'One week'],[15,'Half a month'],[30,'One month'],[60,'Two months']].map(([days,label])=>`<option value="${days}" ${days===p.inactiveProjectDays?'selected':''}>${t(label)}</option>`).join('')}</select></label>
             ${[['localUpdate', 'Read local sessions', p.localUpdateEnabled, p.localUpdateMinutes], ['autoUpload', 'Automatically upload local changes', p.autoUploadEnabled, p.autoUploadMinutes]].map(([key,label,on,minutes]) => `<div class="timer-row"><label><input type="checkbox" name="${key}Enabled" ${on ? 'checked' : ''}>${t(label)}</label><label class="timer-interval"><input type="number" name="${key}Minutes" value="${minutes}" min="1" max="1440" ${!on ? 'disabled' : ''}><span>${t('minutes')}</span></label></div>`).join('')}
             <button type="button" id="save-timers" hidden>${t('Save preferences')}</button>
           </section>`, null);
         $('#dialog-cancel').textContent = t('Close');
-        const busy = async (button, fn) => { if (working) return; working = true; button.disabled = true; const original = button.textContent; button.textContent = t(button.id==='verify-connection'?'Verifying connection…':'Working…'); $('#dialog-error').textContent = '';
+        const busy = async (button, fn) => { if (working) return; working = true; button.disabled = true; const original = button.textContent; button.textContent = t(['verify-connection','save-intelligence-key'].includes(button.id)?'Verifying connection…':'Working…'); $('#dialog-error').textContent = '';
             try { await fn(); } catch(e) { $('#dialog-error').textContent = e.message; } finally { working = false; renderCloudStatus(); if (button.isConnected) { button.disabled = false; button.textContent = original; } } };
+        const saveSmart=async body=>{state.data.intelligence=await api('/settings/intelligence','POST',body);await settings(options);renderCloudStatus();};
+        $('#save-intelligence-key').disabled=true;
+        $('[name=intelligenceKey]').oninput=e=>{$('#save-intelligence-key').disabled=!e.target.value.trim();};
+        $('#save-intelligence-key').onclick=e=>busy(e.currentTarget,()=>saveSmart({apiKey:$('[name=intelligenceKey]').value.trim()}));
+        if($('#remove-intelligence-key'))$('#remove-intelligence-key').onclick=e=>busy(e.currentTarget,()=>saveSmart({removeKey:true}));
+        for(const [name,key] of [['smartClassify','classify'],['smartNodes','nameNodes']])$(`[name=${name}]`).onchange=async e=>{const input=e.currentTarget;input.disabled=true;try{await saveSmart({[key]:input.checked});}catch(error){input.checked=!input.checked;input.disabled=false;$('#dialog-error').textContent=error.message;}};
+        $('#retry-intelligence').onclick=e=>busy(e.currentTarget,async()=>{state.data.intelligence=await api('/intelligence/retry','POST',{});renderIntelligence();});
+        state.data.intelligence=smart;renderIntelligence();
         if ($('#modify-connection')) $('#modify-connection').onclick = () => settings({editConnection:true});
         if ($('#verify-connection')) {
             const input = $('[name=url]'), button = $('#verify-connection');
@@ -800,7 +827,7 @@ async function settings(options = {}) {
     } catch(e) { toast(e.message); }
 }
 function information() {
-    modal('Information', `<details><summary>${t('Using Grove')}</summary><ul class="action-guide"><li>${t('Update reads your local sessions. Pull gets changes from your other devices. Push sends your changes after pulling.')}</li><li>${t('Activate opens the selected node and its preceding context in your tool. Deactivate is available at the active endpoint.')}</li><li>${t('Renaming changes the Grove label. Your conversation keeps the same identity.')}</li></ul></details><details><summary>${t('Sync and recovery')}</summary><p>${t('Sessions are stored as readable files in your Git repository. Earlier versions remain in Git history.')}</p><p>${t('Changes made during upload remain queued for the next upload.')}</p><p>${t('Trash keeps a recovery copy on this device until its displayed expiry date.')}</p></details><details><summary>${t('Tokens and tools')}</summary><p>${t('Token counts estimate the selected conversation and recorded tool context. Model capacity and compaction thresholds come from available model settings.')}</p>${['lean','full','messages'].map(m=>`<p><strong>${t(modeName(m))}</strong> — ${contextCopy(m)}</p>`).join('')}<p>${t('Switching tools creates a new session. Thinking and attachments remain in the original.')}</p></details>${(state.data.plan?.pendingRecovery||[]).map(id=>`<button type="button" data-recover="${esc(id)}">${t('Recover interrupted operation')}</button>`).join('')}${state.data.conflicts.map((c,i)=>`<div class="conflict">${t('Conflict')}: ${esc(c.local.name)}<button type="button" data-conflict="${i}" data-choice="local">${t('Keep local')}</button><button type="button" data-conflict="${i}" data-choice="remote">${t('Use remote')}</button></div>`).join('')}`,null);
+    modal('Information', `<details><summary>${t('Using Grove')}</summary><ul class="action-guide"><li>${t('Update reads your local sessions. Pull gets changes from your other devices. Push sends your changes after pulling.')}</li><li>${t('Activate opens the selected node and its preceding context in your tool. Deactivate is available at the active endpoint.')}</li><li>${t('Renaming changes the Grove label. Your conversation keeps the same identity.')}</li></ul></details><details><summary>${t('Sync and recovery')}</summary><p>${t('Sessions are stored as readable files in your Git repository. Earlier versions remain in Git history.')}</p><p>${t('Changes made during upload remain queued for the next upload.')}</p><p>${t('Trash keeps a recovery copy on this device until its displayed expiry date.')}</p></details><details><summary>${t('Smart organization')}</summary><p>${t('Smart organization handles new sessions and new branch points. Existing names are preserved.')}</p><p>${t('Classification uses the first human request, project names and a short workspace hint. Node naming uses the first human request and last assistant reply in that node.')}</p><p>${t('Your API key and switches stay on this device. User messages are kept complete; long assistant replies are shortened in the middle.')}</p></details><details><summary>${t('Tokens and tools')}</summary><p>${t('Token counts estimate the selected conversation and recorded tool context. Model capacity and compaction thresholds come from available model settings.')}</p>${['lean','full','messages'].map(m=>`<p><strong>${t(modeName(m))}</strong> — ${contextCopy(m)}</p>`).join('')}<p>${t('Switching tools creates a new session. Thinking and attachments remain in the original.')}</p></details>${(state.data.plan?.pendingRecovery||[]).map(id=>`<button type="button" data-recover="${esc(id)}">${t('Recover interrupted operation')}</button>`).join('')}${state.data.conflicts.map((c,i)=>`<div class="conflict">${t('Conflict')}: ${esc(c.local.name)}<button type="button" data-conflict="${i}" data-choice="local">${t('Keep local')}</button><button type="button" data-conflict="${i}" data-choice="remote">${t('Use remote')}</button></div>`).join('')}`,null);
     const operation=state.data.cloud.operation;
     if (operation) $('#dialog-content').insertAdjacentHTML('beforeend', `<details id="transfer-diagnostics"><summary>${t('Last transfer')}</summary><dl><dt>${t('Elapsed')}</dt><dd>${Math.round(((operation.finishedAt||Date.now())-operation.startedAt)/1000)} s</dd>${operation.summary?`<dt>${t('Sessions checked')}</dt><dd>${operation.summary.checked||0}</dd><dt>${t('Items pushed')}</dt><dd>${operation.summary.published||0}</dd>`:''}</dl></details>`);
     $$('[data-conflict]').forEach(el=>el.onclick=()=>run(async()=>{await api('/conflicts/resolve','POST',{index:Number(el.dataset.conflict),choice:el.dataset.choice});$('#dialog').close();}));
@@ -867,6 +894,7 @@ try {
         if (document.hidden) return;
         try {
             const next = await api('/status');
+            if(next.intelligence)showOperation('intelligence',next.intelligence);
             if(next.cloud.operation)showOperation('sync',next.cloud.operation);
             if(next.trashOperation)showOperation('trash',next.trashOperation);
             if(next.update.operation)showOperation('update',next.update.operation);

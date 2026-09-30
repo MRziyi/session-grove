@@ -8,7 +8,7 @@ Session Grove is a project-based session manager for **Claude Code and Codex**. 
 
 ![A conversation and its context tree in Session Grove](docs/images/workspace.png)
 
-**0.15:** Git sync is now the default backend. Pending changes explain what changed and generate commit messages. Pull/Push show progress inside their buttons; unchanged Pull reports “Already up to date”. Session aliases preserve native identity, and active graph endpoints offer Deactivate.
+**0.16:** Optional smart organization uses GPT-6 Luna to classify and name new sessions, and give new branch points concise titles. Configure your OpenAI API key in Settings and enable either option independently. Existing names and original transcripts are preserved.
 
 ## When your chat history becomes the problem
 
@@ -25,7 +25,7 @@ Session Grove gives that work a structure:
 - **Keep only useful sessions active.** Activate the path you want in your agent. Move failed or unwanted paths to Trash. Keep useful older work in Projects.
 - **Pick up on another Mac.** Named projects and Ungrouped sync through your private Git repository. Pull imports all sessions locally; click any session to open it.
 
-Grove manages the session library. **Codex and Claude Code remain where you actually talk to the agent.** It does not replace their editor integrations or send model requests on your behalf.
+Grove manages the session library. **Codex and Claude Code remain where you actually talk to the agent.** Optional smart organization sends selected messages to OpenAI for labels; it does not run conversation turns in your client.
 
 ## A typical workflow
 
@@ -40,7 +40,7 @@ Internal-node activation adds a continuation containing the selected node and it
 
 Read conversations as Markdown. Expand recorded activity to inspect tool inputs/results, named files and readable reasoning alongside the conversation. Encrypted reasoning without a readable summary is labeled explicitly: Grove preserves its original bytes and does not pretend to decode them. Large record previews are paged. Large graphs support background dragging, zoom and reset; Sankey bands connect only visible content.
 
-Actions appear only when they apply to the current selection. **Settings** contains language, the Git SSH remote and automatic-update intervals. **ⓘ Information**, at the bottom of the sidebar, contains the action guide and diagnostics. **About** links to the author and repository.
+Actions appear only when they apply to the current selection. **Settings** contains the Git SSH remote, smart organization and automatic-update intervals. Switch language beside **ⓘ Information**. **ⓘ Information**, at the bottom of the sidebar, contains the action guide and context details. **About** links to the author and repository.
 
 ## Try it
 
@@ -61,7 +61,7 @@ To manage your own sessions, stop the demo and run:
 pnpm dev
 ```
 
-npm works too: `npm run demo`, `npm run dev`, and `npm test`. The interface defaults to English; switch to Chinese in **Settings**.
+npm works too: `npm run demo`, `npm run dev`, and `npm test`. The interface defaults to English; switch to Chinese using the language button beside **Information**.
 
 ## Your context, on your storage
 
@@ -79,7 +79,7 @@ The library retains original session records. Node edits organize those records 
 
 **Context fidelity has limits.** Supported materialization preserves recorded tool calls/results, reasoning and instructions instead of rebuilding a conversation from visible prose. Codex paginated forks resolve their recorded prefix references and remain paginated on activation. Native New branch and Grove Fork have been compared at the same checkpoint, including tool/reasoning records and native projected items. Missing history segments still block context changes. Dynamic client instructions, opaque compaction and external assets prevent a promise of identical model requests. See the [requirements and fidelity audit](docs/requirements-audit.md).
 
-Native activation changes currently require closing running agent processes first. The UI explains this in Settings. Codex native read/resume has been exercised with a real executable; Claude read/fork behavior has been compared against the official SDK on 32 sessions and 111 checkpoints; dynamic model state is outside that equivalence. The Git backend is tested with isolated bare repositories for cross-device continuation, deletion and interrupted upload recovery. Legacy WebDAV is available only for migration.
+Adding an activated session works while clients remain running. Editing or removing existing copies retains native-write protections. Codex native read/resume has been exercised with a real executable; Claude read/fork behavior has been compared against the official SDK on 32 sessions and 111 checkpoints; dynamic model state is outside that equivalence. The Git backend is tested with isolated bare repositories for cross-device continuation, deletion and interrupted upload recovery. Legacy WebDAV is available only for migration.
 
 Select a session endpoint and use “Activate as…” to preview full or lean context and create an independent target session with source provenance.
 

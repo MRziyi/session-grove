@@ -77,6 +77,16 @@ try{
   if(selector==='#settings')assert.ok(await evaluate('(()=>{const row=document.querySelector(".collapse-setting"),s=row.querySelector(".select-control").getBoundingClientRect(),l=row.querySelector("span").getBoundingClientRect();return l.right<=s.left&&Math.abs(l.y+l.height/2-s.y-s.height/2)<2})()'));
   assert.equal(await evaluate('document.querySelector(".dialog-actions").hidden'),true);
   if(selector==='#settings'){
+   assert.equal(await evaluate('document.querySelector("[name=smartClassify]").disabled&&document.querySelector("[name=smartNodes]").disabled'),true);
+   app.intelligence.request=async()=>({name:'Verified'});
+   await evaluate('document.querySelector("[name=intelligenceKey]").value="browser-test-secret";document.querySelector("[name=intelligenceKey]").dispatchEvent(new Event("input"));document.querySelector("#save-intelligence-key").click()');
+   await wait('document.querySelector("#remove-intelligence-key")&&!document.querySelector("[name=smartClassify]").disabled');
+   assert.equal(await evaluate('document.querySelector("[name=intelligenceKey]").value'),'');
+   assert.ok(!(await evaluate('document.querySelector("#dialog").innerHTML')).includes('browser-test-secret'));
+   await evaluate('document.querySelector("[name=smartNodes]").click()');await wait('document.querySelector("[name=smartNodes]").checked&&!document.querySelector("[name=smartNodes]").disabled');
+   assert.equal(app.intelligence.status().nameNodes,true);
+   await evaluate('document.querySelector("#remove-intelligence-key").click()');await wait('document.querySelector("[name=smartNodes]").disabled&&!document.querySelector("#remove-intelligence-key")');
+   assert.equal(app.intelligence.status().hasKey,false);
    assert.equal(await evaluate('!!document.querySelector("#language")'),false);
    assert.ok(await evaluate('(()=>{const h=document.querySelector(".settings-section-heading h3").getBoundingClientRect(),b=document.querySelector("#modify-connection").getBoundingClientRect();return b.left>h.right&&Math.abs(h.y+h.height/2-b.y-b.height/2)<2})()'));
    assert.ok(await evaluate('[...document.querySelectorAll(".settings-card")].every(c=>{const style=getComputedStyle(c),h=c.querySelector("h3");return style.paddingTop===style.paddingBottom&&style.paddingTop===style.paddingLeft&&getComputedStyle(h).marginTop==="0px"})'));
@@ -86,6 +96,12 @@ try{
   if(selector==='#information')assert.equal(await evaluate('/diagnostic/i.test(document.querySelector("#dialog-content").textContent)'),false);
   await call('Input.dispatchMouseEvent',{type:'mousePressed',x:5,y:150,button:'left',clickCount:1});await call('Input.dispatchMouseEvent',{type:'mouseReleased',x:5,y:150,button:'left',clickCount:1});await wait('!document.querySelector("#dialog").open');
  }
+ app.intelligence.running=true;app.intelligence.phase='Naming branch point';app.intelligence.current='A very long session title '.repeat(20);app.intelligence.publish();
+ await wait('!document.querySelector("#smart-status").hidden&&document.querySelector("#smart-status").textContent==="Naming branch point"');
+ await call('Emulation.setDeviceMetricsOverride',{width:430,height:932,deviceScaleFactor:1,mobile:true});
+ assert.ok(await evaluate('(()=>{const r=document.querySelector("#smart-status").getBoundingClientRect(),h=document.querySelector(".banner").getBoundingClientRect();return r.left>=0&&r.right<=innerWidth&&r.bottom<=h.bottom+1})()'));
+ app.intelligence.running=false;app.intelligence.phase=null;app.intelligence.current=null;app.intelligence.publish();await wait('document.querySelector("#smart-status").hidden');
+ await call('Emulation.setDeviceMetricsOverride',{width:1512,height:982,deviceScaleFactor:1,mobile:false});
  await evaluate('document.querySelector("#language-toggle").click()');assert.equal(await evaluate('document.querySelector("#language-toggle").textContent'),'中');
  await evaluate('document.querySelector("#language-toggle").click()');assert.equal(await evaluate('document.querySelector("#language-toggle").textContent'),'En');
  const {savePreferences}=await import(pathToFileURL(path.join(source,'src/preferences.js')));
