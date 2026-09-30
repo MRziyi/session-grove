@@ -1,4 +1,4 @@
-import { foldedItems, pendingLabels, forkBeforeNode, projectGroups, selectRange, inactiveProject } from './library-view.js';
+import { foldedItems, pendingLabels, projectGroups, selectRange, inactiveProject, transferStages } from './library-view.js';
 import { markdown } from './markdown.js';
 import { enhanceSelect } from './select.js';
 import { t, locale, setLocale, errorText } from './i18n.js';
@@ -10,7 +10,7 @@ const icons = {
     codex: '<path d="m4 6 6 6-6 6m9 0h7"/>',
     claude: '<path fill="currentColor" stroke="none" d="m4.7144 15.9555 4.7174-2.6471.079-.2307-.079-.1275h-.2307l-.7893-.0486-2.6956-.0729-2.3375-.0971-2.2646-.1214-.5707-.1215-.5343-.7042.0546-.3522.4797-.3218.686.0608 1.5179.1032 2.2767.1578 1.6514.0972 2.4468.255h.3886l.0546-.1579-.1336-.0971-.1032-.0972L6.973 9.8356l-2.55-1.6879-1.3356-.9714-.7225-.4918-.3643-.4614-.1578-1.0078.6557-.7225.8803.0607.2246.0607.8925.686 1.9064 1.4754 2.4893 1.8336.3643.3035.1457-.1032.0182-.0728-.164-.2733-1.3539-2.4467-1.445-2.4893-.6435-1.032-.17-.6194c-.0607-.255-.1032-.4674-.1032-.7285L6.287.1335 6.6997 0l.9957.1336.419.3642.6192 1.4147 1.0018 2.2282 1.5543 3.0296.4553.8985.2429.8318.091.255h.1579v-.1457l.1275-1.706.2368-2.0947.2307-2.6957.0789-.7589.3764-.9107.7468-.4918.5828.2793.4797.686-.0668.4433-.2853 1.8517-.5586 2.9021-.3643 1.9429h.2125l.2429-.2429.9835-1.3053 1.6514-2.0643.7286-.8196.85-.9046.5464-.4311h1.0321l.759 1.1293-.34 1.1657-1.0625 1.3478-.8804 1.1414-1.2628 1.7-.7893 1.36.0729.1093.1882-.0183 2.8535-.607 1.5421-.2794 1.8396-.3157.8318.3886.091.3946-.3278.8075-1.967.4857-2.3072.4614-3.4364.8136-.0425.0304.0486.0607 1.5482.1457.6618.0364h1.621l3.0175.2247.7892.522.4736.6376-.079.4857-1.2142.6193-1.6393-.3886-3.825-.9107-1.3113-.3279h-.1822v.1093l1.0929 1.0686 2.0035 1.8092 2.5075 2.3314.1275.5768-.3218.4554-.34-.0486-2.2039-1.6575-.85-.7468-1.9246-1.621h-.1275v.17l.4432.6496 2.3436 3.5214.1214 1.0807-.17.3521-.6071.2125-.6679-.1214-1.3721-1.9246L14.38 17.959l-1.1414-1.9428-.1397.079-.674 7.2552-.3156.3703-.7286.2793-.6071-.4614-.3218-.7468.3218-1.4753.3886-1.9246.3157-1.53.2853-1.9004.17-.6314-.0121-.0425-.1397.0182-1.4328 1.9672-2.1796 2.9446-1.7243 1.8456-.4128.164-.7164-.3704.0667-.6618.4008-.5889 2.386-3.0357 1.4389-1.882.929-1.0868-.0062-.1579h-.0546l-6.3385 4.1164-1.1293.1457-.4857-.4554.0608-.7467.2307-.2429 1.9064-1.3114Z"/>',
     studio: '<rect x="3" y="6" width="18" height="12" rx="3"/><path d="M4 10h16M6 14h2m2 0h2"/><circle cx="18" cy="14" r=".5"/>',
-    download: '<path d="M12 3v12m-5-5 5 5 5-5M4 17v4h16v-4"/>',
+    download: '<path class="transfer-arrow" d="M12 3v12m-5-5 5 5 5-5"/><path d="M4 17v4h16v-4"/>',
     upload: '<path d="M12 16V4m-5 5 5-5 5 5M4 17v4h16v-4"/>',
     check: '<path d="m5 12 4 4L19 6"/>',
     alert: '<path d="m12 3 10 18H2Z"/><path d="M12 9v5m0 3v.1"/>',
@@ -19,7 +19,7 @@ const icons = {
     windows: '<path d="M3 5l8-1v8H3Zm10-1 8-1v9h-8ZM3 14h8v7l-8-1Zm10 0h8v9l-8-2Z"/>',
     website: '<circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c-6 5-6 13 0 18 6-5 6-13 0-18Z"/>',
     github: '<path d="M9 19c-4 1-4-2-5-2m10 5v-3.9a3.4 3.4 0 0 0-1-2.7c3.3-.4 6.7-1.6 6.7-7.3a5.7 5.7 0 0 0-1.5-4c.1-1 .1-2.1-.5-3.1 0 0-1.2-.4-4 1.5a13.4 13.4 0 0 0-7 0C4.9.6 3.7 1 3.7 1c-.6 1-.6 2.1-.5 3.1a5.7 5.7 0 0 0-1.5 4c0 5.7 3.4 6.9 6.7 7.3a3.4 3.4 0 0 0-1 2.7V22"/>',
-    upload: '<path d="M12 16V3m-4 4 4-4 4 4M4 14v6h16v-6"/>',
+    upload: '<path class="transfer-arrow" d="M12 16V3m-4 4 4-4 4 4"/><path d="M4 17v4h16v-4"/>',
     sync: '<path d="M20 8a8 8 0 0 0-14-3L3 8m0-5v5h5M4 16a8 8 0 0 0 14 3l3-3m0 5v-5h-5"/>',
     refresh: '<path d="M20 9a8 8 0 1 0 0 6M20 3v6h-6"/>',
     search: '<circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 5 5"/>',
@@ -70,7 +70,12 @@ const camera = { x: 0, y: 0, zoom: 1, width: 0, height: 0, rootX: 0, newView: tr
 const compactNumber = n => new Intl.NumberFormat(locale() === 'zh' ? 'zh-CN' : 'en-US', { notation: 'compact', maximumFractionDigits: 1 }).format(n);
 const tokenLabel = n => t('≈ {count} tokens', { count: compactNumber(n.tokens?.recordedEstimate ?? n.tokens?.estimate ?? 0) });
 const tokenHint = () => t('Rough estimate of recorded message and tool text. Excludes hidden instructions, encrypted content and images; not live context usage.');
-const cloudMark = item => item.cloudState === 'cloud' ? `<span class="cloud-mark cloud" title="${esc(t('Stored in cloud · download on open'))}">${icon('cloud')}</span>` : '';
+const cloudMark = item => {
+    const badge = (kind, glyph, label) => `<span class="cloud-mark session-state ${kind}" title="${esc(t(label))}" aria-label="${esc(t(label))}">${glyph}</span>`;
+    return (item.cloudState === 'cloud' ? badge('cloud', icon('cloud'), 'Stored in cloud · download on open') : '')
+        + (item.sessions?.some(s => s.active) ? badge('active-state', '<svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8" fill="currentColor"/><path d="m10 8 6 4-6 4Z" fill="white"/></svg>', 'Active on this device') : '')
+        + (item.cloudState === 'local' ? badge('modified-state', '<svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m5 15 10-10 4 4-10 10-5 1Z" fill="none" stroke="currentColor" stroke-width="2"/></svg>', 'Local changes waiting to push') : '');
+};
 
 const date = value => value ? new Date(value).toLocaleString(locale() === 'zh' ? 'zh-CN' : 'en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : t('Never');
 const currentProject = () => state.data.projects.find(p => p.id === state.scope);
@@ -104,7 +109,7 @@ const field = (label, name, value = '', type = 'text') => `<label class="field">
 $('#dialog-close').onclick = $('#dialog-cancel').onclick = () => $('#dialog').close();
 $('#dialog-form').onsubmit = async e => {
     e.preventDefault(); if (!submitAction || working) return;
-    working = true; $('#dialog-submit').disabled = true;
+    working = true; $('#dialog-submit').disabled = true; renderCloudStatus();
     try { const complete = await submitAction(new FormData(e.target)); if (complete === false) return; $('#dialog').close(); await refresh(); }
     catch (e) { $('#dialog-error').textContent = e.message; }
     finally { working = false; $('#dialog-submit').disabled = false; renderCloudStatus(); }
@@ -114,10 +119,11 @@ async function run(fn, activity = null) {
     if(activity) showOperation(activity,{id:'local-'+Date.now(),state:'running'});
     try { await fn(); await refresh(); if(activity && operations[activity]?.state!=='error')showOperation(activity,{id:'local-'+Date.now(),state:'success',finishedAt:Date.now()}); } catch (e) { if(activity)showOperation(activity,{id:'local-'+Date.now(),state:'error',finishedAt:Date.now()}); toast(e.message); } finally { working = false; state.uiBusy = null; renderCloudStatus(); }
 }
-function button(id, label, fn) { const el = $(id); if (el) { el.textContent = t(label); el.onclick = fn; el.disabled = working || ['syncing','migrating'].includes(state.data?.cloud?.phase); } }
+function actionDisabled(el) { return state.connected === false || working; }
+function button(id, label, fn) { const el = $(id); if (el) { el.textContent = t(label); el.onclick = fn; el.disabled = actionDisabled(el); } }
 function translateBanner() {
-    for (const [id, glyph, label] of [['sync', 'sync', 'Sync'], ['collect', 'refresh', 'Update'], ['settings', 'settings', 'Settings']]) {
-        const el = $('#' + id); el.dataset.glyph= glyph; el.innerHTML = `${icon(glyph)}<span class="button-label">${t(label)}</span>`; el.title = t(label); el.setAttribute('aria-label', t(label));
+    for (const [id, glyph, label] of [['sync', 'download', 'Pull'], ['upload', 'upload', 'Push'], ['collect', 'refresh', 'Update'], ['settings', 'settings', 'Settings']]) {
+        const el = $('#' + id); el.dataset.glyph= glyph; el.innerHTML = `${icon(glyph)}<span class="button-label">${t(label)}</span>${['sync','upload'].includes(id)?'<span class="button-check" aria-hidden="true">✓</span>':''}`; el.title = t(label); el.setAttribute('aria-label', t(label));
     }
     $('#about').textContent = t('About'); $('#information').title = t('Information'); $('#information').setAttribute('aria-label', t('Information'));
     $('#search-icon').innerHTML = icon('search'); $('#search').placeholder = t('Search title or content…'); $('#search').setAttribute('aria-label', t('Search title or content…'));
@@ -143,37 +149,69 @@ function renderNavigation() {
     renderCloudStatus();
 }
 
+let syncPinned = false, pendingTimer, pendingTicket = 0, transferSamples = [], sampledOperation = null;
+const bytesLabel = bytes => bytes < 1024 ? `${bytes || 0} B` : bytes < 1048576 ? `${(bytes / 1024).toFixed(1)} KiB` : `${(bytes / 1048576).toFixed(1)} MiB`;
+function positionSyncPanel(panel, anchor) {
+    const rect = anchor.getBoundingClientRect(), width = Math.min(420, innerWidth - 20), top = Math.min(Math.max(rect.bottom, $('.banner').getBoundingClientRect().bottom) + 8, innerHeight - 80);
+    Object.assign(panel.style, { width: width + 'px', left: Math.max(10, Math.min(rect.right - width, innerWidth - width - 10)) + 'px', top: top + 'px', maxHeight: Math.max(60, innerHeight - top - 12) + 'px' });
+}
+function showSyncPanel(panel, anchor) { if(panel.id==='pending-uploads'){syncPinned=false;hideSyncPanel($('#transfer-progress'));$('#sync-details').setAttribute('aria-expanded','false');}else{hideSyncPanel($('#pending-uploads'));pendingTicket++;} panel.hidden = false; panel.showPopover?.(); positionSyncPanel(panel, anchor); }
+function hideSyncPanel(panel) { panel.hidePopover?.(); panel.hidden = true; }
+const transferPhaseNames={'Downloading records':'Pulling changes','Uploading records':'Pushing changes','Applying downloaded changes':'Updating sessions','Updating downloaded sessions':'Updating sessions','Checking cloud directory':'Checking for changes','Reading cloud session manifests':'Checking shared history','Publishing project indexes':'Saving changes','Publishing cloud directory':'Finishing push','Download complete':'Pull complete','Preparing upload snapshot':'Preparing changes to push','Preparing shared history':'Preparing remaining sessions','Reclaiming cloud space':'Cleaning up removed sessions'};
 function renderCloudStatus(){
     const d=state.data;if(!d)return;
-    const offline=state.connected===false, operation=d.cloud.operation || operations.sync, busy=operation?.state==='running'||['syncing','migrating'].includes(d.cloud.phase);
-    $('#cloud-status').textContent=t(offline?'Service disconnected':busy?'Syncing…':d.cloud.needsReview?'Review sync':d.cloud.error?'Sync failed':d.cloud.dirty?'Local changes':d.cloud.started?'Synced':'Ready to sync');
-    $('#cloud-status').title=offline?t('The page shows cached data. Run pnpm start to reconnect.'):d.cloud.error||'';
-    $('#sync').dataset.operation=busy?'running':operation?.state||'';
-    $('#sync').disabled=offline;$('#sync').setAttribute('aria-busy',String(busy));
-    const updating=operations.update?.state==='running'||state.uiBusy==='update';$('#collect').dataset.operation=updating?'running':'';$('#collect').disabled=offline||busy||working;
+    const offline=state.connected===false, operation=d.cloud.operation || operations.sync, busy=operation?.state==='running'||['syncing','migrating'].includes(d.cloud.phase), step=operation?.step || 'pull';
+    const phase=operation?.progress?.phase;
+    $('#cloud-status').textContent=t(offline?'Service disconnected':busy?(transferPhaseNames[phase] || phase || (step==='pull'?'Pulling changes':'Pushing changes')):d.cloud.needsReview&&operation?.state==='error'?'Review sync':operation?.state==='error'?'Sync failed':d.cloud.dirty?'Local changes':d.cloud.started?'Up to date':'Ready to sync');
+    $('#sync-details').classList.toggle('has-error',operation?.state==='error');
+    $('#sync-details').title=t('Transfer details');
+    const stages=transferStages(operation), appearance={running:'running',complete:'success',failed:'error',paused:'paused',pending:''};
+    $('#sync').dataset.operation=appearance[stages.pull]; $('#upload').dataset.operation=appearance[stages.push];
+    for(const id of ['sync','upload']) { $('#'+id).disabled=offline||busy||!!state.syncPreparing; $('#'+id).setAttribute('aria-busy',String(busy&&(id==='sync'?step==='pull':step==='push'))); }
+    const mini=$('#sync-mini'), progress=operation?.stageProgress; mini.hidden=!busy;
+    if(progress?.total>0){mini.max=progress.total;mini.value=progress.completed||0;}else mini.removeAttribute('value');
+    const updating=operations.update?.state==='running'||state.uiBusy==='update';$('#collect').dataset.operation=updating?'running':'';$('#collect').disabled=offline||working||updating;
     $('#collect .button-label').textContent=t(updating?'Updating…':'Update');
-    $$('.actions button,button[data-compaction],[data-trash-restore],[data-trash-native]').forEach(el=>el.disabled=offline||busy||working);
+    $$('.actions button,button[data-compaction],[data-trash-restore],[data-trash-native]').forEach(el=>el.disabled=actionDisabled(el));
     renderTransfer();renderCountdowns();
-    const ticking=!document.hidden&&!offline&&(d.update?.nextRunAt||d.cloud?.nextRunAt);
-    if(ticking&&!clockTimer)clockTimer=setInterval(renderCountdowns,1000);if(!ticking&&clockTimer){clearInterval(clockTimer);clockTimer=null;}
+    const ticking=!document.hidden&&!offline&&(d.update?.nextRunAt||d.cloud?.nextRunAt||busy);
+    if(ticking&&!clockTimer)clockTimer=setInterval(()=>{renderCountdowns();if(!$('#transfer-progress').hidden)renderTransfer();},1000);if(!ticking&&clockTimer){clearInterval(clockTimer);clockTimer=null;}
 }
 function transferHtml(value) {
-    const p=value?.progress;if(!p)return `<p>${t('Preparing sync…')}</p><progress></progress>`;
-    const total=p.total,count=p.completed||0,direction=/Upload|Publishing/.test(p.phase)?'Push':'Pull';
-    const eta=p.etaSeconds==null?t('Estimating…'):t('About {time} remaining in this stage',{time:Math.floor(p.etaSeconds/60)+':'+String(p.etaSeconds%60).padStart(2,'0')});
-    return `<strong>${direction} · ${t(p.phase)}</strong><progress ${total?'max="'+total+'" value="'+count+'"':''}></progress><small>${total?count.toLocaleString()+' / '+total.toLocaleString()+' · '+Math.floor(count/total*100)+'% · ':''}${eta}</small>`;
+    const p=value?.progress, stages=transferStages(value), running=value?.state==='running', failed=value?.state==='error', paused=value?.state==='interrupted';
+    const progress=value?.stageProgress, total=progress?.total, count=progress?.completed||0;
+    const remaining=p?.etaSeconds;
+    const eta=remaining==null?t('Estimating time…'):t('About {time} left',{time:Math.floor(remaining/60)+':'+String(remaining%60).padStart(2,'0')});
+    const stage=key=>`<span class="sync-step" data-step="${key}" data-state="${stages[key]}">${icon(key==='pull'?'download':'upload')}<span>${key==='pull'?'Pull':'Push'}</span>${stages[key]==='complete'?'<span class="stage-check" aria-label="'+esc(t('Complete'))+'">✓</span>':''}</span>`;
+    if (!value) return `<div class="transfer-steps">${stage('pull')}<span class="stage-connector" aria-hidden="true">→</span>${stage('push')}</div><p class="dialog-copy">${t('Pull brings in cloud changes. Push pulls first, then sends your local changes.')}</p>`;
+    const percent=total>0?Math.min(100,Math.floor(count/total*100)):null;
+    const rate=transferSamples.at(-1)?.rate;
+
+    const phase=paused?'Transfer paused':!running&&value?.state==='success'?(value.direction==='push'?'Push complete':'Pull complete'):transferPhaseNames[p?.phase]||p?.phase||'Ready to sync';
+    const error=failed?value.error:paused?t('Transfer paused. Pull or Push when ready.'):null;
+    return `<div class="transfer-steps">${stage('pull')}<span class="stage-connector" aria-hidden="true">→</span>${stage('push')}</div><div class="transfer-heading"><strong>${esc(t(phase))}</strong>${running&&!error?`<span class="transfer-eta">${eta}</span>`:''}</div>${p?.detail&&!error?`<p class="transfer-item">${esc(p.detail)}</p>`:''}${error?`<div class="transfer-error ${paused?'is-paused':''}" role="alert">${esc(error)}</div>`:`<progress ${total>0?'max="'+total+'" value="'+count+'"':value?.state==='success'?'max="1" value="1"':''}></progress><div class="transfer-footer"><span>${percent===null?(running?t('Preparing…'):t('Complete')):percent+'%'}</span><span class="transfer-speed">${running?(rate==null?t('Measuring speed…'):bytesLabel(rate)+'/s · '+t('down')):''}</span></div>`}`;
 }
 function renderTransfer() {
-    const value=state.data.cloud.operation||operations.sync,box=$('#transfer-progress'),running=value?.state==='running';
-    box.hidden=!running&&!state.syncPreparing;
-    if(!box.hidden)box.innerHTML=transferHtml(running?value:null);
-    if(state.syncOperation&&state.data.cloud.manualOperation?.id===state.syncOperation&&state.data.cloud.manualOperation.state!=='running'){
-        const done=state.data.cloud.manualOperation;state.syncOperation=null;toast(done.state==='error'?done.error||t('Sync failed'):t('Sync complete'));
+    const cloud=state.data.cloud,value=cloud.operation||operations.sync,box=$('#transfer-progress'),running=value?.state==='running';
+    if(value?.id!==sampledOperation){sampledOperation=value?.id;transferSamples=[];}
+    if(running&&value.network){const at=value.network.sampledAt||Date.now(),bytes=value.network.bytesReceived||0,last=transferSamples.at(-1);if(!last||at-last.at>=1000){transferSamples.push({at,bytes,rate:last?Math.max(0,(bytes-last.bytes)*1000/(at-last.at)):0});if(transferSamples.length>2)transferSamples.shift();}}
+    if(!box.hidden){
+        box.innerHTML=`<div class="sync-panel-heading"><strong>${t('Transfer details')}</strong><button type="button" id="close-transfer" aria-label="${esc(t('Close'))}">×</button></div>${transferHtml(value)}`;
+        $('#close-transfer').onclick=()=>{syncPinned=false;hideSyncPanel(box);$('#sync-details').setAttribute('aria-expanded','false');};positionSyncPanel(box,$('#sync-details'));
     }
+    if(state.syncOperation&&cloud.manualOperation?.id===state.syncOperation&&cloud.manualOperation.state!=='running'){
+        const done=cloud.manualOperation;state.syncOperation=null;toast(t(done.state==='error'?'Sync failed':done.direction==='pull'?'Pull complete':'Push complete'));
+        if(!$('#dialog').open&&!working)queueMicrotask(()=>refresh().catch(e=>toast(e.message)));
+    }
+}
+async function showPendingUploads(){
+    clearTimeout(pendingTimer); const box=$('#pending-uploads'),ticket=++pendingTicket;
+    showSyncPanel(box,$('#push-zone'));box.innerHTML=`<strong>${t('Pending uploads')}</strong><p>${t('Reading local changes…')}</p>`;
+    try{const data=await api('/synchronize/pending');if(ticket!==pendingTicket||box.hidden)return;box.innerHTML=`<strong>${t('Pending uploads')} · ${data.items.length}</strong>${data.items.length?`<ul>${data.items.map(i=>`<li><span>${esc(i.name)}</span><small>${t(i.action==='remove'?'Move to Trash':'Modified')} · ${esc(date(i.updatedAt))}</small></li>`).join('')}</ul>`:`<p>${t('No local changes waiting to upload.')}</p>`}<p class="dialog-copy">${t('Changes made during upload remain queued for the next upload.')}</p>`;positionSyncPanel(box,$('#push-zone'));}catch(e){if(ticket===pendingTicket)box.textContent=e.message;}
 }
 function renderCountdowns(){
     if(!state.data||document.hidden)return;
-    for(const [id,deadline]of [['sync',state.data.cloud?.nextRunAt],['collect',state.data.update?.nextRunAt]]){const button=$('#'+id);let counter=button.querySelector('.button-countdown');if(!deadline||state.connected===false){counter?.remove();continue;}if(!counter){counter=document.createElement('span');counter.className='button-countdown';button.append(counter);}const seconds=Math.max(0,Math.ceil((deadline-Date.now())/1000));const text=Math.floor(seconds/60)+':'+String(seconds%60).padStart(2,'0');if(counter.textContent!==text)counter.textContent=text;}
+    for(const [id,deadline]of [['upload',state.data.cloud?.nextRunAt],['collect',state.data.update?.nextRunAt]]){const button=$('#'+id);let counter=button.querySelector('.button-countdown');if(!deadline||state.connected===false){counter?.remove();continue;}if(!counter){counter=document.createElement('span');counter.className='button-countdown';button.append(counter);}const seconds=Math.max(0,Math.ceil((deadline-Date.now())/1000));const text=Math.floor(seconds/60)+':'+String(seconds%60).padStart(2,'0');if(counter.textContent!==text)counter.textContent=text;}
 }
 
 function toolTags(agents, compact=false, origin=null) {
@@ -200,7 +238,7 @@ async function navigate(scope) {
     const focus = project ? (scope === PROJECTS ? state.projectFocus : scope) : null;
     if(project && state.scope===PROJECTS && !state.tree && !state.query){focusProject(focus);return;}
     ++requestId; opening=false;state.scope=project?PROJECTS:scope;state.projectFocus=focus;state.tree=null;state.list={items:[],sessionCount:0};state.query='';state.selected.clear();clearRange();$('#search').value='';
-    render();$('#session-list').innerHTML=`<p class="empty">${t('Loading project index…')}</p>`;
+    render();if(scope !== 'trash')$('#session-list').innerHTML=`<p class="empty">${t('Loading project index…')}</p>`;
     try {await refresh();if(project&&focus)focusProject(focus);}catch(e){toast(e.message);}
 }
 function title() { if(state.scope==='trash')return t('Trash'); if(state.scope === PROJECTS) return t('Projects'); if(state.scope === INBOX) return t('Ungrouped'); return state.scope === 'active:codex' ? t('Active Codex Sessions') : state.scope === 'active:claude' ? t('Active Claude Code Sessions') : state.scope === 'archived' ? t('Archived') : currentProject()?.name || t('Projects'); }
@@ -233,10 +271,11 @@ function renderList() {
     $('#list-count').textContent = t('{count} sessions', { count: state.list.sessionCount || 0 });
     const selected = state.list.items.filter(i => state.selected.has(i.id));
     const organizing = !state.scope.startsWith('active:') && state.scope !== 'archived';
-    $('#list-actions').innerHTML = (organizing?'<button id="select-all"></button>':'') + (selected.length ? `<span class="selection-count">${t('{count} selected',{count:selected.length})}</span>${state.scope==='archived'?'<button id="restore-items"></button><button id="archive-items"></button>':organizing?'<button id="move-items"></button><button id="archive-items"></button>':'<button id="deactivate-items"></button>'}`:'');
+    $('#list-actions').innerHTML = '<button id="select-all"></button>' + (selected.length ? `<span class="selection-count">${t('{count} selected',{count:selected.length})}</span>${selected.length===1?'<button id="rename-items"></button>':''}${state.scope==='archived'?'<button id="restore-items"></button>':organizing?'<button id="move-items"></button>':'<button id="deactivate-items"></button>'}<button id="archive-items"></button>`:'');
+    button('#rename-items', 'Rename', () => renameSession(selected[0]));
     button('#select-all','Select all',()=>{const items=state.scope===PROJECTS&&state.projectFocus?state.list.items.filter(i=>(i.projectId||INBOX)===state.projectFocus):state.list.items;const all=items.every(i=>state.selected.has(i.id));for(const i of items)all?state.selected.delete(i.id):state.selected.add(i.id);renderList();});
     button('#move-items','Move to project',()=>moveDialog([...state.selected]));
-    button('#archive-items','Move to Trash',()=>trashDialog({itemIds:[...state.selected],view:state.scope==='archived'?'archived':'in-use'},selected.length));
+    button('#archive-items','Move to Trash',()=>trashDialog({itemIds:[...state.selected],view:state.scope.startsWith('active:')?state.scope:state.scope==='archived'?'archived':'in-use'},selected.length));
     button('#restore-items','Restore',()=>restore({itemIds:[...state.selected]}));
     button('#deactivate-items','Deactivate',()=>run(()=>api('/manage','POST',{action:'deactivate',itemIds:[...state.selected],agent:state.scope.slice(7)})));
     const row=i=>`<article class="session-row ${state.selected.has(i.id)?'checked':''}" data-item="${esc(i.id)}"><button class="row-open" data-open="${esc(i.id)}">${icon(i.kind)}<span class="row-text"><span class="row-title">${esc(i.name)} ${cloudMark(i)}</span><span class="row-meta">${itemMeta(i)} ${sourceTags(i)}</span></span><time class="row-date">${date(i.updatedAt)}</time></button>${`<input type="checkbox" data-select="${esc(i.id)}" aria-label="${esc(t('Select {name}',{name:i.name}))}" ${state.selected.has(i.id)?'checked':''}>`}</article>`;
@@ -278,7 +317,7 @@ function render() {
     const detail = !!state.tree;
     $('#layout').classList.toggle('detail', detail); $('#list-page').hidden = detail; $('#detail-page').hidden = !detail; $('#session-rail').hidden = !detail;
     if (detail) { renderRail(); renderDetail(); }
-    else { $('#branch-picker').replaceChildren(); $('#transcripts').replaceChildren(); $('#graph').replaceChildren(); $('#ribbons').replaceChildren(); }
+    else { drawnTree = null; $('#branch-picker').replaceChildren(); $('#transcripts').replaceChildren(); $('#graph').replaceChildren(); $('#ribbons').replaceChildren(); }
 }
 function renderDetail() {
     const tree = state.tree, p = route(); if (!p) { state.tree = null; render(); return; }
@@ -290,7 +329,6 @@ function renderDetail() {
     enhanceSelect($('#branch-picker'));
     renderDetailActions(); renderTranscript(); renderGraph(); scheduleRibbons();
 }
-function forkCheckpoint() { return forkBeforeNode(route(),selectedNode()); }
 
 function canCombine() {
     const p = route(), positions = p.messages.map((m, i) => state.chats.has(m.id) ? i : -1).filter(i => i >= 0);
@@ -305,17 +343,12 @@ function renderDetailActions() {
     const archived = p.archived || state.data.projects.find(v => v.id === state.tree.projectId)?.archived;
     const editable = !archived && state.scope !== 'archived';
     const dissolve = state.tree.nodes.some(n => !n.pending && n.chatIds.some(id => state.chats.has(id)));
-    $('#detail-actions').innerHTML = state.chats.size ? `<span>${t('{count} selected', { count: state.chats.size })}</span>${editable && state.rangeEnd !== null && canCombine() ? '<button id="combine"></button>' : ''}${editable && state.rangeEnd !== null && dissolve ? '<button id="dissolve"></button>' : ''}<button id="clear-selection"></button>` : node ? `${editable && !node.empty ? '<button id="rename-node"></button>' : ''}${terminal ? archived ? '<button id="restore-session"></button><button id="archive-path"></button>' : `${p.active || (!p.active && p.canActivate) ? '<button id="toggle-active"></button>' : ''}<button id="archive-path"></button>` : ''}${editable && forkCheckpoint() ? '<button id="fork"></button>' : ''}` : '';
-    if (!state.chats.size && editable && p.active && p.contextPending && p.canRewriteContext && p.canActivate) $('#detail-actions').innerHTML = '<button id="apply-context"></button>' + $('#detail-actions').innerHTML;
-    if (!state.chats.size && editable && terminal) $('#detail-actions').insertAdjacentHTML('beforeend', '<button id="convert-session"></button>');
-    button('#convert-session', 'Activate as…', () => conversionDialog(p));
-    button('#apply-context', 'Apply context', () => activateDialog(p, 'Apply context'));
+    $('#detail-actions').innerHTML = state.chats.size ? `<span>${t('{count} selected', { count: state.chats.size })}</span>${editable && state.rangeEnd !== null && canCombine() ? '<button id="combine"></button>' : ''}${editable && state.rangeEnd !== null && dissolve ? '<button id="dissolve"></button>' : ''}<button id="clear-selection"></button>` : node ? `<button id="rename-node"></button>${editable ? '<button id="activate-node"></button>' : ''}${terminal ? `${archived ? '<button id="restore-session"></button>' : ''}<button id="archive-path"></button>` : ''}` : '';
+    button('#activate-node', 'Activate', () => activateDialog(p));
     button('#combine', 'Combine', combineDialog);
     button('#dissolve', 'Dissolve', () => run(async () => { await saveOrganization('dissolve'); clearRange(); }));
     button('#clear-selection', 'Clear', () => { clearRange(); updateRangeSelection(); renderDetailActions(); renderGraph(); });
-    button('#toggle-active', p.active ? 'Deactivate' : 'Activate', () => p.active ? run(() => api('/manage', 'POST', { action: 'deactivate', branchIds: [p.branchId] })) : activateDialog(p));
     button('#restore-session', 'Restore', () => restore({ branchIds: [p.branchId] }));
-    button('#fork', 'Fork', forkDialog);
     button('#rename-node', 'Rename', renameNode);
     button('#archive-path', 'Move to Trash', archivePath);
 }
@@ -392,7 +425,16 @@ function renderTranscript() {
         state.nodeId = null; state.compactionId = null;
         updateRangeSelection(); renderDetailActions(); renderGraph();
     });
-    $$('[data-expand]').forEach(el => el.onclick = () => { const top = $('#transcripts').scrollTop; state.expanded.has(el.dataset.expand) ? state.expanded.delete(el.dataset.expand) : state.expanded.add(el.dataset.expand); renderTranscript(); $('#transcripts').scrollTop = top; scheduleRibbons(); });
+    $$('[data-expand]').forEach(el => el.onclick = () => {
+        const pane = $('#transcripts'), top = pane.scrollTop, id = el.dataset.expand;
+        const expanded = !state.expanded.has(id);
+        expanded ? state.expanded.add(id) : state.expanded.delete(id);
+        // Keep the list and open activity details intact when toggling one message.
+        el.closest('.bubble').querySelector('.markdown').outerHTML = excerpt(p.messages.find(m => m.id === id).text, expanded);
+        el.textContent = t(expanded ? 'Collapse' : 'Expand');
+        pane.scrollTo({ top, behavior: 'instant' });
+        scheduleRibbons();
+    });
     $$('[data-focus-node]').forEach(el => el.onclick = () => selectNode(el.dataset.focusNode, false));
 }
 function updateRangeSelection() {
@@ -400,6 +442,7 @@ function updateRangeSelection() {
     $('#range-hint').textContent = state.rangeStart === null ? t('Select a start, then an end.') : state.rangeEnd === null ? t('Start: {number} · select the end', { number: state.rangeStart + 1 }) : t('Selected chats {start}–{end}', { start: Math.min(state.rangeStart, state.rangeEnd) + 1, end: Math.max(state.rangeStart, state.rangeEnd) + 1 });
     for (const el of $$('[data-chat]')) { const checked = state.chats.has(el.dataset.chat); el.checked = checked; el.closest('.chat').classList.toggle('checked', checked); }
 }
+let drawnTree = null;
 function renderGraph() {
     const nodes = state.tree.nodes, p = route(), positions = new Map(), byNode = new Map(nodes.map(n=>[n.id,n]));
     let lane = 0;
@@ -414,7 +457,19 @@ function renderGraph() {
     camera.width = width; camera.height = height; camera.rootX = (positions.get(nodes.find(n => !n.parentIds.length)?.id)?.x || 0) + 74;
     if (camera.newView) { const view = $('#graph-scroll'); camera.zoom = Math.max(.02, Math.min(1, (view.clientWidth-32)/width, (view.clientHeight-32)/height)); camera.x = (view.clientWidth-width*camera.zoom)/2; camera.y = (view.clientHeight-height*camera.zoom)/2; camera.newView = false; }
     $('#graph').style.width = `${width}px`; $('#graph').style.height = `${height}px`;
+    if (drawnTree !== state.tree) {
     $('#graph').innerHTML = `<svg class="graph-edges" width="${width}" height="${height}" aria-hidden="true">${state.tree.edges.map(e => { const a = positions.get(e.from), b = positions.get(e.to), n = byNode.get(e.to), color = palette[n.color][0]; return `<path d="M${a.x + 74},${a.y + 80} C${a.x + 74},${a.y + 102} ${b.x + 74},${b.y - 25} ${b.x + 74},${b.y}" fill="none" stroke="${color}" stroke-width="2" ${n.pending ? 'stroke-dasharray="4 4"' : ''}/>`; }).join('')}</svg>${nodes.map(n => { const pos = positions.get(n.id); return `<button class="graph-node ${mutedNode(n, p) ? 'context-muted' : ''} ${n.pending ? 'pending' : ''} ${n.id === state.nodeId ? 'selected' : ''} ${p.nodeIds.includes(n.id) ? '' : 'dimmed'}" data-node="${esc(n.id)}" style="${style(n)};left:${pos.x}px;top:${pos.y}px" aria-pressed="${n.id === state.nodeId}"><span class="node-tools">${toolTags(n.agents || [p.agent],true)}</span><span class="node-title">${esc(nodeName(n))}</span><span class="node-meta">${t('{count} chats', { count: n.count })} · <span title="${esc(tokenHint())}">${tokenLabel(n)}</span></span>${n.endBranchIds.some(id => state.tree.paths.find(p => p.branchId === id)?.active) ? `<span class="end-label">${t('Active')}</span>` : ''}</button>`; }).join('')}`;
+        drawnTree = state.tree;
+    } else {
+        for (const el of $$('[data-node]')) {
+            const n = byNode.get(el.dataset.node);
+            el.classList.toggle('selected', n.id === state.nodeId);
+            el.classList.toggle('dimmed', !p.nodeIds.includes(n.id));
+            el.classList.toggle('context-muted', mutedNode(n, p));
+            el.setAttribute('aria-pressed', String(n.id === state.nodeId));
+        }
+    }
+    $$('#graph .compaction-edge').forEach(el => el.remove());
     for (const e of p.context?.compactions || []) {
         const next = p.messages.find(m => m.line > e.line), previous = [...p.messages].reverse().find(m => m.line < e.line);
         const before = nodes.find(n => n.chatIds.includes(previous?.id)), after = nodes.find(n => n.chatIds.includes(next?.id));
@@ -425,18 +480,22 @@ function renderGraph() {
         if (!to) { camera.height = Math.max(camera.height, y + 30); $('#graph').style.height = camera.height + 'px'; }
     }
     bindCompactions($('#graph'));
-    $$('[data-node]').forEach(el => el.onclick = () => selectNode(el.dataset.node));
+    $$('[data-node]').forEach(el => { el.onpointerdown = e => { if (e.button === 0) e.preventDefault(); }; el.onclick = () => selectNode(el.dataset.node); });
     applyCamera();
 }
 function selectNode(id, scrollTranscript = true) {
     const n=state.tree.nodes.find(n=>n.id===id);if(!n)return;
-    const oldPath=state.branchId, hadSelection=state.chats.size>0;
+    ++requestId; // A refresh started before this click must not replace the chosen path.
+    const oldPath=state.branchId, hadSelection=state.chats.size>0, graphView=$('#graph-scroll'), graphTop=graphView.scrollTop, graphLeft=graphView.scrollLeft;
     if(!n.branchIds.includes(state.branchId))state.branchId=n.branchIds.find(id=>!state.tree.paths.find(p=>p.branchId===id).archived)||n.branchIds[0];
     clearRange();state.compactionId=null;state.nodeId=id;
     if(oldPath!==state.branchId||hadSelection)renderDetail();else{renderDetailActions();renderGraph();}
+    graphView.scrollTo({top:graphTop,left:graphLeft,behavior:'instant'});
+    $(`[data-node="${id}"]`)?.focus({preventScroll:true});
     if(scrollTranscript){
-        const target=$(`[data-segment="${id}"]`),pane=$('#transcripts');
-        if(target){const align=()=>{if(state.nodeId!==id)return;pane.scrollTop+=target.getBoundingClientRect().top-pane.getBoundingClientRect().top;};align();requestAnimationFrame(()=>{align();scheduleRibbons();});}
+        const pane=$('#transcripts'), branchId=state.branchId;
+        const align=()=>{if(state.nodeId!==id||state.branchId!==branchId)return;const target=$(`[data-segment="${id}"]`);if(target)pane.scrollTo({top:pane.scrollTop+target.getBoundingClientRect().top-pane.getBoundingClientRect().top,behavior:'instant'});};
+        align();requestAnimationFrame(()=>{align();scheduleRibbons();});
     }else revealNode(id);
     scheduleRibbons();
 }
@@ -486,6 +545,11 @@ function revealNode(id) {
 async function refresh({ checkCloud = false } = {}) {
     if (opening) return;
     const id = ++requestId, scope = state.scope;
+    if (scope === 'trash') {
+        const [trash, status] = await Promise.all([api('/trash'), api('/status')]);
+        if (id !== requestId || scope !== state.scope) return;
+        Object.assign(state.data, trash, status); state.list = { items: [], sessionCount: 0 }; render(); return;
+    }
     const [data, list, tree] = await Promise.all([api('/state'), api('/list?scope=' + encodeURIComponent(state.scope) + '&q=' + encodeURIComponent(state.query) + (checkCloud ? '&check=1' : '')), state.tree ? api('/trees/' + encodeURIComponent(state.tree.id) + '?view=' + (state.scope === 'archived' ? 'archived' : 'in-use')) : null]);
     if (id !== requestId || scope !== state.scope) return;
     state.data = data; state.list = list;
@@ -498,7 +562,7 @@ async function refresh({ checkCloud = false } = {}) {
         state.chats = new Set([...state.chats].filter(id => route()?.messages.some(m => m.id === id)));
     }
     const listTop = $('#session-list').scrollTop, scroll = $('#transcripts').scrollTop, graphTop = $('#graph-scroll').scrollTop, graphLeft = $('#graph-scroll').scrollLeft;
-    render(); $('#session-list').scrollTop=listTop; $('#transcripts').scrollTop = scroll; $('#graph-scroll').scrollTop = graphTop; $('#graph-scroll').scrollLeft = graphLeft; scheduleRibbons();
+    render(); $('#session-list').scrollTo({top:listTop,behavior:'instant'}); $('#transcripts').scrollTo({top:scroll,behavior:'instant'}); $('#graph-scroll').scrollTo({top:graphTop,left:graphLeft,behavior:'instant'}); scheduleRibbons();
 }
 function moveDialog(itemIds, restoreTarget = null) {
     const selectedItems=state.data.items.filter(i=>itemIds.includes(i.id));
@@ -515,6 +579,15 @@ function moveDialog(itemIds, restoreTarget = null) {
 function restore(target) { return run(() => api('/manage', 'POST', { ...target, action: 'restore' })); }
 
 function clearRange() { state.chats.clear(); state.rangeStart = null; state.rangeEnd = null; }
+function renameSession(item) {
+    const sessions = item.sessions, initial = sessions.find(s => s.name === item.name) || sessions[0];
+    modal('Rename session', (sessions.length > 1 ? `<label class="field">${t('Session')}<select name="sessionId" id="rename-session-picker">${sessions.map(s => `<option value="${esc(s.id)}" ${s.id === initial.id ? 'selected' : ''}>${esc(s.name)}</option>`).join('')}</select></label>` : '') + field('Session name', 'name', initial.name), async form => {
+        await api('/trees/' + encodeURIComponent(item.id) + '?view=all');
+        await api('/branches/' + encodeURIComponent(form.get('sessionId') || initial.id), 'PATCH', { name: form.get('name') });
+    }, 'Rename');
+    const picker = $('#rename-session-picker');
+    if (picker) { picker.onchange = () => { $('#dialog-content [name=name]').value = sessions.find(s => s.id === picker.value).name; }; enhanceSelect(picker); }
+}
 function renameNode() {
     const n = selectedNode(); if (!n) return;
     modal('Rename node', field('Node title', 'name', n.name || ''), async form => {
@@ -528,9 +601,10 @@ function trashDialog(target,count=1){
 function archivePath(){const p=route(),node=selectedNode();if(!node?.endBranchIds.includes(p.branchId))return;trashDialog({branchIds:[p.branchId],nodeId:node.id,version:state.tree.version});}
 function renderTrash(){
     $('#list-title').textContent=t('Trash');$('#list-actions').innerHTML='';$('#active-notice').hidden=true;
+    const trashDate = new Intl.DateTimeFormat(locale()==='zh'?'zh-CN':'en-US',{dateStyle:'medium',timeStyle:'short'});
     const query=state.query.toLocaleLowerCase(),entries=(state.data.trashEntries||[]).filter(e=>!e.restoredAt&&(!query||e.names.some(n=>n.toLocaleLowerCase().includes(query)))),native=(state.data.trashNative||[]).filter(i=>!query||(i.title||i.agent).toLocaleLowerCase().includes(query));
     $('#list-count').textContent=t('Recovery copies on this device');$('#search').placeholder=t('Search discarded titles…');
-    $('#session-list').innerHTML=`<p class="trash-note">${t('Trash is for discarded work. Useful history belongs in Projects.')}</p>`+entries.filter(e=>!e.restoredAt).map(e=>`<article class="trash-row"><div><strong>${esc(e.names.join(', '))}</strong><small>${t(({pending:'Waiting for Sync',removed:'Cloud removed · cleanup pending',cleaned:'Cloud space reclaimed'})[e.state]||'Waiting for Sync')} · ${e.expired?t('Recovery expired'):t('Local recovery until {date}',{date:new Date(e.expiresAt).toLocaleString(locale()==='zh'?'zh-CN':'en-US',{dateStyle:'medium',timeStyle:'short'})})}</small></div>${!e.expired?`<button data-trash-restore="${esc(e.id)}">${t('Restore as a new session')}</button>`:''}</article>`).join('')+(!entries.length?`<p class="empty">${t('No local recovery copies.')}</p>`:'')+(native.length?`<section class="trash-native"><h2>${t('Native copies on this device')}</h2><p>${t('Close the corresponding agent before removing native copies. Referenced prefixes and changed files are kept for review.')}</p>${native.map(i=>`<article class="trash-row"><span>${esc(i.title||i.agent)}<small>${t(i.active?'Still active in the native client':'Deactivated native copy')}</small></span><button data-trash-native="${esc(i.branchId)}">${t('Remove native copy')}</button></article>`).join('')}</section>`:'');
+    $('#session-list').innerHTML=`<p class="trash-note">${t('Trash is for discarded work. Useful history belongs in Projects.')}</p>`+entries.filter(e=>!e.restoredAt).map(e=>`<article class="trash-row"><div><strong>${esc(e.names.join(', '))}</strong><small>${t(({pending:'Waiting for Sync',removed:'Cloud removed · cleanup pending',cleaned:'Cloud space reclaimed'})[e.state]||'Waiting for Sync')} · ${e.expired?t('Recovery expired'):t('Local recovery until {date}',{date:trashDate.format(new Date(e.expiresAt))})}</small></div>${!e.expired?`<button data-trash-restore="${esc(e.id)}">${t('Restore as a new session')}</button>`:''}</article>`).join('')+(!entries.length?`<p class="empty">${t('No local recovery copies.')}</p>`:'')+(native.length?`<section class="trash-native"><h2>${t('Native copies on this device')}</h2><p>${t('Close the corresponding agent before removing native copies. Referenced prefixes and changed files are kept for review.')}</p>${native.map(i=>`<article class="trash-row"><span>${esc(i.title||i.agent)}<small>${t(i.active?'Still active in the native client':'Deactivated native copy')}</small></span><button data-trash-native="${esc(i.branchId)}">${t('Remove native copy')}</button></article>`).join('')}</section>`:'');
     $$('[data-trash-restore]').forEach(el=>el.onclick=async()=>{let target;await run(async()=>{const r=await api('/trash/restore','POST',{id:el.dataset.trashRestore});target=r.projectIds[0];state.scope=PROJECTS;state.tree=null;state.projectFocus=target;state.olderProjects=true;for(const id of r.projectIds)state.expandedProjects.add(id);state.query='';$('#search').value='';toast(t(r.background?'Restored locally. Background visibility still follows Settings.':'Restored to Projects. It is not activated.'));});if(target)focusProject(target);});
     $$('[data-trash-native]').forEach(el=>el.onclick=()=>run(async()=>{const r=await api('/trash/native','POST',{branchIds:[el.dataset.trashNative]});if(r.blocked.length)toast(r.blocked.map(b=>t(b.reason)).join('\n'));}));
     renderCloudStatus();
@@ -548,51 +622,61 @@ function bindDirectoryPicker() {
         choose.onclick=()=>{input.value=selected;input.dispatchEvent(new Event('input',{bubbles:true}));picker.close();};await load(selected);
     };
 }
-async function activateDialog(p, actionLabel = 'Activate') {
+async function activateDialog(p) {
+    const node = selectedNode(); if (!node) return;
+    const selection = { branchId: p.branchId, nodeId: node.id, version: state.tree.version };
     try {
-        const d = await api('/branches/' + p.branchId), local = state.data.instances.filter(i => i.branchId === p.branchId).find(i => i.applied) || state.data.instances.filter(i => i.branchId === p.branchId).at(-1);
-        let checkedPath = null, checked = null;
-        modal(actionLabel, `${directoryField(local?.cwd || d.cwd)}<p class="dialog-copy">${t('Source')}: ${esc(d.lineage[0]?.source.deviceName || '')}<br>${esc(d.cwd)}</p><div id="activation-budget" role="status"></div>`, async form => {
-            const cwd = form.get('cwd');
-            if (!checked || checkedPath !== cwd) { checked = await api('/activation-check', 'POST', { branchId: p.branchId, cwd }); checkedPath = cwd; showBudget(checked); if (checked.risk) return false; }
-            await api('/manage', 'POST', { action: 'activate', branchIds: [p.branchId], cwd, contextAcknowledgement: checked.fingerprint });
+        const d = await api('/branches/' + p.branchId), local = state.data.instances.find(i => i.branchId === p.branchId && i.applied);
+        let checked = null, checkedPath = null, generation = 0;
+        modal('Activate', `<p class="dialog-copy">${t('Includes this node and all preceding context. Existing suffixes are preserved.')}</p><p><strong>${t('Title in your tool')}</strong><br><span id="activation-title"></span></p>${directoryField(local?.cwd || d.cwd)}<div id="activation-budget" role="status">${t('Loading…')}</div><button type="button" id="activate-as">${t('Change to another tool')}</button>${p.active && node.endBranchIds.includes(p.branchId) ? `<button type="button" id="deactivate-session">${t('Deactivate')}</button>` : ''}`, async form => {
+            if (!checked || checkedPath !== form.get('cwd')) { await estimate(); if (!checked || checked.risk) return false; }
+            if (!checked.complete) return false;
+            const result = await api('/node-activation/activate', 'POST', { ...selection, cwd: form.get('cwd'), contextAcknowledgement: checked.fingerprint });
+            state.branchId = result.branch.id; state.nodeId = result.nodeId; clearRange();
             toast(t('Open the active continuation from your agent’s session list.'));
-        }, actionLabel);
-        function showBudget(c) {
-            if(c.fidelity === 'unsupported-history-mode') { $('#activation-budget').innerHTML = `<p class="warning">${t('The complete native history is unavailable. Update before changing context.')}</p>`; $('#dialog-submit').hidden = true; return; }
-            $('#dialog-submit').hidden = !c.complete;
-            if(!c.complete){$('#activation-budget').innerHTML=`<p class="warning">${t(c.readiness==='unfinished-turn'?'This turn is still running. Wait for it to finish, or fork from a completed checkpoint.':'This context needs external files or an unsupported history format. Check Source before activating.')}</p>`;return;}
-            $('#activation-budget').innerHTML = c.risk ? `<p class="warning">${t('Context may be near its limit: about {used} tokens, planning limit {limit}.', { used: compactNumber(c.estimated), limit: compactNumber(c.window || c.compactAt) })}<br>${esc(c.source || '')}</p>` : c.basis === 'incomplete-after-compaction' ? `<p class="dialog-copy">${t('The compacted context size is not recorded. The native agent will manage its context window.')}</p>` : c.unknown ? `<p class="dialog-copy">${t('No reliable context limit was found in the local configuration.')}</p>` : `<p class="dialog-copy">≈ ${compactNumber(c.estimated)} / ${compactNumber(c.window || c.compactAt)} tokens · ${esc(c.source || '')}</p>`;
-            $('#dialog-submit').textContent = t(c.risk ? 'Activate anyway' : actionLabel);
-        }
+        }, 'Confirm activation');
+        const ticket = modalVersion, cwd = $('[name=cwd]');
         bindDirectoryPicker();
-        checkedPath = local?.cwd || d.cwd; checked = await api('/activation-check', 'POST', { branchId: p.branchId, cwd: checkedPath }); showBudget(checked);
-        $('[name=cwd]').oninput = () => { checked = null; $('#activation-budget').textContent = ''; $('#dialog-submit').textContent = t('Check & activate'); };
+        async function estimate() {
+            const turn = ++generation, directory = cwd.value; checked = null; $('#dialog-submit').disabled = true;
+            try {
+                const c = await api('/node-activation/check', 'POST', { ...selection, cwd: directory });
+                if (ticket !== modalVersion || turn !== generation || !$('#dialog').open) return;
+                checked = c; checkedPath = directory;
+                $('#activation-title').textContent = c.title;
+                $('#activation-budget').innerHTML = `${c.estimated == null ? '' : `<p>≈ ${compactNumber(c.estimated)} tokens${c.window || c.compactAt ? ' / ' + compactNumber(c.window || c.compactAt) : ''}</p>`}${!c.complete ? `<p class="warning">${t(c.readiness === 'node-boundary' ? 'This node does not end at a completed turn. Select a completed node.' : 'This context is incomplete or unsupported. Check Source before activating.')}</p>` : c.risk ? `<p class="warning">${t('Context may be near its limit. Confirm before activating.')}</p>` : c.unknown ? `<p class="dialog-copy">${t('No reliable context limit was found in the local configuration.')}</p>` : ''}`;
+                $('#dialog-submit').disabled = !c.complete; $('#dialog-submit').textContent = t(c.risk ? 'Activate anyway' : 'Confirm activation');
+            } catch (e) { if (ticket === modalVersion && turn === generation) $('#dialog-error').textContent = e.message; }
+        }
+        cwd.oninput = () => { checked = null; generation++; $('#dialog-submit').disabled = true; estimate(); };
+        $('#activate-as').onclick = () => conversionDialog(p, selection, cwd.value);
+        if ($('#deactivate-session')) $('#deactivate-session').onclick = () => run(async () => { await api('/manage', 'POST', { action: 'deactivate', branchIds: [p.branchId] }); $('#dialog').close(); });
+        await estimate();
     } catch (e) { toast(e.message); }
 }
 const modeName = mode => ({lean:'Balanced',full:'Complete text',messages:'Messages only'})[mode];
 const contextCopy = mode => t(({lean:'Keeps messages, tool calls and errors. Shortens long read-only results.',full:'Keeps messages and full tool inputs/results.',messages:'Keeps user and assistant messages. Omits tool calls and results.'})[mode]);
-async function conversionDialog(p) {
+async function conversionDialog(p, selection = {}, initialCwd = null) {
     try {
         const d = await api('/branches/' + p.branchId), target = p.agent === 'claude' ? 'codex' : 'claude';
         let previews = {}, checkedCwd = null, generation = 0, timer;
-        modal('Activate as…', `<p>${p.agent==='claude'?'Claude':'Codex'} → ${target==='claude'?'Claude':'Codex'}</p>${directoryField(d.cwd)}<label class="field">${t('Context mode')}<select name="mode" aria-label="${t('Context mode')}">${['lean','full','messages'].map(mode=>`<option value="${mode}">${t(modeName(mode))}</option>`).join('')}</select></label><p class="dialog-copy">${t('Creates a separate session. Thinking and attachments stay in the original.')}</p><div id="conversion-preview" role="status"></div>`, async form => {
+        modal('Activate as…', `<p>${p.agent==='claude'?'Claude':'Codex'} → ${target==='claude'?'Claude':'Codex'}</p>${directoryField(initialCwd || d.cwd)}<label class="field">${t('Context mode')}<select name="mode" aria-label="${t('Context mode')}">${['lean','full','messages'].map(mode=>`<option value="${mode}">${t(modeName(mode))}</option>`).join('')}</select></label><p class="dialog-copy">${t('Creates a separate session. Thinking and attachments stay in the original.')}</p><div id="conversion-preview" role="status"></div>`, async form => {
             const mode=form.get('mode'), cwd=form.get('cwd'), preview=previews[mode];
             if(!preview || checkedCwd!==cwd){await estimate();return false;}
-            const result=await api('/convert','POST',{branchId:p.branchId,target,mode,cwd,fingerprint:preview.fingerprint,contextAcknowledgement:preview.budget.fingerprint});
-            state.tree=null;state.branchId=result.branch.id;state.itemId=result.branch.id;toast(t('Open the active continuation from your agent’s session list.'));
+            const result=await api('/convert','POST',{...selection,branchId:p.branchId,target,mode,cwd,fingerprint:preview.fingerprint,contextAcknowledgement:preview.budget.fingerprint});
+            state.scope='active:'+target;state.tree=await api('/trees/'+encodeURIComponent(result.branch.id));state.branchId=result.branch.id;state.nodeId=state.tree.paths.find(path=>path.branchId===result.branch.id)?.nodeIds.at(-1);camera.newView=true;clearRange();toast(t('Open the active continuation from your agent’s session list.'));
         }, 'Activate');
         bindDirectoryPicker();
         const ticket=modalVersion, select=$('[name=mode]'), cwd=$('[name=cwd]');
         enhanceSelect(select);
         function show(){
             const preview=previews[select.value]; $('#dialog-submit').disabled=!preview || checkedCwd!==cwd.value;
-            $('#conversion-preview').innerHTML=`<p class="dialog-copy">${contextCopy(select.value)}</p>${preview?`<p>≈ ${preview.estimated.toLocaleString()} tokens · ${preview.stats.shortenedOutputs ? t('{count} shortened results',{count:preview.stats.shortenedOutputs}):''}</p>${preview.budget.risk?`<p class="warning">${t('Context may be near its limit: about {used} tokens, planning limit {limit}.',{used:compactNumber(preview.estimated),limit:compactNumber(preview.budget.window||preview.budget.compactAt)})}</p>`:''}`:''}`;
+            $('#conversion-preview').innerHTML=`<p class="dialog-copy">${contextCopy(select.value)}</p>${preview?`<p><strong>${t('Title in your tool')}</strong><br>${esc(preview.title)}</p><p>≈ ${preview.estimated.toLocaleString()} tokens · ${preview.stats.shortenedOutputs ? t('{count} shortened results',{count:preview.stats.shortenedOutputs}):''}</p>${preview.budget.risk?`<p class="warning">${t('Context may be near its limit: about {used} tokens, planning limit {limit}.',{used:compactNumber(preview.estimated),limit:compactNumber(preview.budget.window||preview.budget.compactAt)})}</p>`:''}`:''}`;
             $('#dialog-submit').textContent=t(preview?.budget.risk?'Activate anyway':'Activate');
         }
         async function estimate(){
             const turn=++generation, directory=cwd.value;show();
-            try{const values=await Promise.all([api('/conversion-check','POST',{branchId:p.branchId,target,mode:select.value,cwd:directory})]);
+            try{const values=await Promise.all([api('/conversion-check','POST',{...selection,branchId:p.branchId,target,mode:select.value,cwd:directory})]);
                 if(ticket!==modalVersion||turn!==generation||!$('#dialog').open)return;
                 checkedCwd=directory;previews={...previews,...Object.fromEntries(values.map(v=>[v.mode,v]))};
                 for(const option of select.options)option.textContent=t(modeName(option.value))+(previews[option.value]?' · ≈ '+previews[option.value].estimated.toLocaleString()+' tokens':'');
@@ -609,14 +693,6 @@ function combineDialog() {
     const p = route(), positions = p.messages.map((m, i) => state.chats.has(m.id) ? i : -1).filter(i => i >= 0);
     if (positions.at(-1) - positions[0] + 1 !== positions.length) return toast(t('Combine requires consecutive chats.'));
     modal('Combine', field('Node title', 'name'), async form => { await saveOrganization('combine', form.get('name')); clearRange(); }, 'Combine');
-}
-function forkDialog() {
-    const p = route(), checkpoint = forkCheckpoint();
-    if (!checkpoint) return toast(t('Fork at a node ending with a completed turn.'));
-    modal('Create a branch', field('Branch name', 'name') + `<p class="dialog-copy">${t('Fork before this node. Its preceding context is kept.')}</p>` + (checkpoint.omitted ? `<p class="warning">${t('Fork from the last completed turn. {count} chats from the unfinished turn will stay on the original path.',{count:checkpoint.omitted})}</p>` : ''), async form => {
-        const b = await api('/branches/' + p.branchId + '/fork', 'POST', { name: form.get('name'), end: checkpoint.end, revisionId: p.head, nodeId:state.nodeId, graphVersion:state.tree.version });
-        state.branchId = b.id; state.nodeId='empty-'+b.id; clearRange(); toast(t('Branch created'));
-    }, 'Create branch');
 }
 async function showSource() {
     try {
@@ -695,7 +771,9 @@ async function settings(options = {}) {
     } catch(e) { toast(e.message); }
 }
 function information() {
-    modal('Information', `<details><summary>${t('When can I use each action?')}</summary><ul class="action-guide"><li>${t('Update reads local sessions. Sync pulls remote changes before pushing local work, including Pending.')}</li><li>${t('Move belongs to the session list. Select items before choosing a project.')}</li><li>${t('In a transcript, select a start and end to Combine or Dissolve a continuous range.')}</li><li>${t('Select a graph node to Rename it. Naming Pending makes it a saved node.')}</li><li>${t('Fork appears only at a completed turn. Activate, Deactivate and Archive belong to a complete session endpoint.')}</li><li>${t('Archived shows only archived paths with their prefixes. Restore returns a path to its project without activating it.')}</li></ul><p class="dialog-copy">${t('Token counts are estimates. Local configuration and recorded usage inform activation warnings; unknown limits are not guessed.')}</p><p class="dialog-copy">${t('Close running agents before changing native activation. Browsing and organization remain available.')}</p></details><details><summary>${t('Sync and local copies')}</summary><p>${t('Browsing uses the saved directory. Cloud icons mean the session is not on this device. Open it once to download and keep it locally. Sync refreshes the directory and downloaded sessions; unopened sessions remain cloud-only. Local edits start an automatic Push countdown.')}</p></details><details><summary>${t('Context mode')}</summary>${['lean','full','messages'].map(m=>`<p><strong>${t(modeName(m))}</strong> — ${contextCopy(m)}</p>`).join('')}<p>${t('Counts estimate packaged text, not exact model billing or live context. Target instructions and files may add tokens.')}</p></details><details><summary>${t('Diagnostics')}</summary><p class="dialog-copy">${t('Logs contain timings, operation types and error references; no conversation text, passwords, URLs or working paths.')}</p><button type="button" id="download-diagnostics">${t('Download diagnostics')}</button></details>${(state.data.plan?.pendingRecovery||[]).map(id=>`<button type="button" data-recover="${esc(id)}">${t('Recover interrupted operation')}</button>`).join('')}${state.data.conflicts.map((c,i)=>`<div class="conflict">${t('Conflict')}: ${esc(c.local.name)}<button type="button" data-conflict="${i}" data-choice="local">${t('Keep local')}</button><button type="button" data-conflict="${i}" data-choice="remote">${t('Use remote')}</button></div>`).join('')}`,null);
+    modal('Information', `<details><summary>${t('When can I use each action?')}</summary><ul class="action-guide"><li>${t('Update reads local sessions. Sync pulls remote changes before pushing local work, including Pending.')}</li><li>${t('Move belongs to the session list. Select items before choosing a project.')}</li><li>${t('In a transcript, select a start and end to Combine or Dissolve a continuous range.')}</li><li>${t('Select a graph node to Rename it. Naming Pending makes it a saved node.')}</li><li>${t('Activate includes the selected node and its preceding context. Only session endpoints can move to Trash.')}</li><li>${t('Archived shows only archived paths with their prefixes. Restore returns a path to its project without activating it.')}</li></ul><p class="dialog-copy">${t('Token counts are estimates. Local configuration and recorded usage inform activation warnings; unknown limits are not guessed.')}</p><p class="dialog-copy">${t('Close running agents before changing native activation. Browsing and organization remain available.')}</p></details><details><summary>${t('Sync and local copies')}</summary><p>${t('Browsing uses the saved directory. Cloud icons mean the session is not on this device. Open it once to download and keep it locally. Sync refreshes the directory and downloaded sessions; unopened sessions remain cloud-only. Local edits start an automatic Push countdown.')}</p></details><details><summary>${t('Context mode')}</summary>${['lean','full','messages'].map(m=>`<p><strong>${t(modeName(m))}</strong> — ${contextCopy(m)}</p>`).join('')}<p>${t('Counts estimate packaged text, not exact model billing or live context. Target instructions and files may add tokens.')}</p></details><details><summary>${t('Diagnostics')}</summary><p class="dialog-copy">${t('Logs contain timings, operation types and error references; no conversation text, passwords, URLs or working paths.')}</p><button type="button" id="download-diagnostics">${t('Download diagnostics')}</button></details>${(state.data.plan?.pendingRecovery||[]).map(id=>`<button type="button" data-recover="${esc(id)}">${t('Recover interrupted operation')}</button>`).join('')}${state.data.conflicts.map((c,i)=>`<div class="conflict">${t('Conflict')}: ${esc(c.local.name)}<button type="button" data-conflict="${i}" data-choice="local">${t('Keep local')}</button><button type="button" data-conflict="${i}" data-choice="remote">${t('Use remote')}</button></div>`).join('')}`,null);
+    const operation=state.data.cloud.operation, metrics=operation?.network;
+    $('#dialog-content').insertAdjacentHTML('beforeend', `<details id="transfer-diagnostics"><summary>${t('Transfer statistics')}</summary><p>${t('Counters describe application payloads, not billed network traffic. Upload payload includes attempted requests; record counts confirm verified transfers. Download rate includes upload verification readbacks.')}</p>${metrics?`<dl><dt>${t('Downloaded')}</dt><dd>${bytesLabel(metrics.bytesReceived||0)}</dd><dt>${t('Upload payload')}</dt><dd>${bytesLabel(metrics.bytesSent||0)}</dd><dt>${t('Requests')}</dt><dd>${metrics.requests||0}</dd><dt>${t('Elapsed')}</dt><dd>${Math.round(((operation.finishedAt||Date.now())-operation.startedAt)/1000)} s</dd></dl>`:`<p>${t('Not recorded')}</p>`}${operation?.summary?`<p>${t('Cached sessions checked')}: ${operation.summary.checked||0} · ${t('Published items')}: ${operation.summary.published||0} · ${t('Verified records')}: ${operation.summary.uploaded||0}</p>`:''}</details>`);
     $('#download-diagnostics').onclick=async()=>{try{const report=await api('/diagnostics'),url=URL.createObjectURL(new Blob([JSON.stringify(report,null,2)],{type:'application/json'})),link=document.createElement('a');link.href=url;link.download='session-grove-diagnostics.json';link.click();setTimeout(()=>URL.revokeObjectURL(url),1000);}catch(e){$('#dialog-error').textContent=e.message;}};
     $$('[data-conflict]').forEach(el=>el.onclick=()=>run(async()=>{await api('/conflicts/resolve','POST',{index:Number(el.dataset.conflict),choice:el.dataset.choice});$('#dialog').close();}));
     $$('[data-recover]').forEach(el=>el.onclick=()=>run(async()=>{await api('/recover','POST',{id:el.dataset.recover});$('#dialog').close();}));
@@ -703,14 +781,22 @@ function information() {
 function about() {
     modal('About', `<div class="about"><h3>Session Grove <small>${esc(state.data.appVersion || '')}</small></h3><p>${t('Organize agent conversations by project. Keep the context, choose the branch, continue your work.')}</p><p>${t('Developed by')} Ziyi Zhang</p><div class="about-links"><a href="https://ziyi-zhang.vercel.app" target="_blank" rel="noopener noreferrer" aria-label="Ziyi Zhang website" title="Ziyi Zhang">${icon('website')}</a><a href="https://github.com/MRziyi/session-grove" target="_blank" rel="noopener noreferrer" aria-label="GitHub repository" title="GitHub">${icon('github')}</a></div></div>`,null);
 }
-async function sync(){
+async function sync(direction = 'pull'){
     if(!state.data.cloud.configured||!state.data.cloud.unlocked)return settings();
     if(state.syncPreparing||state.data.cloud.phase==='syncing')return;
-    state.syncPreparing=true;renderTransfer();$('#sync').disabled=true;
-    try{const plan=await api('/synchronize/plan','POST',{});const result=await api('/synchronize/start','POST',{planId:plan.id,confirmed:true});state.syncOperation=result.operationId;await refresh();}
+    state.syncPreparing=direction;syncPinned=true;showSyncPanel($('#transfer-progress'),$('#sync-details'));$('#sync-details').setAttribute('aria-expanded','true');renderCloudStatus();
+    try{const result=await api('/synchronize/transfer','POST',{direction});state.syncOperation=result.operationId;const next=await api('/status');state.data.cloud=next.cloud;renderCloudStatus();}
     catch(e){toast(e.message);}finally{state.syncPreparing=false;renderCloudStatus();}
 }
-$('#about').onclick=about;$('#information').onclick=information;$('#sync').onclick=sync;$('#settings').onclick=()=>settings();
+$('#about').onclick=about;$('#information').onclick=information;$('#sync').onclick=()=>sync('pull');$('#upload').onclick=()=>sync('push');$('#settings').onclick=()=>settings();
+$('#sync-details').onclick=()=>{syncPinned=!syncPinned;if(syncPinned){showSyncPanel($('#transfer-progress'),$('#sync-details'));renderTransfer();}else hideSyncPanel($('#transfer-progress'));$('#sync-details').setAttribute('aria-expanded',String(syncPinned));};
+$('#sync-details').onmouseenter=()=>{showSyncPanel($('#transfer-progress'),$('#sync-details'));renderTransfer();};
+$('#sync-details').onmouseleave=e=>{if(!syncPinned&&!$('#transfer-progress').contains(e.relatedTarget))setTimeout(()=>{if(!syncPinned&&!$('#transfer-progress').matches(':hover'))hideSyncPanel($('#transfer-progress'));},150);};
+$('#transfer-progress').onmouseleave=()=>{if(!syncPinned)hideSyncPanel($('#transfer-progress'));};
+$('#push-zone').onmouseenter=$('#push-zone').onfocusin=showPendingUploads;
+$('#push-zone').onmouseleave=$('#push-zone').onfocusout=e=>{if(!$('#push-zone').contains(e.relatedTarget))pendingTimer=setTimeout(()=>{pendingTicket++;hideSyncPanel($('#pending-uploads'));},180);};
+document.addEventListener('keydown',e=>{if(e.key==='Escape'){syncPinned=false;hideSyncPanel($('#transfer-progress'));hideSyncPanel($('#pending-uploads'));$('#sync-details').setAttribute('aria-expanded','false');}});
+window.addEventListener('resize',()=>{for(const [panel,anchor]of [['transfer-progress','sync-details'],['pending-uploads','push-zone']])if(!$('#'+panel).hidden)positionSyncPanel($('#'+panel),$('#'+anchor));});
 
 function applyPanePreferences(){
     const layout=$('#layout');layout.classList.toggle('nav-collapsed',localStorage.getItem('grove-nav-collapsed')==='true');layout.classList.toggle('rail-collapsed',localStorage.getItem('grove-rail-collapsed')==='true');

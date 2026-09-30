@@ -38,3 +38,15 @@ export function forkBeforeNode(path,node) {
     if(!previous)return null;
     return path.checkpoints.findLast(c=>c.end>=previous.line&&(!first||c.end<first.line))||null;
 }
+
+export function transferStages(operation) {
+    const stages = { pull: 'pending', push: 'pending' };
+    if (!operation) return stages;
+    const step = operation.step || 'pull';
+    if (operation.pullComplete || step === 'push') stages.pull = 'complete';
+    if (operation.state === 'running') stages[step] = 'running';
+    else if (operation.state === 'error') stages[step] = 'failed';
+    else if (operation.state === 'interrupted') stages[step] = 'paused';
+    else if (operation.state === 'success') { stages.pull = 'complete'; if (operation.direction === 'push' || operation.direction === 'both') stages.push = 'complete'; }
+    return stages;
+}

@@ -10,22 +10,33 @@ export class AutoSync {
     constructor(store, readConfig, run = null) {
         this.store = store; this.readConfig = readConfig; this.run = run;
         this.cloud = new Cloud(store, readConfig); this.cloud.onProgress=value=>this.progress(value);
+        this.cloud.mergeByModified = true;
         this.passphrase = null; this.running = false; this.error = null; this.closed = false; this.retryAt = 0; this.failures = 0; this.rateLimitUntil = 0;
         this.lastManualOperation = store.local('lastManualSync');
+        this.lastFailure = store.local('lastSyncFailure');
+        if (this.lastFailure?.requiresReview && /^(Sync stopped by request|Transfer stopped to load)/.test(this.lastFailure.error || '')) this.lastFailure = { ...this.lastFailure, state: 'interrupted' };
+        if (this.lastFailure?.requiresReview) this.needsReview = { retry: true, cleanup: true };
         if (this.lastManualOperation?.state === 'running') this.lastManualOperation = { ...this.lastManualOperation, state: 'error', error: 'Previous sync was interrupted. Verified progress is retained.', finishedAt: Date.now() };
-        if (this.lastManualOperation?.state === 'error') this.needsReview = { retry: true };
+        if (this.lastManualOperation?.state === 'error') this.needsReview ||= { retry: true };
         this.queue = new Set(store.local('uploadQueue') || []);
         this.configureTimer();
     }
     trashPending() { return !!(this.store.local('trashPending')||[]).length || fs.existsSync(path.join(this.store.root,'trash-cleanup.json')); }
-    async syncTrash() { if(fs.existsSync(path.join(this.store.root,'trash-cleanup.json')))await resumeTrashCleanup(this.cloud,this.passphrase);if((this.store.local('trashPending')||[]).length)await collectTrash(this.cloud,this.passphrase); }
+    async syncTrash(options = {}) {
+        try {
+            if(fs.existsSync(path.join(this.store.root,'trash-cleanup.json')))await resumeTrashCleanup(this.cloud,this.passphrase);
+            const result = (this.store.local('trashPending')||[]).length ? await collectTrash(this.cloud,this.passphrase, options) : null;
+            if (this.lastFailure?.requiresReview) { this.lastFailure = { ...this.lastFailure, requiresReview: false }; this.store.local('lastSyncFailure', this.lastFailure); if (this.needsReview?.cleanup) this.needsReview = null; }
+            return result;
+        } catch (e) { e.requiresReview = true; throw e; }
+    }
     configureTimer() {
         clearTimeout(this.interval); this.interval = null; this.nextFallbackAt = null;
         this.reconcileTimer();
     }
     reconcileTimer(dirty = this.cloud.dirtyIds().length > 0) {
         const p = preferences(this.store);
-        const enabled = (dirty||this.trashPending()) && !this.closed && !this.needsReview && p.autoUploadEnabled && this.store.local('syncStarted') !== false && this.passphrase !== null && !!this.readConfig()?.url;
+        const enabled = (dirty||this.trashPending()) && !this.running && !this.closed && !this.needsReview && p.autoUploadEnabled && this.store.local('syncStarted') !== false && this.passphrase !== null && !!this.readConfig()?.url;
         if (!enabled) { clearTimeout(this.interval); this.interval=null; this.nextFallbackAt=null; return; }
         if (this.interval) return;
         this.nextFallbackAt = Date.now() + p.autoUploadMinutes * 60000;
@@ -35,13 +46,82 @@ export class AutoSync {
     progress(value) {
         if (!this.running) return;
         this.operation = {...this.operation, progress:value};
+        if (this.pullGroup) {
+            const group = this.pullGroup;
+            if (value.phase === 'Pulling sessions') { group.completed = value.completed; group.fraction = 0; }
+            else if (value.total > 0) group.fraction = Math.max(group.fraction, Math.min(1, value.completed / value.total));
+            this.operation.stageProgress = { completed: Math.min(group.total, group.completed + group.fraction), total: group.total };
+        } else if (this.operation.step === 'push' && value.phase === 'Uploading records' && value.total > 0) {
+            this.operation.stageProgress = { completed: value.completed, total: value.total };
+        }
         const at=Date.now();
         if(this.progressPhase!==value.phase || value.completed===value.total || at-(this.progressAt||0)>=200) { this.progressAt=at;this.progressPhase=value.phase;this.onOperation?.(this.operation); }
     }
     async fallback() {
         if (this.store.local('syncStarted') === false || !preferences(this.store).autoUploadEnabled || this.running || this.closed || !this.readConfig()?.url || this.passphrase === null || this.retryAt > Date.now()) return;
+        if (this.needsReview) return;
         await this.beforeUpload?.();
-        return this.flush('push', false, true);
+        if (!this.cloud.dirtyIds().length && !this.trashPending()) return;
+        this.startTransfer('push', false, true);
+        return this.syncJob;
+    }
+    pendingItems() {
+        const dirty = new Set(this.cloud.dirtyIds()), removals = new Set((this.store.local('trashPending') || []).map(e => e.id));
+        return [...this.store.syncCollections().items.filter(i => dirty.has(i.id)).map(i => ({ id: i.id, name: i.name, updatedAt: i.updatedAt, action: 'upload' })),
+            ...(this.store.local('trashEntries') || []).filter(e => removals.has(e.id)).map(e => ({ id: e.id, name: e.names.join(', '), updatedAt: e.at, action: 'remove' }))];
+    }
+    async pullCached({ deferProgress = false } = {}) {
+        this.operation = { ...this.operation, step: 'pull' }; this.progress({ phase: 'Checking cloud directory', completed: 0, total: null });
+        if (this.run) return this.run(this.store, this.readConfig(), this.passphrase, 'pull');
+        if (!await this.cloud.connect(this.passphrase, { readOnly: true })) { this.cloud.report('Cloud vault is empty', 0, 0); return { downloaded: 0 }; }
+        await this.cloud.catalog(this.passphrase);
+        const projects = this.cloud.summaries(), started = Date.now(); let completed = 0;
+        this.cloud.report('Updating project lists', 0, projects.length, started);
+        for (const p of projects) { await this.cloud.project(p.id, this.passphrase); this.cloud.report('Updating project lists', ++completed, projects.length, started, p.name); }
+        const local = new Set(this.store.all('branch').map(b => b.id));
+        const items = this.cloud.items().filter(i => local.has(i.id));
+        if (!deferProgress) this.pullGroup = { completed: 0, fraction: 0, total: items.length };
+        try {
+            this.cloud.report('Pulling sessions', 0, items.length, started);
+            for (const [index, item] of items.entries()) { this.cloud.report('Updating downloaded sessions', 0, null, started, item.name); await this.cloud.hydrate(item.id, this.passphrase, { latest: true }); this.cloud.report('Pulling sessions', index + 1, items.length, started, item.name); }
+        } finally { this.pullGroup = null; }
+        this.cloud.saveDirectory(); this.store.local('lastPull', now());
+        if (!deferProgress) this.cloud.report('Pull complete', items.length, items.length, started);
+        return { downloaded: items.length };
+    }
+    startTransfer(direction, manual = true, captured = false) {
+        assert(['pull', 'push'].includes(direction), 'Choose Download or Upload.');
+        assert(!this.running && !this.pending && !this.migrating, 'A cloud transfer is already running.', 409);
+        assert(this.passphrase !== null && this.readConfig()?.url, 'Configure WebDAV and unlock project sync first.');
+        assert(this.rateLimitUntil <= Date.now(), 'Provider requested a pause before retrying.', 429);
+        this.store.local('syncStarted', true);
+        this.syncJob = this.exclusive(async () => {
+            this.operation = { ...this.operation, step: 'pull' };
+            this.progress({ phase: 'Reading local changes', completed: 0, total: null });
+            if (!captured) await this.beforeUpload?.();
+            const pulled = await this.pullCached({ deferProgress: direction === 'push' });
+            this.operation = { ...this.operation, summary: { checked: pulled?.downloaded || 0 } };
+            if (direction === 'pull') { if (!this.lastFailure?.requiresReview) this.needsReview = null; return pulled; }
+            assert(!(this.store.local('conflicts') || []).length, 'Resolve sync conflicts before uploading.');
+            const beginPush = () => {
+                if (this.operation.step === 'push') return;
+                this.operation = { ...this.operation, step: 'push', pullComplete: true, stageProgress: null };
+                this.progress({ phase: 'Preparing changes to push', completed: 0, total: null });
+            };
+            const cleanup = await this.syncTrash({ onPrepared: beginPush, onProgress: progress => { this.operation.stageProgress = progress; } });
+            beginPush();
+            const ids = this.cloud.dirtyIds();
+            // Cleanup has already published a frozen snapshot of all surviving data.
+            // New local changes stay queued instead of triggering a second upload pass.
+            const result = cleanup?.rebuilt ? cleanup : this.run ? await this.run(this.store, this.readConfig(), this.passphrase, 'push', ids) : ids.length ? await this.cloud.publish(ids, this.passphrase, { catalogFresh: true }) : { uploaded: 0, published: 0 };
+            if (cleanup?.rebuilt) { const cache = this.cloud.cache(); cache.lastUpload = now(); this.cloud.save(cache); }
+            this.queue = new Set(this.cloud.dirtyIds()); this.store.local('uploadQueue', [...this.queue]);
+            this.store.local('lastSync', { at: now(), ...result }); this.needsReview = null;
+            this.operation = { ...this.operation, summary: { checked: pulled?.downloaded || 0, published: result.published || 0, uploaded: result.uploaded || 0 } };
+            return { ...pulled, ...result };
+        }, false, direction, manual);
+        this.syncJob.catch(() => {});
+        return { operationId: this.operation.id };
     }
     async prepareSync() {
         assert(this.passphrase !== null && this.readConfig()?.url, 'Configure WebDAV and unlock project sync first.');
@@ -51,7 +131,7 @@ export class AutoSync {
             const plan = await this.cloud.transferPlan(this.passphrase);
             this.syncPlan = { ...plan, id: id(), createdAt: Date.now() };
             return this.syncPlan;
-        }, false, 'pull');
+        }, false, 'pull', true);
     }
     startSync(planId, confirmed = false) {
         const plan = this.syncPlan;
@@ -66,7 +146,7 @@ export class AutoSync {
             const dirty = this.cloud.dirtyIds();
             const result = dirty.length ? await this.cloud.publish(dirty, this.passphrase, { catalogFresh: true }) : { uploaded: 0, published: 0 };
             cleanupLocal(this.store);
-            this.queue.clear(); this.store.local('uploadQueue', []); this.store.local('lastSync', { at: now(), ...result });
+            this.queue = new Set(this.cloud.dirtyIds()); this.store.local('uploadQueue', [...this.queue]); this.store.local('lastSync', { at: now(), ...result });
             return result;
         }, false, 'both', true);
         this.syncJob.catch(() => {});
@@ -76,11 +156,14 @@ export class AutoSync {
         const configured = !!this.readConfig()?.url, dirty = this.cloud.dirtyIds();
         this.reconcileTimer(dirty.length>0);
         this.cloud.useSavedCache(); const cache = this.cloud.cache();
-        const operation = this.running ? this.operation : this.lastManualOperation?.state === 'error' ? this.lastManualOperation : this.operation || this.lastManualOperation;
-        const error = this.lastManualOperation?.state === 'error' ? this.lastManualOperation.error : this.error;
-        return { manualOperation: this.running && this.operation?.manual ? this.operation : this.lastManualOperation || null, needsReview: this.needsReview || null, started: this.store.local('syncStarted') !== false, operation: operation || null, configured, unlocked: this.passphrase !== null, queued: this.queue.size > 0, dirty: dirty.length > 0 || this.trashPending(), dirtyCount: dirty.length + Number(this.trashPending()),
+        let operation = this.running ? this.operation : this.lastManualOperation?.state === 'error' ? this.lastManualOperation : this.operation || this.lastManualOperation;
+        if (!this.running && this.needsReview && this.lastFailure && (!operation || this.lastFailure.finishedAt >= (operation.finishedAt || 0))) operation = this.lastFailure;
+        const metrics = this.cloud.connection?.dav.metrics || this.cloud.metrics;
+        if (operation && metrics && operation.id === this.metricsOperation) operation = { ...operation, network: { sampledAt: Date.now(), ...Object.fromEntries(['requests','bytesSent','bytesReceived','requestMs','responseBodyMs'].map(key => [key, Math.max(0, (metrics[key] || 0) - (this.metricsStart?.[key] || 0))])) } };
+        const error = this.needsReview && this.lastFailure?.requiresReview ? this.lastFailure.error : this.lastManualOperation?.state === 'error' ? this.lastManualOperation.error : this.error;
+        return { lastFailure: this.lastFailure || null, manualOperation: this.running && this.operation?.manual ? this.operation : this.lastManualOperation || null, needsReview: this.needsReview || null, started: this.store.local('syncStarted') !== false, operation: operation || null, configured, unlocked: this.passphrase !== null, queued: this.queue.size > 0, dirty: dirty.length > 0 || this.trashPending(), dirtyCount: dirty.length + Number(this.trashPending()),
             phase: this.migrating ? 'migrating' : this.running ? 'syncing' : !configured ? 'unconfigured' : this.passphrase === null ? 'locked' : this.error ? this.store.local('syncStarted') === false ? 'failed' : 'retrying' : this.queue.size ? 'queued' : dirty.length || this.trashPending() ? 'local' : 'synced',
-            nextRunAt: this.needsReview || !dirty.length && !this.trashPending() || this.store.local('syncStarted') === false || this.passphrase === null || !configured ? null : this.retryAt > Date.now() ? this.retryAt : this.queue.size && this.queuedAt ? this.queuedAt : this.nextFallbackAt, error, retryAt: this.retryAt || null, fallbackMinutes: preferences(this.store).autoUploadEnabled ? preferences(this.store).autoUploadMinutes : null, lastUpload: cache.lastUpload || null, lastCheck: cache.checkedAt || null, lastSuccess: cache.lastUpload || null };
+            nextRunAt: !preferences(this.store).autoUploadEnabled || this.running || this.needsReview || !dirty.length && !this.trashPending() || this.store.local('syncStarted') === false || this.passphrase === null || !configured ? null : this.retryAt > Date.now() ? this.retryAt : this.queue.size && this.queuedAt ? this.queuedAt : this.nextFallbackAt, error, retryAt: this.retryAt || null, fallbackMinutes: preferences(this.store).autoUploadEnabled ? preferences(this.store).autoUploadMinutes : null, lastUpload: cache.lastUpload || null, lastCheck: cache.checkedAt || null, lastSuccess: cache.lastUpload || null };
     }
     unlock(passphrase) { assert(typeof passphrase === 'string' && (passphrase.length === 0 || passphrase.length >= 12), 'Encryption passphrase needs at least 12 characters.'); this.passphrase = passphrase; this.error = null; this.retryAt = 0; this.failures = 0; this.rateLimitUntil = 0; if (this.queue.size) this.schedule([...this.queue]); this.reconcileTimer(); }
     lock() { this.queuedAt = null; this.passphrase = null; this.cloud.lock(); clearTimeout(this.timer); clearTimeout(this.retryTimer); clearTimeout(this.interval);this.interval=null;this.nextFallbackAt=null; }
@@ -100,11 +183,14 @@ export class AutoSync {
         if (this.pending) return this.exclusive(fn, allowMigration, direction, manual);
         if (this.migrating && !allowMigration) throw new Error('Settings migration in progress.');
         this.running = true; this.operation = { id: id(), direction, manual, state: 'running', startedAt: Date.now() }; if(manual){this.lastManualOperation=this.operation;this.store.local('lastManualSync',this.operation);} this.onOperation?.(this.operation); const started = Date.now(); this.diagnostics?.record('cloud-operation', { phase: 'started' });
+        this.metricsOperation = this.operation.id; this.metricsStart = { ...(this.cloud.connection?.dav.metrics || this.cloud.metrics) };
+        this.store.transferReaders = (this.store.transferReaders || 0) + 1;
         this.pending = Promise.resolve().then(fn);
         try { const result = await this.pending; this.operation = { ...this.operation, state: 'success', finishedAt: Date.now() }; this.error = null; this.retryAt = 0; this.failures = 0; this.rateLimitUntil = 0; this.diagnostics?.record('cloud-operation', { phase: 'complete', durationMs: Date.now() - started }); return result; }
         catch (e) { this.operation = { ...this.operation, state: 'error', error: e.message, finishedAt: Date.now() }; this.error = e.message; this.failures++; if (e.code === 'WEBDAV_BACKOFF') this.rateLimitUntil = Date.now() + e.retryAfterMs; this.retryAt = Date.now() + Math.max(e.retryAfterMs || 0, Math.min(30 * 60 * 1000, 60000 * 2 ** Math.min(5, this.failures - 1)));
-            clearTimeout(this.retryTimer); if(manual)this.needsReview={retry:true};else {this.retryTimer = setTimeout(() => this.flush(this.queue.size ? 'queued' : direction).catch(() => {}), Math.min(2147483647, Math.max(1, this.retryAt - Date.now()))); this.retryTimer.unref();} this.diagnostics?.record('cloud-operation', { phase: 'failed', code: 'cloud_failed', durationMs: Date.now() - started }); throw e; }
-        finally { if(manual){this.lastManualOperation=this.operation;this.store.local('lastManualSync',this.operation);} this.pending = null; this.running = false; this.reconcileTimer(); this.onOperation?.(this.operation); }
+            this.lastFailure = { ...this.operation, network: this.status().operation?.network, requiresReview: !!e.requiresReview }; this.store.local('lastSyncFailure', this.lastFailure);
+            clearTimeout(this.retryTimer); if(manual || e.requiresReview)this.needsReview={retry:true,cleanup:!!e.requiresReview};else if (preferences(this.store).autoUploadEnabled && direction !== 'pull') {this.retryTimer = setTimeout(() => this.fallback().catch(() => {}), Math.min(2147483647, Math.max(1, this.retryAt - Date.now()))); this.retryTimer.unref();} this.diagnostics?.record('cloud-operation', { phase: 'failed', code: 'cloud_failed', durationMs: Date.now() - started }); throw e; }
+        finally { if(manual){this.lastManualOperation=this.operation;this.store.local('lastManualSync',this.operation);} this.pending = null; this.running = false; this.store.transferReaders--; if (!this.store.transferReaders && this.store.cleanupDeferred) { this.store.cleanupDeferred = false; cleanupLocal(this.store); } this.reconcileTimer(); this.onOperation?.(this.operation); }
     }
     async flush(direction = 'queued', explicit = false, captured = false) {
         if (!explicit && this.store.local('syncStarted') === false) return null;
@@ -144,7 +230,8 @@ export class AutoSync {
             const ids = direction === 'queued' ? dirty.filter(id => this.queue.has(id)) : dirty;
             if (!ids.length) return { published: 0, uploaded: 0, remoteChanged };
             const result = this.run ? await this.run(this.store, this.readConfig(), this.passphrase, direction, ids) : await this.cloud.publish(ids, this.passphrase, { catalogFresh: direction === 'both' });
-            for (const id of ids) this.queue.delete(id);
+            const remaining = new Set(this.cloud.dirtyIds());
+            for (const id of ids) if (!remaining.has(id)) this.queue.delete(id);
             this.store.local('uploadQueue', [...this.queue]);
             this.store.local('lastSync', { at: now(), ...result });
             return result;

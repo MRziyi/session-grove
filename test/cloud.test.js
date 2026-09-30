@@ -10,12 +10,14 @@ import { Cloud } from '../src/cloud.js';
 import { AutoSync } from '../src/auto-sync.js';
 import { codexSample, codexTurn } from '../src/demo.js';
 import { hash } from '../src/util.js';
+import { savePreferences } from '../src/preferences.js';
 import { seal } from '../src/sync.js';
 async function setup(t) {
-    const files = new Map(), requests = []; let failHead = false;
+    const files = new Map(), requests = []; let failHead = false, intercept = null;
     const server = http.createServer(async (req, res) => {
         const key = decodeURIComponent(req.url), chunks = []; requests.push([req.method, key]);
         for await (const c of req) chunks.push(c);
+        if (intercept && await intercept(req, res)) return;
         if (req.method === 'MKCOL') { res.writeHead(201); return res.end(); }
         if (req.method === 'PUT') {
             if (failHead && key.includes('/heads/')) { res.writeHead(503); return res.end(); }
@@ -35,11 +37,39 @@ async function setup(t) {
     t.after(async () => { stores.forEach(s => s.close()); server.close(); await once(server, 'close'); fs.rmSync(root, { force: true, recursive: true }); });
     const config = { url: `http://127.0.0.1:${server.address().port}/dav` }, pass = 'isolated-test-passphrase';
     const device = name => { const store = new Store(path.join(root, name)); stores.push(store); return { store, cloud: new Cloud(store, () => config) }; };
-    return { device, config, pass, files, requests, failPublication: value => failHead = value };
+    return { device, config, pass, files, requests, failPublication: value => failHead = value, intercept: fn => { intercept = fn; } };
 }
 function branch(store, projectId, title, secret = title) { return store.branch(projectId, title, 'codex', codexSample('/work', [[secret, 'Ready']])); }
 function append(store, b, text) { const current = store.get('branch', b.id); return store.ingest(b.id, store.raw(current.head) + codexTurn(text, 'Done').map(v => JSON.stringify(v) + '\n').join(''), current.head, {}); }
 function organize(store, b, title) { const g = store.treeGraph(b.id); store.organize(b.id, { version: g.version, pathId: b.id, chatIds: [g.paths[0].messages.at(-1).id], action: 'combine', name: title }); }
+test('failed cleanup requires manual retry and its reason survives checks and restart', async t => {
+    const e = await setup(t), a = e.device('cleanup-failure'), auto = new AutoSync(a.store, () => e.config);
+    t.after(() => auto.close());
+    await assert.rejects(auto.exclusive(async () => { auto.progress({ phase: 'Uploading records', completed: 12, total: 100 }); throw Object.assign(new Error('Test write lock expired'), { requiresReview: true }); }), /lock expired/);
+    assert.equal(auto.status().needsReview.cleanup, true); assert.equal(auto.status().nextRunAt, null); assert.equal(auto.retryTimer, undefined);
+    await auto.exclusive(async () => ({ checked: true }));
+    assert.match(auto.status().error, /lock expired/);
+    assert.equal(auto.status().lastFailure.progress.phase, 'Uploading records');
+    const restarted = new AutoSync(a.store, () => e.config); t.after(() => restarted.close());
+    assert.equal(restarted.status().needsReview.cleanup, true); assert.match(restarted.status().error, /lock expired/);
+});
+test('rename during download remains dirty and is not acknowledged as cloud content', async t => {
+    const e = await setup(t), a = e.device('rename-source'), b = e.device('rename-target');
+    const session = branch(a.store, null, 'Original');
+    await a.cloud.publish([session.id], e.pass);
+    await b.cloud.catalog(e.pass); for (const p of b.cloud.summaries()) await b.cloud.project(p.id, e.pass);
+    await b.cloud.hydrate(session.id, e.pass);
+    append(a.store, session, 'Remote continuation'); await a.cloud.publish([session.id], e.pass);
+    await b.cloud.catalog(e.pass); for (const p of b.cloud.summaries()) await b.cloud.project(p.id, e.pass);
+    const { dav } = await b.cloud.connect(e.pass), get = dav.get.bind(dav);
+    let edited = false;
+    dav.get = async (...args) => { const value = await get(...args); if (!edited && args[0].startsWith('trees/')) { edited = true; b.store.edit(session.id, { name: 'Local rename' }); } return value; };
+    await b.cloud.hydrate(session.id, e.pass);
+    assert.equal(b.store.get('branch', session.id).name, 'Local rename');
+    assert.ok(b.cloud.dirtyIds().includes(session.id));
+    assert.ok(b.store.detail(session.id).messages.some(m => m.text === 'Remote continuation'));
+    await b.cloud.publish([session.id], e.pass); assert.equal(b.cloud.dirtyIds().length, 0);
+});
 test('a successful background check cannot erase a failed manual sync result',async t=>{
  const e=await setup(t),a=e.device('a'),auto=new AutoSync(a.store,()=>e.config);t.after(()=>auto.close());auto.unlock(e.pass);const p=a.store.project('Failure');branch(a.store,p.id,'Data');const plan=await auto.prepareSync();
  a.cloud.publish=async()=>{throw Error('simulated transfer timeout');};auto.cloud.publish=a.cloud.publish;const job=auto.startSync(plan.id,true);await assert.rejects(auto.syncJob,/timeout/);
@@ -101,7 +131,7 @@ test('directory → project index → one tree fetches transcripts strictly on d
 test('Pending growth does not auto-upload; organization queues a snapshot, manual push includes remaining Pending, no-op push writes nothing', async t => {
     const env = await setup(t), { pass, config, requests } = env, a = env.device('a');
     const p = a.store.project('Paper'), b = branch(a.store, p.id, 'Main');
-    const auto = new AutoSync(a.store, () => config); t.after(() => auto.close()); auto.unlock(pass);
+    const auto = new AutoSync(a.store, () => config); t.after(() => auto.close()); savePreferences(a.store,{autoUploadEnabled:true}); auto.unlock(pass);
     auto.schedule([b.id]); await auto.flush(); assert.equal(auto.status().dirty, false); assert.ok(auto.status().lastUpload);
     append(a.store, b, 'New unfinished organization'); requests.length = 0;
     await auto.flush('pull'); await auto.flush();
@@ -201,7 +231,7 @@ test('opening a cached local project does not wait behind an unrelated cloud tra
 test('failed automatic uploads back off instead of retrying on every local refresh', async t => {
     const env = await setup(t), { pass, config, requests } = env, a = env.device('a');
     const p = a.store.project('Retry'), item = branch(a.store, p.id, 'Main'), auto = new AutoSync(a.store, () => config);
-    t.after(() => auto.close()); auto.unlock(pass); auto.schedule([item.id]); env.failPublication(true);
+    t.after(() => auto.close()); savePreferences(a.store,{autoUploadEnabled:true}); auto.unlock(pass); auto.schedule([item.id]); env.failPublication(true);
     await assert.rejects(auto.flush('queued'), /503/); requests.length = 0;
     await auto.flush('queued'); await auto.checkCatalog(); assert.equal(requests.length, 0);
     assert.ok(auto.status().retryAt > Date.now());
@@ -241,7 +271,7 @@ test('vault caches stay independent when settings migration reuses the old cache
 });
 
 test('upload timer starts only with dirty content, survives status reads, and stops after publication; pull never uploads',async t=>{
- const e=await setup(t),a=e.device('timer'),auto=new AutoSync(a.store,()=>e.config);t.after(()=>auto.close());auto.unlock(e.pass);
+ const e=await setup(t),a=e.device('timer'),auto=new AutoSync(a.store,()=>e.config);t.after(()=>auto.close());savePreferences(a.store,{autoUploadEnabled:true}); auto.unlock(e.pass);
  assert.equal(auto.status().nextRunAt,null);assert.equal(auto.interval,null);
  const p=a.store.project('Timer'),b=branch(a.store,p.id,'Main');const deadline=auto.status().nextRunAt;assert.ok(deadline>Date.now());assert.equal(auto.interval._idleTimeout,15*60000);assert.equal(auto.status().nextRunAt,deadline);
  await auto.flush('push',true);assert.equal(auto.status().nextRunAt,null);assert.equal(auto.interval,null);
@@ -292,4 +322,101 @@ test('showing background records is a view preference, not permission to upload 
  savePreferences(a.store,{showScheduledSessions:true});assert.equal(a.store.collections().items.length,1);assert.deepEqual(a.cloud.dirtyIds(),[]);
  a.store.put('branch',{...a.store.get('branch',b.id),backgroundManaged:true,archived:true});assert.deepEqual(a.cloud.dirtyIds(),[]);
  savePreferences(a.store,{showScheduledSessions:false});assert.deepEqual(a.cloud.dirtyIds(),[]);
+});
+
+test('split transfers default to manual; Download never initializes or writes an empty remote vault', async t => {
+ const e=await setup(t),a=e.device('manual'),auto=new AutoSync(a.store,()=>e.config);t.after(()=>auto.close());auto.unlock(e.pass);
+ branch(a.store,null,'Local');a.store.local('syncStarted',true);
+ assert.equal(auto.status().nextRunAt,null);await auto.fallback();assert.equal(e.requests.length,0);
+ auto.startTransfer('pull');await auto.syncJob;
+ assert.ok(e.requests.every(([method])=>method==='GET'||method==='PROPFIND'));assert.equal(e.files.size,0);
+ assert.equal(auto.status().dirty,true);assert.equal(auto.status().nextRunAt,null);
+});
+
+test('Upload visibly downloads first and a failed download cannot publish', async t => {
+ const e=await setup(t),a=e.device('order'),auto=new AutoSync(a.store,()=>e.config);t.after(()=>auto.close());auto.unlock(e.pass);branch(a.store,null,'Upload');
+ const stages=[];auto.onOperation=op=>{if(op.state==='running')stages.push(op.step);};
+ auto.startTransfer('push');await auto.syncJob;assert.ok(stages.indexOf('pull')>=0);assert.ok(stages.indexOf('push')>stages.indexOf('pull'));
+ assert.equal(auto.status().dirty,false);
+ a.store.edit(a.store.all('branch')[0].id,{name:'Changed'});e.requests.length=0;
+ e.intercept((req,res)=>{if(req.method==='PROPFIND'){res.writeHead(500);res.end();return true;}return false;});
+ auto.startTransfer('push');await assert.rejects(auto.syncJob);
+ assert.ok(e.requests.every(([method])=>!['PUT','DELETE','MKCOL'].includes(method)));assert.ok(auto.status().lastFailure);
+});
+
+test('Download applies newer session and node changes but preserves a newer local session', async t => {
+ const e=await setup(t),a=e.device('newer-a'),b=e.device('newer-b'),s=branch(a.store,null,'Original');
+ await a.cloud.publish([s.id],e.pass);await b.cloud.catalog(e.pass);for(const p of b.cloud.summaries())await b.cloud.project(p.id,e.pass);await b.cloud.hydrate(s.id,e.pass);
+ b.store.edit(s.id,{name:'Older local change'});
+ a.store.edit(s.id,{name:'New cloud name'});organize(a.store,s,'New cloud node');await a.cloud.publish([s.id],e.pass);
+ const auto=new AutoSync(b.store,()=>e.config);t.after(()=>auto.close());auto.unlock(e.pass);e.requests.length=0;auto.startTransfer('pull');await auto.syncJob;
+ assert.equal(b.store.get('branch',s.id).name,'New cloud name');assert.ok(b.store.treeGraph(s.id).nodes.some(n=>n.name==='New cloud node'));assert.ok(!auto.status().dirty);
+ assert.ok(e.requests.every(([m])=>['GET','PROPFIND'].includes(m)));
+ b.store.edit(s.id,{name:'Newest local name'});auto.startTransfer('pull');await auto.syncJob;
+ assert.equal(b.store.get('branch',s.id).name,'Newest local name');assert.ok(auto.status().dirty);assert.equal(auto.pendingItems()[0].name,'Newest local name');
+});
+
+test('an edit while Download awaits a newer manifest survives even a remote clock ahead', async t => {
+ const e=await setup(t),a=e.device('during-a'),b=e.device('during-b'),s=branch(a.store,null,'Original');
+ await a.cloud.publish([s.id],e.pass);await b.cloud.catalog(e.pass);for(const p of b.cloud.summaries())await b.cloud.project(p.id,e.pass);await b.cloud.hydrate(s.id,e.pass);
+ a.store.edit(s.id,{name:'Remote future'});a.store.put('branch',{...a.store.get('branch',s.id),metadataUpdatedAt:'2099-01-01T00:00:00.000Z'});await a.cloud.publish([s.id],e.pass);
+ const entered=Promise.withResolvers(),release=Promise.withResolvers();let held=false;
+ e.intercept(async(req)=>{if(!held&&req.method==='GET'&&req.url.includes('/trees/')){held=true;entered.resolve();await release.promise;}return false;});
+ const auto=new AutoSync(b.store,()=>e.config);t.after(()=>auto.close());auto.unlock(e.pass);auto.startTransfer('pull');
+ try{await entered.promise;b.store.edit(s.id,{name:'Typed while downloading'});}finally{release.resolve();}
+ await auto.syncJob;assert.equal(b.store.get('branch',s.id).name,'Typed while downloading');assert.ok(auto.status().dirty);
+});
+
+test('upload acknowledges only its captured snapshot and protects bodies from concurrent Trash cleanup', async t => {
+ const e=await setup(t),a=e.device('snapshot'),s=branch(a.store,null,'Before snapshot');
+ const auto=new AutoSync(a.store,()=>e.config);t.after(()=>auto.close());auto.unlock(e.pass);
+ const entered=Promise.withResolvers(),release=Promise.withResolvers();let held=false;
+ e.intercept(async(req)=>{if(!held&&req.method==='PUT'&&req.url.includes('/objects/')){held=true;entered.resolve();await release.promise;}return false;});
+ auto.startTransfer('push');try{await entered.promise;a.store.edit(s.id,{name:'After snapshot'});auto.schedule([s.id]);}finally{release.resolve();}
+ await auto.syncJob;assert.ok(auto.cloud.dirtyIds().includes(s.id));assert.equal(auto.pendingItems()[0].name,'After snapshot');
+ const reader=e.device('snapshot-reader');await reader.cloud.catalog(e.pass);for(const p of reader.cloud.summaries())await reader.cloud.project(p.id,e.pass);await reader.cloud.hydrate(s.id,e.pass);assert.equal(reader.store.get('branch',s.id).name,'Before snapshot');
+});
+
+test('Trash during an actual upload leaves deletion queued and does not remove snapshot records early', async t => {
+ const {stageTrash,cleanupLocal}=await import('../src/trash.js');
+ const e=await setup(t),a=e.device('trash-in-flight'),s=branch(a.store,null,'Discard while uploading'),auto=new AutoSync(a.store,()=>e.config);t.after(()=>auto.close());auto.unlock(e.pass);
+ const entered=Promise.withResolvers(),release=Promise.withResolvers();let held=false;
+ e.intercept(async(req)=>{if(!held&&req.method==='PUT'&&req.url.includes('/objects/')){held=true;entered.resolve();await release.promise;}return false;});
+ auto.startTransfer('push');try{await entered.promise;stageTrash(a.store,[s.id],[s.id]);assert.equal(cleanupLocal(a.store).deferred,true);assert.ok(a.store.raw(s.head));}finally{release.resolve();}
+ await auto.syncJob;
+ assert.equal(a.store.local('trashPending').length,1);assert.equal(a.store.local('trashEntries')[0].state,'pending');assert.equal(auto.pendingItems()[0].action,'remove');assert.ok(auto.status().dirty);
+});
+
+test('equal modification times with divergent transcripts require an explicit choice', async t => {
+ const e=await setup(t),a=e.device('tie-a'),b=e.device('tie-b'),s=branch(a.store,null,'Same time');
+ await a.cloud.publish([s.id],e.pass);await b.cloud.catalog(e.pass);for(const p of b.cloud.summaries())await b.cloud.project(p.id,e.pass);await b.cloud.hydrate(s.id,e.pass);
+ append(a.store,s,'Remote suffix');append(b.store,b.store.get('branch',s.id),'Local suffix');
+ for(const device of [a,b])device.store.put('branch',{...device.store.get('branch',s.id),contentUpdatedAt:'2090-01-01T00:00:00.000Z',metadataUpdatedAt:'2090-01-01T00:00:00.000Z'});
+ await a.cloud.publish([s.id],e.pass);await b.cloud.catalog(e.pass);for(const p of b.cloud.summaries())await b.cloud.project(p.id,e.pass);await b.cloud.hydrate(s.id,e.pass,{latest:true});
+ assert.ok(b.store.raw(b.store.get('branch',s.id).head).includes('Local suffix'));assert.equal(b.store.local('conflicts')[0].kind,'session');assert.ok(b.cloud.dirtyIds().includes(s.id));
+});
+
+test('manual Download replaces an older transcript and leaves cloud-only sessions unmaterialized', async t => {
+ const e=await setup(t),a=e.device('content-a'),b=e.device('content-b'),s=branch(a.store,null,'Cached');
+ await a.cloud.publish([s.id],e.pass);await b.cloud.catalog(e.pass);for(const p of b.cloud.summaries())await b.cloud.project(p.id,e.pass);await b.cloud.hydrate(s.id,e.pass);
+ const oldHead=b.store.get('branch',s.id).head;append(a.store,s,'Newer remote transcript');const unopened=branch(a.store,null,'Cloud only');await a.cloud.publish([s.id,unopened.id],e.pass);
+ const auto=new AutoSync(b.store,()=>e.config);t.after(()=>auto.close());auto.unlock(e.pass);e.requests.length=0;auto.startTransfer('pull');await auto.syncJob;
+ assert.notEqual(b.store.get('branch',s.id).head,oldHead);assert.ok(b.store.raw(b.store.get('branch',s.id).head).includes('Newer remote transcript'));assert.equal(b.store.find('branch',unopened.id),undefined);
+ assert.ok(auto.listing('00000000-0000-4000-8000-000000000001').items.some(i=>i.id===unopened.id));assert.ok(e.requests.every(([m])=>['GET','PROPFIND'].includes(m)));
+});
+
+test('old implicit upload preferences do not opt into the new automatic pipeline', async t => {
+ const {preferences}=await import('../src/preferences.js'),e=await setup(t),a=e.device('opt-in');
+ a.store.local('preferences',{autoUploadEnabled:true,autoUploadMinutes:1});assert.equal(preferences(a.store).autoUploadEnabled,false);
+ savePreferences(a.store,{autoUploadEnabled:true});assert.equal(preferences(a.store).autoUploadEnabled,true);
+ savePreferences(a.store,{autoUploadEnabled:false});assert.equal(preferences(a.store).autoUploadEnabled,false);
+});
+
+test('Push stays in Pull through shared-history preparation and publishes cleanup only once', async t => {
+ const e=await setup(t),a=e.device('cleanup-stages'),directions=[];
+ const auto=new AutoSync(a.store,()=>e.config,async(s,c,p,d)=>{directions.push(d);return {downloaded:1};});t.after(()=>auto.close());auto.unlock(e.pass);
+ auto.cloud.cacheKey='cloud:cleanup-stage-test';
+ auto.syncTrash=async options=>{assert.equal(auto.operation.step,'pull');assert.ok(!auto.operation.pullComplete);options.onProgress({completed:2,total:3});auto.cloud.report('Preparing shared history',2,3);assert.equal(auto.operation.step,'pull');options.onProgress({completed:3,total:3});options.onPrepared();assert.equal(auto.operation.step,'push');return {rebuilt:true,published:2,uploaded:10};};
+ auto.cloud.publish=()=>{throw Error('A second publication must not occur');};auto.startTransfer('push');await auto.syncJob;
+ assert.deepEqual(directions,['pull']);assert.equal(auto.operation.summary.published,2);assert.equal(auto.operation.state,'success');
 });

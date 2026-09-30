@@ -26,3 +26,14 @@ test('pending names follow depth and Fork selects the preceding completed node',
  assert.equal(forkBeforeNode(p,nodes[0]),null);assert.equal(forkBeforeNode(p,nodes[1]).end,4);assert.equal(forkBeforeNode(p,nodes[3]).end,8);
  p.checkpoints=[{end:8}];assert.equal(forkBeforeNode(p,nodes[1]),null,'never invent a tool-completion boundary');
 });
+
+test('Pull and Push share pending, active, complete and failed stage semantics', async () => {
+    const { transferStages } = await import('../web/library-view.js');
+    assert.deepEqual(transferStages(null), { pull: 'pending', push: 'pending' });
+    assert.deepEqual(transferStages({ direction: 'push', state: 'running' }), { pull: 'running', push: 'pending' });
+    assert.deepEqual(transferStages({ direction: 'push', step: 'pull', state: 'running' }), { pull: 'running', push: 'pending' });
+    assert.deepEqual(transferStages({ direction: 'push', step: 'push', state: 'running' }), { pull: 'complete', push: 'running' });
+    assert.deepEqual(transferStages({ direction: 'push', step: 'push', state: 'error' }), { pull: 'complete', push: 'failed' });
+    assert.deepEqual(transferStages({ direction: 'pull', step: 'pull', state: 'success' }), { pull: 'complete', push: 'pending' });
+    assert.deepEqual(transferStages({ direction: 'push', step: 'push', state: 'success' }), { pull: 'complete', push: 'complete' });
+});

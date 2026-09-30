@@ -1,4 +1,5 @@
 import {isTrashed} from './trash.js';
+import { modifiedAt as modified, nextModifiedAt } from './session-time.js';
 import { preferences } from './preferences.js';
 import { INBOX_ID, inboxProject, cloudProjectId } from './inbox.js';
 import { contentOrigin } from './device.js';
@@ -19,7 +20,6 @@ export function visibleSession(store, b, forSync = false) {
     const excluded=store.summary(b.head,b.agent).excluded;
     return !excluded || show && ['scheduled', 'agent-owned', 'background'].includes(excluded);
 }
-const modified = b => b.contentUpdatedAt || b.updatedAt;
 export function collections(store, forSync = false) {
     const branches = store.all('branch'), instances = store.instances(), buckets = new Map();
     for (const b of branches) {
@@ -100,6 +100,8 @@ export function buildGraph(store, branchId) {
         head: b.head, canRewriteContext: supportedHistory(parsed), canActivate: store.summary(b.head,b.agent).complete && !store.summary(b.head,b.agent).external && (supportedHistory(parsed) || store.instances().some(i => i.branchId === b.id && i.adopted && i.baseRevision === b.head && (i.contextPolicyHash || policyHash(null)) === policyHash(b.contextPolicy))), active: store.instances().some(i => i.branchId === b.id && isActive(i)),
         context: { ...parsed.context, ledger: (() => { const l = inventory; return { ...l, entries: l.entries.filter(e => e.chatLine === null) }; })(), compactions: parsed.context.compactions.map(e => ({ ...e, enabled: !(b.contextPolicy?.disabled || []).includes(e.id) })) }, contextPolicy: b.contextPolicy || null, contextPending: store.instances().some(i => i.branchId === b.id && isActive(i) && ((i.contextPolicyHash || policyHash(null)) !== policyHash(b.contextPolicy) || i.baseRevision !== b.head)), messages: pathFor(b), checkpoints: parsed.checkpoints }; });
     const assignments = {};
+    for (const b of members.filter(b => b.endpointName && b.parentId))
+        for (const m of pathFor(b)) if (m.line > b.forkEnd) assignments[m.id] = { id: 'endpoint-' + b.id, name: b.endpointName };
     // Read legacy append-only nodes as initial annotations without changing history.
     for (const b of members) {
         if (b.synthetic || b.excluded || !b.nodeHead) continue;
@@ -151,7 +153,7 @@ export function buildGraph(store, branchId) {
         }
         const branch = store.get('branch', p.branchId);
         if (branch.parentId && !p.messages.some(m => m.line > branch.forkEnd)) {
-            const empty = {id:'empty-'+p.branchId, empty:true, name:null, pending:true, chatIds:[], branchIds:[p.branchId], endBranchIds:[], parentIds:[], childIds:[]};
+            const empty = {id:'empty-'+p.branchId, empty:true, name:branch.endpointName || null, pending:!branch.endpointName, chatIds:[], branchIds:[p.branchId], endBranchIds:[], parentIds:[], childIds:[]};
             nodes.push(empty); byNode.set(empty.id,empty); p.nodeIds.push(empty.id);
         }
         if (p.nodeIds.length) byNode.get(p.nodeIds.at(-1)).endBranchIds.push(p.branchId);
@@ -189,7 +191,7 @@ export function buildGraph(store, branchId) {
         store.parseCache.clear(); store.parseBytes = 0; store.recordCache.clear(); store.recordBytes = 0;
     }
     return { id: root.id, projectId: root.projectId, layoutHead: root.layoutHead || null,
-        version: hash(JSON.stringify([members.map(b => [b.id, b.head, b.nodeHead, b.parentId, b.archived, b.contextPolicy]), root.layoutHead || null])),
+        version: hash(JSON.stringify([members.map(b => [b.id, b.head, b.nodeHead, b.parentId, b.archived, b.contextPolicy, b.name, b.endpointName]), root.layoutHead || null])),
         name: store.collections().items.find(i => i.id === root.id)?.name || root.name,
         nodes: ordered, edges: [...edges.values()], paths, assignments,
         chatCount: new Set(paths.flatMap(p => p.messages.map(m => m.id))).size,
@@ -213,11 +215,11 @@ export function treeGraph(store, branchId, view = 'all') {
 
 export function organize(store, branchId, { version, pathId, chatIds, action, name, nodeId }) {
     return store.transaction(() => {
-        const graph = treeGraph(store, branchId);
+        const graph = treeGraph(store, branchId, action === 'rename' ? 'all' : 'in-use');
         assert(version === graph.version, 'Conversation changed. Refresh before organizing.', 409);
         const path = graph.paths.find(p => p.branchId === pathId);
-        assert(path && !path.archived && !(graph.projectId && store.get('project', graph.projectId).archived), 'Restore this session before organizing.');
-        if (action === 'rename') { const node = graph.nodes.find(n => n.id === nodeId && n.branchIds.includes(pathId)); assert(node, 'Select a node to rename.'); if (node.name && node.name === String(name || '').trim()) return { layoutHead: graph.layoutHead }; chatIds = node.chatIds; }
+        assert(path && (action === 'rename' || !path.archived && !(graph.projectId && store.get('project', graph.projectId).archived)), 'Restore this session before organizing.');
+        if (action === 'rename') { const node = graph.nodes.find(n => n.id === nodeId && n.branchIds.includes(pathId)); assert(node, 'Select a node to rename.'); if (node.name && node.name === String(name || '').trim()) return { layoutHead: graph.layoutHead }; if (node.empty) { store.edit(pathId, { endpointName: name }); return { layoutHead: graph.layoutHead }; } chatIds = node.chatIds; }
         const selected = new Set(chatIds);
         assert(Array.isArray(chatIds) && selected.size && selected.size === chatIds.length, 'Select chats to organize.');
         const route = graph.paths.find(p => p.branchId === pathId);
@@ -239,9 +241,13 @@ export function organize(store, branchId, { version, pathId, chatIds, action, na
         const annotation = action !== 'dissolve' ? { id: newId(), name: String(name || '').trim() } : null;
         if (annotation) assert(annotation.name.length > 0 && annotation.name.length <= 200, 'Enter a node title (1–200 characters).');
         for (const id of selected) assignments[id] = annotation;
-        const layout = { id: newId(), rootId: root.id, parent: root.layoutHead || null, assignments, createdAt: now() };
+        const layout = { id: newId(), rootId: root.id, parent: root.layoutHead || null, assignments, createdAt: nextModifiedAt(...treeMembers(store, root.id)) };
         store.put('layout', layout);
-        store.put('branch', { ...root, layoutHead: layout.id });
+        store.put('branch', { ...root, layoutHead: layout.id, updatedAt: layout.createdAt, metadataUpdatedAt: layout.createdAt });
+        for (const affected of graph.paths.filter(p => p.messages.some(m => selected.has(m.id)))) {
+            const branch = store.get('branch', affected.branchId);
+            store.put('branch', { ...branch, updatedAt: layout.createdAt, metadataUpdatedAt: layout.createdAt });
+        }
         return { layoutHead: layout.id };
     });
 }

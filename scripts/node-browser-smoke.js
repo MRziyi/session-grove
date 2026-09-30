@@ -1,0 +1,48 @@
+// Isolated Chrome/CDP regression for cross-branch selection and node activation.
+import fs from 'node:fs';import os from 'node:os';import path from 'node:path';import {spawn} from 'node:child_process';import {once} from 'node:events';import {pathToFileURL} from 'node:url';import assert from 'node:assert/strict';
+const source=path.resolve(process.argv[2]||new URL('..',import.meta.url).pathname);
+const {createApp}=await import(pathToFileURL(path.join(source,'src/server.js')));
+const {codexSample,claudeSample}=await import(pathToFileURL(path.join(source,'src/demo.js')));
+const root=fs.mkdtempSync(path.join(os.tmpdir(),'grove-node-browser-')),app=createApp({root:path.join(root,'app'),roots:{codex:path.join(root,'codex'),claude:path.join(root,'claude')},guard:()=>{}}),store=app.store;
+const pairs=Array.from({length:12},(_,i)=>['Question '+i,('Answer '+i+' with recorded context. ').repeat(40)]);
+const parent=store.branch(null,'Mixed session','codex',codexSample(root,pairs));
+const child=store.branch(null,'Claude path','claude',claudeSample(root,[...pairs.slice(0,3),...Array.from({length:20},(_,i)=>['Claude question '+i,('Long Claude answer '+i+'. ').repeat(40)])]));
+store.put('branch',{...child,parentId:parent.id,forkRevision:parent.head,forkEnd:store.detail(child.id).checkpoints[2].end,forkParentEnd:store.detail(parent.id).checkpoints[2].end});
+for(const b of [parent,child])for(let i=b===parent?0:3;i<(b===parent?12:23);i++){const g=store.treeGraph(parent.id),p=g.paths.find(p=>p.branchId===b.id);store.organize(parent.id,{version:g.version,pathId:b.id,chatIds:p.messages.slice(i*2,i*2+2).map(m=>m.id),action:'combine',name:b.agent+' node '+i});}
+app.native.setActive(parent.id,root,true);app.native.apply([parent.id]);
+app.server.listen(0,'127.0.0.1');await once(app.server,'listening');
+const chrome=spawn(process.env.CHROME||'/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',['--headless=new','--no-first-run','--no-default-browser-check','--remote-debugging-port=0','--user-data-dir='+path.join(root,'chrome'),'about:blank'],{stdio:'ignore'});let ws;
+try{
+ let port;for(let i=0;i<100;i++){try{port=fs.readFileSync(path.join(root,'chrome','DevToolsActivePort'),'utf8').split('\n')[0];break;}catch{}await new Promise(r=>setTimeout(r,100));}assert.ok(port,'Chrome debugging port');
+ const page=await(await fetch('http://127.0.0.1:'+port+'/json/new?http://127.0.0.1:'+app.server.address().port,{method:'PUT'})).json();ws=new WebSocket(page.webSocketDebuggerUrl);await once(ws,'open');let id=0;const requests=new Map(),errors=[];
+ ws.onmessage=e=>{const m=JSON.parse(e.data);if(m.id){const p=requests.get(m.id);requests.delete(m.id);m.error?p.reject(m.error):p.resolve(m.result);}if(m.method==='Runtime.exceptionThrown')errors.push(m.params.exceptionDetails.text);};
+ const call=(method,params={})=>new Promise((resolve,reject)=>{const n=++id;requests.set(n,{resolve,reject});ws.send(JSON.stringify({id:n,method,params}));});
+ const evaluate=async expression=>{const r=await call('Runtime.evaluate',{expression,awaitPromise:true,returnByValue:true});if(r.exceptionDetails)throw Error(JSON.stringify(r.exceptionDetails));return r.result.value;};
+ const wait=async expression=>{for(let i=0;i<100;i++){if(await evaluate(expression))return;await new Promise(r=>setTimeout(r,100));}throw Error('Timeout '+expression);};
+ await call('Runtime.enable');await call('Emulation.setDeviceMetricsOverride',{width:1512,height:982,deviceScaleFactor:1,mobile:false});await wait('document.querySelector("[data-open]")');await evaluate('document.querySelector("[data-open]").click()');await wait('document.querySelectorAll("[data-node]").length>10');
+ await evaluate('document.querySelector("#graph-reset").click()');
+ const graph=store.treeGraph(parent.id),targets=[parent,child].map(b=>graph.paths.find(p=>p.branchId===b.id).nodeIds.at(-1));
+ async function positionNode(node){const v=await evaluate(`(()=>{const a=document.querySelector('[data-node="${node}"]').getBoundingClientRect(),b=document.querySelector('#graph-scroll').getBoundingClientRect();return {x:b.x+b.width/2,y:b.y+b.height/2,deltaX:a.x+a.width/2-b.x-b.width/2,deltaY:a.y+a.height/2-b.y-b.height/2}})()`);await call('Input.dispatchMouseEvent',{type:'mouseWheel',...v});await evaluate('new Promise(resolve=>requestAnimationFrame(resolve))');}
+ async function clickNode(node){await positionNode(node);const rect=await evaluate(`(()=>{const r=document.querySelector('[data-node="${node}"]').getBoundingClientRect();return {x:r.x+r.width/2,y:r.y+r.height/2}})()`);await call('Input.dispatchMouseEvent',{type:'mousePressed',button:'left',clickCount:1,...rect});await call('Input.dispatchMouseEvent',{type:'mouseReleased',button:'left',clickCount:1,...rect});await evaluate('new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))');}
+ for(const target of [...targets,...targets]){
+  await positionNode(target);
+  const before=await evaluate(`(()=>{const r=document.querySelector('[data-node="${target}"]').getBoundingClientRect();return {x:r.x,y:r.y}})()`);
+  await clickNode(target);
+  const result=await evaluate(`(()=>{const el=document.querySelector('[data-node="${target}"]'),r=el.getBoundingClientRect(),pane=document.querySelector('#transcripts'),segment=document.querySelector('[data-segment="${target}"]').getBoundingClientRect(),view=pane.getBoundingClientRect();return {selected:el.getAttribute('aria-pressed'),x:r.x,y:r.y,scroll:pane.scrollTop,visible:segment.top<view.bottom&&segment.bottom>view.top}})()`);
+  assert.equal(result.selected,'true');assert.ok(Math.abs(result.x-before.x)<=4&&Math.abs(result.y-before.y)<=4,'graph camera must stay on clicked branch: '+JSON.stringify({before,result}));assert.ok(result.scroll>100&&result.visible,'one click must align the new transcript after rendering');
+ }
+ if(!process.argv.includes('--navigation-only')){
+  const internal=graph.paths.find(p=>p.branchId===parent.id).nodeIds[5];await clickNode(internal);
+  assert.equal(await evaluate('!!document.querySelector("#archive-path")'),false);assert.equal(await evaluate('!!document.querySelector("#rename-node")&&!!document.querySelector("#activate-node")'),true);
+  assert.equal(await evaluate('!!document.querySelector("#fork")||!!document.querySelector("#toggle-active")||!!document.querySelector("#convert-session")'),false);
+  await evaluate('document.querySelector("#activate-node").click()');await wait('document.querySelector("#activation-title")?.textContent.startsWith("[Grove]")&&!document.querySelector("#dialog-submit").disabled');
+  fs.mkdirSync('test-results',{recursive:true});const screenshot=await call('Page.captureScreenshot',{format:'png'});fs.writeFileSync('test-results/node-activation.png',Buffer.from(screenshot.data,'base64'));
+  const title=await evaluate('document.querySelector("#activation-title").textContent');assert.equal(title,'[Grove] Mixed session · codex node 5');assert.equal(store.all('branch').length,2);
+  await evaluate('document.querySelector("#activate-as").click()');await wait('document.querySelector("#conversion-preview")?.textContent.includes("tokens")');assert.ok(await evaluate('document.querySelector("#conversion-preview").textContent.includes("[Grove] Mixed session · codex node 5")'));
+  await evaluate('document.querySelector("#dialog-close").click();document.querySelector("#activate-node").click()');await wait('!!document.querySelector("#activation-title")&&!document.querySelector("#dialog-submit").disabled');
+  await evaluate('document.querySelector("#dialog-form").requestSubmit()');await wait('!document.querySelector("#dialog").open');assert.equal(store.all('branch').length,3);assert.ok(store.instances().some(i=>i.applied&&i.title===title));
+  await evaluate('window.__requests=[];const originalFetch=window.fetch;window.fetch=(url,...args)=>{window.__requests.push(String(url));return originalFetch(url,...args)};document.querySelector("[data-scope=trash]").click()');await wait('document.querySelector(".trash-note")&&window.__requests.includes("/api/trash")');
+  const paths=await evaluate('window.__requests');assert.ok(!paths.some(p=>p==='/api/state'||p.startsWith('/api/list')),'Trash must use its lightweight endpoint');
+ }
+ assert.deepEqual(errors,[]);console.log('Browser passed: one-click cross-tool branch positioning, stable graph camera, unified activation preview/title, conversion panel, prefix continuation, lightweight Trash.');
+}finally{ws?.close();chrome.kill();await once(chrome,'exit');await new Promise(r=>app.close(r));fs.rmSync(root,{recursive:true,force:true});}

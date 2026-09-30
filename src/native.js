@@ -1,5 +1,6 @@
 import {isTrashed,nativeSuppressed} from './trash.js';
 import { claudeTitle } from './claude-title.js';
+import { groveTitle } from './node-activation.js';
 import { preferences } from './preferences.js';
 import { readCodexHistory, codexFiles } from './codex-history.js';
 import fs from 'node:fs';
@@ -169,7 +170,7 @@ export class Native {
             if ((branch.excluded || null) !== observed.excluded) { patch.excluded = observed.excluded; metadataChanged = true; }
             if (observed.cwdAvailable !== undefined && instance.cwdAvailable !== observed.cwdAvailable) instance.cwdAvailable = observed.cwdAvailable;
             if (instance.excluded !== !!observed.excluded) { instance.excluded = !!observed.excluded; metadataChanged = true; }
-            if (!observed.excluded && observed.title && branch.name !== observed.title && (branch.name === instance.title || branch.nativeObservedTitle === branch.name)) {
+            if (!observed.excluded && observed.title && !(instance.groveTitle && observed.title === instance.title) && branch.name !== observed.title && (branch.name === instance.title || branch.nativeObservedTitle === branch.name)) {
                 patch.name = observed.title; patch.nativeObservedTitle = observed.title;
                 instance.title = observed.title;
             }
@@ -203,7 +204,7 @@ export class Native {
         timings.familiesMs = Math.round(performance.now() - familyStart);
         return { ...collected, discovered, grouped: families.grouped, timings, errors: [...collected.errors, ...found.errors] };
     }
-    setActive(branchId, cwd, desired) {
+    setActive(branchId, cwd, desired, options = {}) {
         const b = this.store.get('branch', branchId);
         assert(!b.excluded || ['scheduled','agent-owned'].includes(b.excluded) && preferences(this.store).showScheduledSessions, 'Agent-owned or empty records are not managed as sessions.');
         assert(!desired || !isTrashed(this.store,b.id),'Restore from Trash before activating.');
@@ -225,6 +226,7 @@ export class Native {
                 instances.push(instance);
             }
             instance.desired = true;
+            if (options.nodeName) { instance.groveTitle = true; instance.activationNodeName = options.nodeName; }
         }
         this.store.local('instances', instances);
         return this.plan();
@@ -316,11 +318,12 @@ export class Native {
         const day = new Date().toISOString().slice(0, 10).split('-');
         return path.join(i.root, 'sessions', ...day, `rollout-${new Date().toISOString().slice(0, 19).replace(/:/g, '-')}-${i.nativeId}.jsonl`);
     }
+    title(branch, instance) { return instance.groveTitle ? groveTitle(branch.name, instance.activationNodeName) : branch.name; }
     plan() {
         const operations = this.store.instances().flatMap(i => {
             if (i.excluded || isTrashed(this.store,i.branchId)) return [];
             const b = this.store.get('branch', i.branchId);
-            if (i.desired && (!i.applied || i.baseRevision !== b.head || i.missing || i.title !== b.name || (i.contextPolicyHash || policyHash(null)) !== policyHash(b.contextPolicy)))
+            if (i.desired && (!i.applied || i.baseRevision !== b.head || i.missing || i.title !== this.title(b, i) || (i.contextPolicyHash || policyHash(null)) !== policyHash(b.contextPolicy)))
                 return [{ instanceId: i.id, branchId: b.id, name: b.name, agent: i.agent, action: 'activate', cwd: i.cwd, file: this.destination(i) }];
             if (!i.desired && i.applied)
                 return [{ instanceId: i.id, branchId: b.id, name: b.name, agent: i.agent, action: 'deactivate', cwd: i.cwd, file: i.file }];
@@ -384,7 +387,8 @@ export class Native {
                     assert(!parsed.warnings.some(w => w.includes('外部附件')), '此会话包含外部附件引用。当前版本可浏览和分支，完整附件迁移尚未支持。');
                     const original = i.adopted && i.baseRevision === b.head && (i.contextPolicyHash || policyHash(null)) === policyHash(b.contextPolicy) && parsed.cwd === i.cwd;
                     const forkSource = nativeClaudeFork && lineage[0].parent && lineage[0].source.claudeCheckpoint ? { raw: this.store.availableRaw(lineage[0].parent), upToMessageId: lineage[0].source.claudeCheckpoint } : null;
-                    const output = original && i.file && fs.existsSync(i.file) ? this.read(i.file) : renderNative(raw, b.agent, i.nativeId, i.cwd, b.name, b.contextPolicy, forkSource);
+                    let output = original && i.file && fs.existsSync(i.file) ? this.read(i.file) : renderNative(raw, b.agent, i.nativeId, i.cwd, this.title(b, i), b.contextPolicy, forkSource);
+                    if (original && i.groveTitle && b.agent === 'claude' && claudeTitle(parsed.records).title !== this.title(b, i)) output = output.replace(/\n?$/, '\n') + JSON.stringify({type:'custom-title',customTitle:this.title(b, i),sessionId:i.nativeId}) + '\n';
                     const dest = safePath(root, op.file);
                     assert(!fs.existsSync(dest) || dest === i.file, '目标记录已存在，拒绝覆盖');
                     backup(dest);
@@ -406,7 +410,7 @@ export class Native {
                     i.baseline = i.adopted ? null : output;
                     i.observedHash = hash(output);
                     i.missing = false;
-                    i.title = b.name; i.contextPolicyHash = policyHash(b.contextPolicy);
+                    i.title = this.title(b, i); i.contextPolicyHash = policyHash(b.contextPolicy);
                     if (i.agent === 'codex')
                         this.updateCodexDb(dbs.get(root), i, b, parsed);
                 }
@@ -448,7 +452,7 @@ export class Native {
                 });
                 for (const i of after.filter(i => i.agent === agent && i.applied && changedIds.has(i.id))) {
                     const b = this.store.get('branch', i.branchId);
-                    kept.push(JSON.stringify(agent === 'codex' ? { id: i.nativeId, thread_name: b.name, updated_at: now() } : { display: b.name, pastedContents: {}, timestamp: Date.now(), project: i.cwd, sessionId: i.nativeId }));
+                    kept.push(JSON.stringify(agent === 'codex' ? { id: i.nativeId, thread_name: this.title(b, i), updated_at: now() } : { display: this.title(b, i), pastedContents: {}, timestamp: Date.now(), project: i.cwd, sessionId: i.nativeId }));
                 }
                 backup(file);
                 writes.set(file, kept.length ? kept.join('\n') + '\n' : '');
@@ -464,7 +468,7 @@ export class Native {
                         for (const i of after.filter(i => i.agent === 'claude' && i.applied && changedIds.has(i.id) && path.dirname(i.file) === dir)) {
                             const b = this.store.get('branch', i.branchId), p = parse(writes.get(i.file) ?? i.baseline ?? this.read(i.file), 'claude');
                             const previous = index.entries.find(e => e.sessionId === i.nativeId) || {};
-                            entries.push({ ...previous, sessionId: i.nativeId, fullPath: i.file, fileMtime: Date.now(), firstPrompt: p.messages.find(m => m.role === 'user')?.text || b.name, summary: b.name, messageCount: p.messages.length, created: previous.created || b.createdAt, modified: now(), projectPath: i.cwd, isSidechain: false });
+                            entries.push({ ...previous, sessionId: i.nativeId, fullPath: i.file, fileMtime: Date.now(), firstPrompt: p.messages.find(m => m.role === 'user')?.text || b.name, summary: this.title(b, i), messageCount: p.messages.length, created: previous.created || b.createdAt, modified: now(), projectPath: i.cwd, isSidechain: false });
                         }
                         backup(indexFile);
                         writes.set(indexFile, JSON.stringify({ ...index, entries }));
@@ -525,7 +529,7 @@ export class Native {
         const columns = db.prepare('PRAGMA table_info(threads)').all();
         assert(['id', 'rollout_path', 'cwd', 'archived'].every(k => columns.some(c => c.name === k)), '不兼容的 Codex threads 表');
         const seconds = Math.floor(Date.now() / 1000), ms = Date.now();
-        const values = { id: i.nativeId, rollout_path: i.file, created_at: seconds, updated_at: seconds, source: 'cli', model_provider: p.meta?.model_provider || 'openai', cwd: i.cwd, title: b.name, sandbox_policy: JSON.stringify({ type: 'read-only' }), approval_mode: 'on-request', has_user_event: p.hasUser ? 1 : 0, archived: 0, archived_at: null, cli_version: p.meta?.cli_version || '', first_user_message: p.messages.find(m => m.role === 'user')?.text || '', name: b.name, preview: p.messages.find(m => m.role === 'user')?.text.slice(0, 200) || '', created_at_ms: ms, updated_at_ms: ms, recency_at: seconds, recency_at_ms: ms, history_mode: p.meta?.history_mode || 'legacy', originator: 'session_grove' };
+        const values = { id: i.nativeId, rollout_path: i.file, created_at: seconds, updated_at: seconds, source: 'cli', model_provider: p.meta?.model_provider || 'openai', cwd: i.cwd, title: this.title(b, i), sandbox_policy: JSON.stringify({ type: 'read-only' }), approval_mode: 'on-request', has_user_event: p.hasUser ? 1 : 0, archived: 0, archived_at: null, cli_version: p.meta?.cli_version || '', first_user_message: p.messages.find(m => m.role === 'user')?.text || '', name: this.title(b, i), preview: p.messages.find(m => m.role === 'user')?.text.slice(0, 200) || '', created_at_ms: ms, updated_at_ms: ms, recency_at: seconds, recency_at_ms: ms, history_mode: p.meta?.history_mode || 'legacy', originator: 'session_grove' };
         for (const c of columns)
             assert(!c.notnull || c.dflt_value !== null || c.name in values, `Codex 新增必需字段 ${c.name}，请更新适配器`);
         const keys = Object.keys(values).filter(k => columns.some(c => c.name === k));

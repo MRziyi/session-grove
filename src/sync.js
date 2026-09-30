@@ -44,7 +44,7 @@ export class WebDAV {
         const url = new URL(config.url);
         assert(url.protocol === 'https:' || (url.protocol === 'http:' && ['localhost', '127.0.0.1', '[::1]'].includes(url.hostname)), 'WebDAV 需要 HTTPS（本地测试可用 HTTP）');
         assert(!url.username && !url.password && !url.search && !url.hash, 'URL 不应包含凭据、查询或片段');
-        this.metrics = { requests: 0, methods: {}, bytesSent: 0, bytesReceived: 0, requestMs: 0 };
+        this.metrics = { requests: 0, methods: {}, bytesSent: 0, bytesReceived: 0, requestMs: 0, responseBodyMs: 0, failures: 0 };
         this.controller = new AbortController();
         this.base = url.href.replace(/\/$/, '') + '/session-grove-v1/';
         this.authorization = 'Basic ' + Buffer.from(`${config.username || ''}:${config.password || ''}`).toString('base64');
@@ -57,8 +57,11 @@ export class WebDAV {
         const size = body ? Buffer.byteLength(body) : Number.isFinite(expectedBytes) && expectedBytes > 0 ? expectedBytes : 0;
         const timeout = /^(objects|trees|projects)\//.test(key) || size>262144 ? Math.min(600000, Math.max(180000, 30000 + Math.ceil(size / 32768) * 1000)) : 30000;
         const held=this.lockContext?.active?this.lockContext:null;
-        const response = await fetch(this.base + key.split('/').map(encodeURIComponent).join('/'), { method, body, headers: { ...(held && !['LOCK','UNLOCK'].includes(method) ? {If:'<'+held.uri+'> ('+held.token+')'} : {}), Authorization: this.authorization, 'Accept-Encoding': 'identity', ...extra }, redirect: 'error', signal: AbortSignal.any([this.controller.signal, AbortSignal.timeout(timeout)]) });
-        this.metrics.requestMs += performance.now() - started;
+        let response;
+        try {
+            response = await fetch(this.base + key.split('/').map(encodeURIComponent).join('/'), { method, body, headers: { ...(held && !['LOCK','UNLOCK'].includes(method) ? {If:'<'+held.uri+'> ('+held.token+')'} : {}), Authorization: this.authorization, 'Accept-Encoding': 'identity', ...extra }, redirect: 'error', signal: AbortSignal.any([this.controller.signal, AbortSignal.timeout(timeout)]) });
+        } catch (e) { this.metrics.failures++; throw e; }
+        finally { this.metrics.requestMs += performance.now() - started; }
         if ([429, 503].includes(response.status)) {
             const retry = response.headers.get('retry-after'), seconds = retry && /^\d+$/.test(retry) ? Number(retry) : retry ? Math.max(0, (Date.parse(retry) - Date.now()) / 1000) : 60;
             await response.body?.cancel();
@@ -70,7 +73,7 @@ export class WebDAV {
         for (let attempt=0;;attempt++) {
             try {
                 const r = await this.request('GET', key, undefined, {}, expectedBytes);
-                if (r.status === 404) return null;
+                if (r.status === 404) { await r.body?.cancel(); return null; }
                 if(r.status===207){const body=await this.readResponse(r,1048576);throw new Error('WebDAV GET failed ('+davStatuses(r,body).join(',')+').');}
                 assert(r.ok, `WebDAV GET 失败 (${r.status})`);
                 return await this.readResponse(r);
@@ -83,14 +86,17 @@ export class WebDAV {
     }
     async readResponse(r, limit = 128 * 1024 * 1024) {
         if (!r.body) return Buffer.alloc(0);
-        const chunks = [];
+        const chunks = [], started = performance.now();
         let size = 0;
+        try {
         for await (const chunk of r.body) {
             size += chunk.length; this.metrics.bytesReceived += chunk.length;
             assert(size <= limit, '远端对象超过大小限制');
             chunks.push(chunk);
         }
-        return Buffer.concat(chunks);
+        return Buffer.concat(chunks, size);
+        } catch (e) { this.metrics.failures++; throw e; }
+        finally { this.metrics.responseBodyMs += performance.now() - started; }
     }
     async put(key, body, exclusive = false) {
         const r = await this.request('PUT', key, body, exclusive ? { 'If-None-Match': '*' } : {});

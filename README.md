@@ -30,11 +30,11 @@ Grove manages the session library. **Codex and Claude Code remain where you actu
 1. Start a conversation in Codex or Claude Code, then click **Update** in Grove.
 2. Keep everyday conversations in **Ungrouped**, or **Move** a whole tree into a named Project. Both synchronize; filing is optional.
 3. Open a tree. Click a start chat and an end chat to select a continuous range, then **Combine** it under a useful title. **Dissolve** returns a range to Pending.
-4. Select any graph Node to **Rename** it. Naming a Pending segment turns it into a saved Node. **Fork** branches before a non-root Node when its preceding context ends at a complete agent turn.
-5. Select a session's endpoint to **Activate**, **Deactivate**, or **Archive** that path. Archived paths disappear from the in-use graph and remain complete in Archived. Other branches stay visible.
-6. Continue chatting in the agent. New chats extend Pending automatically. Organizing Nodes triggers cloud publication; **Sync** also publishes Pending you have not organized yet.
+4. Select any graph Node to **Rename** it, including an empty continuation. Naming Pending saves its title.
+5. **Activate** a selected completed node: preview its prefix, token cost and `[Grove] session · node` native title, or switch tools in that panel. Existing suffixes remain intact. Only path endpoints offer Trash.
+6. Continue chatting in the agent. New records attach to the continuation. Changes appear in the upload queue. **Pull** refreshes cloud updates; **Push** downloads first, then publishes local changes, including Pending.
 
-A Fork adds a selectable empty endpoint beside the selected Node, retaining the completed context before it. The root has no earlier context to fork. The new path inherits the retained prefix’s compaction choices.
+Internal-node activation adds a continuation containing the selected node and its preceding context, including its compaction choices.
 
 Read conversations as Markdown. Expand recorded activity to inspect tool inputs/results, named files and readable reasoning alongside the conversation. Encrypted reasoning without a readable summary is labeled explicitly: Grove preserves its original bytes and does not pretend to decode them. Large record previews are paged. Large graphs support background dragging, zoom and reset; Sankey bands connect only visible content.
 
@@ -65,15 +65,15 @@ npm works too: `npm run demo`, `npm run dev`, and `npm test`. The interface defa
 
 WebDAV is optional. Enter your server address, account and password; Grove adds its own **/Session-Grove/** folder. Verify the connection, then optionally set a content-encryption passphrase. Saved secrets remain visibly masked. Changing the connection or encryption settings runs a verified migration with progress.
 
-Filing work, naming Nodes and other organization changes upload automatically. Local sessions refresh every **1 minute** by default. A **15-minute** countdown starts after the first detected local change and uploads changed projects, including unfinished Pending. Every upload captures local updates first; an unchanged library makes no scheduled cloud request. Both intervals can be changed or disabled in Settings.
+Downloads and uploads are manual by default. **Pull** refreshes project lists and already-cached sessions; cloud-only histories remain on demand. **Push** completes Pull before publishing local changes. Hover/focus Push to inspect pending items. Automatic upload is opt-in, including after upgrade; its default interval is 15 minutes and it follows the same pull-before-push sequence. There is no independent download timer. Local session capture remains independently configurable, defaulting to 1 minute.
 
-**Sync** pulls remote changes before pushing local work. Clicking Sync starts immediately; the banner shows compact direction, progress and ETA without a modal. there is no upload dropdown. Automatic sync remains dirty-only, native Active choices remain local to each device, and completed verified packs are reused after interruption.
+Transfer details show concrete stages, the current action, progress, remaining time and download speed; technical counters are in Information. Errors use a bounded header inspector. Local Rename, Activate, Trash and node organization remain available during sync. Publication acknowledges its snapshot only; later edits remain queued. Session modification dates include transcript and organization changes, drive sorting and newer-version reconciliation, and are not advanced by browsing or downloading. See the mandatory [white-box design](docs/design.md) and [sync contract](docs/sync-policy.md).
 
 The library retains original session records. Node edits organize those records rather than rewriting the conversation. Cloud content is encrypted when you enable encryption; a yellow status identifies unencrypted storage. Saved credentials and the optional passphrase live in owner-only local files so `pnpm dev` can reconnect. This is not macOS Keychain storage.
 
 ## Current scope
 
-**0.13.0 · experimental · macOS first.** Same-agent branching, cross-device continuation and cross-agent text conversion with three explicit context modes are supported.
+**0.14.0 · experimental · macOS first.** Same-agent branching, cross-device continuation and cross-agent text conversion with three explicit context modes are supported.
 
 **Context fidelity has limits.** Supported materialization preserves recorded tool calls/results, reasoning and instructions instead of rebuilding a conversation from visible prose. Codex paginated forks resolve their recorded prefix references and remain paginated on activation. Native New branch and Grove Fork have been compared at the same checkpoint, including tool/reasoning records and native projected items. Missing history segments still block context changes. Dynamic client instructions, opaque compaction and external assets prevent a promise of identical model requests. See the [requirements and fidelity audit](docs/requirements-audit.md).
 
@@ -85,7 +85,7 @@ Node token counts are estimates. Before activation, Grove checks recorded usage 
 
 ## Testing and feedback
 
-If something fails, note what you selected, what you clicked, and the error reference shown in the UI. **ⓘ Information → Diagnostics → Download diagnostics** exports operation types, timings and error references without chat text or credentials.
+If something fails, note what you selected, what you clicked, and the error reference shown in the UI. **ⓘ Information → Diagnostics → Pull diagnostics** exports operation types, timings and error references without chat text or credentials.
 
 ```sh
 pnpm test
@@ -105,6 +105,8 @@ Session Grove 用项目和分支图管理 Claude Code 与 Codex 的会话。你�
 Design references: [codex-session-sync](https://github.com/shonngithub/codex-session-sync), [claude-sync](https://github.com/tawanorg/claude-sync), and [Chronicle](https://github.com/geekmuse/chronicle).
 
 [MIT License](LICENSE)
+
+The version notes below describe historical releases. Current behavior is defined above and in [Sync policy](docs/sync-policy.md).
 
 ### Pull first, then Push
 

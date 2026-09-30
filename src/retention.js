@@ -33,7 +33,11 @@ export function requiredRanges(graph) {
     return ranges;
 }
 export function bodyRefs(graph) {
-    if (!graph.retention) return [...new Set(graph.revisions.flatMap((r) => r.refs))];
+    if (!graph.retention) {
+        const refs = new Set();
+        for (const r of graph.revisions) for (const h of r.refs) refs.add(h);
+        return [...refs];
+    }
     const needed = requiredRanges(graph),
         declared = new Map(Object.entries(graph.retention.ranges || {})),
         revisions = new Map(graph.revisions.map((r) => [r.id, r]));

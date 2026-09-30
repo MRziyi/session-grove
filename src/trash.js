@@ -285,6 +285,7 @@ function pruneCompletedJournals(store) {
     }
 }
 export function cleanupLocal(store) {
+    if (store.transferReaders) { store.cleanupDeferred = true; return { records: 0, deferred: true }; }
     const removed = deletedIds(store);
     if (!removed.size) return { records: 0 };
     const graph = {

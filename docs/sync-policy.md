@@ -1,6 +1,46 @@
 # Sync policy
 
-Current behavior: see [0.11 local copies and explicit Pull](0.11-local-copies.md). Startup, focus, navigation and search no longer trigger cloud reads. The versioned sections below describe historical behavior.
+## Current contract: explicit Pull / Push and observable local-first transfers
+
+This section is authoritative. The versioned sections below are historical behavior and do not override it.
+
+| Action | Cloud reads | Cloud writes | Local editing |
+| --- | --- | --- | --- |
+| Startup, focus, list browsing, status polling | None | None | Available |
+| Pull (left half) | Refresh directory/indexes and updates for already downloaded sessions | None | Available |
+| Explicitly open a cloud-only session | Pull that session on demand | None | Available |
+| Push (right half) | Complete Pull first; then reconcile the snapshot being published | Publish changed snapshots and pending deletion work | Available |
+| Opted-in upload countdown | Same prerequisite Pull | Same Push | Available |
+
+Both directions are manual by default, including upgrade from the old implicit upload default. The user must explicitly enable the new automatic-upload setting. There is no independent automatic-download timer. Opting into automatic upload opts into its prerequisite download as well.
+
+### Observable state machine
+
+Push click → left Pull animates, right Push waits disabled → successful Pull → right Push animates → success or failure. A failed Pull prevents all subsequent publication. Only competing cloud controls are disabled; Rename, Activate, Trash and other local actions remain usable.
+
+The header always names the current action. The compact inspector shows **Pull → Push** with both stages present and no numbering. Pending stages are dimmed, active stages glow and move their arrow in the matching direction, complete stages show a green check, and an actual failure turns its stage red. The two toolbar halves share one outline and a middle divider; their icons never rotate.
+
+Remaining time sits above the progress bar on the right, download speed below it on the right. A failure replaces the progress bar with its actual message; an intentional pause is not an error. Do not overlay an older failure onto a new running/successful operation. There are no rate charts, cache counters or payload explanations in this compact panel. Those technical details remain accessible in Information. Popovers are constrained to the viewport and support hover, click, focus and Escape.
+
+Push keeps Pull active while cleanup gathers the shared history it must preserve. Missing records are counted across all sessions, not reset for each session. A completed cleanup already published its snapshot; later local edits stay queued rather than starting a redundant second publication. Verified missing records are saved privately under the library's `transfer-cache/` and reused after interruption. A fresh preparation rebuilds graph metadata from current manifests; the cache supplies only hash-verified bodies, never stale decisions. Successful cleanup removes this temporary cache. Reusing a shared pack saves other needed members without retaining unrelated discarded bodies.
+
+Hover/focus Push lists pending local items and modification dates, including queued removals. List and rail rows independently indicate cloud-only content, an active native session on this device, and local changes waiting to push. Reading these indicators performs no cloud I/O.
+
+### Modification ordering and concurrent work
+
+Session ordering uses the later of transcript-content modification time and organization modification time. Session rename, shared-node rename, node add/repartition/dissolve, project moves, context choices and transcript updates participate. Shared graph edits update affected paths and the graph root. Local edits advance monotonically even within one millisecond; imports retain native content dates. Reads and downloads never advance this clock.
+
+Explicit synchronization reconciles the same session identity using this modification time: newer replaces older; older remote state cannot replace newer local state. Equal timestamps use known ancestry when unambiguous and retain explicit conflicts otherwise. Device clocks should be correct; timestamps are an ordering policy, not proof of causality. Projects have their own modification clock; the tree root determines project membership so a family cannot split across projects during reconciliation.
+
+Downloaded immutable data is validated before a synchronous transaction applies it. Local changes made while a download was waiting are protected at apply time, regardless of the remote timestamp. They remain eligible for the next upload. Incoming cloud state never directly rewrites an active native file.
+
+Publication captures immutable graph snapshots, project metadata and fingerprints. Edits made after capture are not acknowledged as uploaded. Local Trash can complete while transfer readers exist; physical pruning of referenced records/revisions is deferred until readers finish. A new deletion event created during cloud cleanup is not marked complete by an older cleanup batch. Tombstones continue to prevent resurrection, and shared prefixes/recovery copies retain their existing protections.
+
+A Pull refreshes metadata for all cloud projects but only hydrates sessions already present locally. Cloud-only sessions stay cloud-only until explicitly opened. A Push includes its prerequisite Pull; manual Pull never publishes pending local Trash or other local edits.
+
+### Validation requirements
+
+Regression tests must cover default manual mode, Pull with zero remote mutations, pull-before-push ordering and failure, newer/older/tied modification times, node edits affecting ordering, local Activate/Trash during held network requests, exact snapshot acknowledgement, deletion arriving during cleanup, bounded progress/error/pending inspectors at mobile widths, and visible step transitions. Performance improvements must retain integrity checks and native-write guards.
 
 ## First use and operation feedback (0.8.1)
 

@@ -21,6 +21,30 @@ const edit = (store, branch, positions, action, name) => {
     const g = store.treeGraph(branch.id), p = g.paths.find(p => p.branchId === branch.id);
     return store.organize(branch.id, { version: g.version, pathId: branch.id, chatIds: positions.map(i => p.messages[i].id), action, name });
 };
+test('session and shared node edits reorder lists without changing transcript timestamps', t => {
+    const { store, cwd } = fixture(t);
+    const first = store.branch(null, 'Older', 'codex', codexSample(cwd, pairs(2)));
+    const child = store.fork(first.id, { name: 'Child', end: store.detail(first.id).checkpoints[0].end });
+    const other = store.branch(null, 'Recent', 'codex', codexSample(cwd, [['Other', 'Reply']]));
+    for (const b of [first, child, other]) store.put('branch', { ...b, contentUpdatedAt: b.id === other.id ? '2026-01-02' : '2026-01-01' });
+    assert.equal(store.collections().items.find(i => i.id === first.id).updatedAt, '2026-01-01');
+    store.edit(first.id, { name: 'Renamed session' });
+    assert.ok(store.collections().items.find(i => i.id === first.id).updatedAt > '2026-01-02');
+    const version = store.version;
+    store.edit(first.id, { name: 'Renamed session' }); assert.equal(store.version, version);
+    const graph = store.treeGraph(first.id), node = graph.nodes.find(n => n.branchIds.includes(first.id) && n.branchIds.includes(child.id));
+    store.organize(first.id, { version: graph.version, pathId: first.id, nodeId: node.id, action: 'rename', name: 'Shared setup' });
+    for (const id of [first.id, child.id]) {
+        assert.ok(store.get('branch', id).metadataUpdatedAt > '2026-01-02');
+        assert.equal(store.get('branch', id).contentUpdatedAt, '2026-01-01');
+    }
+    const timestamp = store.get('branch', child.id).metadataUpdatedAt;
+    const current = store.treeGraph(first.id);
+    store.organize(first.id, { version: current.version, pathId: first.id, nodeId: current.nodes.find(n => n.name === 'Shared setup').id, action: 'rename', name: 'Shared setup' });
+    assert.equal(store.get('branch', child.id).metadataUpdatedAt, timestamp);
+    const remote = new Store(path.join(cwd, 'remote')); t.after(() => remote.close()); copy(store, remote);
+    assert.equal(remote.get('branch', child.id).metadataUpdatedAt, timestamp);
+});
 test('logical nodes support arbitrary chat boundaries, internal Pending and neighboring repartition without native changes', t => {
     const { store, cwd } = fixture(t), b = store.branch(null, 'Draft', 'codex', codexSample(cwd, pairs(5))), raw = store.raw(b.head);
     edit(store, b, [0, 1, 2, 3, 4], 'combine', 'Context');
@@ -172,7 +196,7 @@ test('in-use and archive projections keep complete prefixes but never expose the
     assert.equal(store.listing('archived').items[0].name, 'Alternative');
     assert.equal(store.listing(p.id).items[0].sessions.length, 1);
 });
-test('renaming Pending creates a real node, no-op rename stays clean, and archived editing is rejected', t => {
+test('renaming Pending creates a real node, no-op rename stays clean, and archived nodes remain nameable', t => {
     const { store, cwd } = fixture(t), b = store.branch(null, 'Notes', 'codex', codexSample(cwd, pairs(2)));
     let g = store.treeGraph(b.id), options = { version: g.version, pathId: b.id, nodeId: g.nodes[0].id, action: 'rename', name: 'Set up context' };
     store.organize(b.id, options); g = store.treeGraph(b.id);
@@ -180,7 +204,9 @@ test('renaming Pending creates a real node, no-op rename stays clean, and archiv
     const version = g.layoutHead; store.organize(b.id, { ...options, version: g.version }); assert.equal(store.treeGraph(b.id).layoutHead, version);
     assert.throws(() => edit(store, b, [0, 2], 'dissolve'), /consecutive/);
     store.edit(b.id, { archived: true }); g = store.treeGraph(b.id);
-    assert.throws(() => store.organize(b.id, { ...options, version: g.version }), /Restore/);
+    store.organize(b.id, { ...options, version: g.version, name: 'Archived context' });
+    assert.equal(store.treeGraph(b.id, 'archived').nodes[0].name, 'Archived context');
+    assert.throws(() => edit(store, b, [0, 1], 'dissolve'), /Restore/);
 });
 test('immutable parsing and state caches invalidate on append and rollback; public state excludes native baselines', t => {
     const { store, native, cwd } = fixture(t), b = store.branch(null, 'Live', 'codex', codexSample(cwd, pairs(1)));

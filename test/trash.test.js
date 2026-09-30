@@ -9,7 +9,7 @@ import { Store } from '../src/store.js';
 import { Cloud } from '../src/cloud.js';
 import { Native } from '../src/native.js';
 import { stageTrash, restoreTrash, expireTrash, cleanupLocal, isTrashed } from '../src/trash.js';
-import { collectTrash, resumeTrashCleanup } from '../src/cloud-trash.js';
+import { collectTrash, resumeTrashCleanup, transferCachePath } from '../src/cloud-trash.js';
 import { codexSample, claudeSample, codexTurn } from '../src/demo.js';
 import { hash } from '../src/util.js';
 import { bodyRefs } from '../src/retention.js';
@@ -90,6 +90,22 @@ async function setup(t) {
     });
     return { root, files, device, pass, config, failDelete: (v) => (failDelete = v) };
 }
+
+test('cleanup reuses verified local records without downloading old cloud packs', async t => {
+    const e = await setup(t), a = e.device('local-reuse');
+    const keep = a.store.branch(null, 'Keep', 'codex', codexSample('/work', [['Question', 'Answer']]));
+    const remove = a.store.branch(null, 'Remove', 'claude', claudeSample('/work', [['Discard', 'Done']]));
+    await a.cloud.publish([keep.id, remove.id], e.pass);
+    const dav = a.cloud.connection.dav, base = dav.base, get = dav.get; let oldObjectGets = 0;
+    dav.get = function(key, ...args) { if (this.base === base && key.startsWith('objects/')) oldObjectGets++; return get.call(this, key, ...args); };
+    stageTrash(a.store, [remove.id], [remove.id]);
+    await collectTrash(a.cloud, e.pass);
+    assert.equal(oldObjectGets, 0);
+    const b = e.device('local-reuse-reader'); await b.cloud.catalog(e.pass);
+    for (const p of b.cloud.summaries()) await b.cloud.project(p.id, e.pass);
+    await b.cloud.hydrate(keep.id, e.pass);
+    assert.equal(b.store.raw(b.store.get('branch', keep.id).head), a.store.raw(keep.head));
+});
 
 test('Trash discards only a suffix, fences old clients, reclaims old objects and blocks stale-device resurrection', async (t) => {
     const e = await setup(t),
@@ -549,4 +565,28 @@ test('expired local recovery files are removed on service startup even if local 
     assert.ok(!fs.existsSync(path.join(a.store.root, 'trash', entry.id + '.json.gz')));
     assert.ok(app.store.local('trashEntries')[0].expired);
     await new Promise(resolve => app.close(resolve));
+});
+
+test('cleanup resumes verified cloud records after interruption with one combined progress total', async t => {
+    const e = await setup(t), a = e.device('resume-source'), b = e.device('resume-target');
+    const keep = a.store.branch(null, 'Keep one', 'codex', codexSample('/work', [['First', 'Answer one']]));
+    const other = a.store.branch(null, 'Keep two', 'codex', codexSample('/work', [['Second', 'Answer two']]));
+    const remove = a.store.branch(null, 'Discard', 'codex', codexSample('/work', [['Discard', 'Done']]));
+    await a.cloud.publish([keep.id, other.id, remove.id], e.pass);
+    await b.cloud.catalog(e.pass); for (const p of b.cloud.summaries()) await b.cloud.project(p.id, e.pass);
+    await b.cloud.hydrate(remove.id, e.pass); stageTrash(b.store, [remove.id], [remove.id]);
+    const original = b.cloud.connection.dav, originalBase = original.base, get = original.get; let attempts = 0;
+    original.get = function(key, ...args) { if (this.base === originalBase && key.startsWith('objects/') && ++attempts === 2) throw Error('Interrupted test transfer'); return get.call(this, key, ...args); };
+    await assert.rejects(collectTrash(b.cloud, e.pass), /Interrupted/);
+    const cachePath = transferCachePath(b.cloud); assert.ok(fs.existsSync(path.join(cachePath, 'grove.sqlite')));
+    const retry = new Cloud(b.store, () => e.config), connection = await retry.connect(e.pass), retryGet = connection.dav.get; let oldReads = 0;
+    connection.dav.get = function(key, ...args) { if (this.base === originalBase && key.startsWith('objects/')) oldReads++; return retryGet.call(this, key, ...args); };
+    const progress = []; const result = await collectTrash(retry, e.pass, { onProgress: value => progress.push(value) });
+    assert.ok(result.rebuilt); assert.equal(oldReads, 1, 'already-verified first session must not be downloaded again');
+    assert.ok(b.store.local('lastTransferCache').reused > 0);
+    assert.ok(progress.every(p => p.total === progress[0].total));
+    assert.ok(progress.every((p, i) => i === 0 || p.completed >= progress[i - 1].completed));
+    assert.equal(progress.at(-1).completed, progress.at(-1).total);
+    assert.equal(fs.existsSync(cachePath), false, 'successful cleanup removes its temporary durable cache');
+    assert.equal(retry.items().length, 2);
 });

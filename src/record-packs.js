@@ -3,6 +3,33 @@ import { hash, assert, mapConcurrent } from './util.js';
 import { sealAsync, unseal } from './sync.js';
 const digest = v => hash(JSON.stringify(v));
 const validHash = h => typeof h === 'string' && /^[a-f0-9]{64}$/.test(h);
+// Copy only verified, requested records. Keep bodies out of a library-sized JS map.
+export function copyRecords(source, target, refs) {
+    const exists = target.db.prepare('SELECT 1 FROM objects WHERE hash=?');
+    let copied = 0;
+    for (let offset = 0; offset < refs.length; offset += 128) target.transaction(() => {
+        for (const h of refs.slice(offset, offset + 128)) {
+            if (exists.get(h)) continue;
+            const body = source.objectStatement.get(h)?.body;
+            if (body === undefined) continue;
+            assert(validHash(h) && hash(body) === h, 'Local transcript integrity check failed.');
+            target.insertObject.run(h, body); copied++;
+        }
+    });
+    return copied;
+}
+export function copySummaries(source, target, graph) {
+    const revisions = new Map(graph.revisions.map(r => [r.id, r]));
+    target.transaction(() => {
+        for (const b of graph.branches) {
+            if (b.synthetic || b.trashDependency) continue;
+            const revision = revisions.get(b.head), saved = source.summaryRead.get(b.head, b.agent);
+            // A summary is reusable only for the exact same immutable revision.
+            if (saved && source.getStatement.get('revision', b.head)?.body === JSON.stringify(revision))
+                target.summaryWrite.run(b.head, b.agent, saved.body);
+        }
+    });
+}
 export async function uploadPacks(store, dav, key, refs, cache, save, progress) {
     const wanted = new Set(refs);
     const reused = (cache.packs || []).filter(p => p.refs.every(h => wanted.has(h)));
@@ -45,16 +72,17 @@ export async function uploadPacks(store, dav, key, refs, cache, save, progress) 
     } finally { await Promise.all(inFlight); save(); }
     return { packs, uploaded: pending.length };
 }
-export async function downloadRecords(store, dav, key, graph, progress, onKnown = () => {}) {
-    const refs = bodyRefs(graph), wanted = new Set(refs);
+export async function downloadRecords(store, dav, key, graph, progress, onKnown = () => {}, { cache = null, globalMissing = null } = {}) {
+    const refs = bodyRefs(graph);
     const exists = store.db.prepare('SELECT 1 FROM objects WHERE hash=?');
     const missing = new Set(refs.filter(h => !exists.get(h))), packed = new Set();
     let completed = 0, buffer = {}, bufferedCount = 0, bytes = 0; const total = missing.size, started = Date.now();
-    const checkpoint = () => { if (!bufferedCount) return; store.transaction(() => { for (const [h, body] of Object.entries(buffer)) store.insertObject.run(h, body); }); buffer = {}; bufferedCount = 0; bytes = 0; };
-    const accept = (h, body) => { assert(validHash(h) && typeof body === 'string' && hash(body) === h, 'Transcript integrity check failed.'); if (!missing.delete(h)) return; buffer[h] = body; bufferedCount++; bytes += Buffer.byteLength(body); completed++; if (bytes >= 4 * 1024 * 1024 || bufferedCount >= 128) checkpoint(); progress(completed, total, started); };
+    const checkpoint = () => { if (!bufferedCount) return; store.transaction(() => { for (const [h, body] of Object.entries(buffer)) store.insertObject.run(h, body); }); if(cache)cache.transaction(() => { for (const [h, body] of Object.entries(buffer)) cache.insertObject.run(h, body); }); buffer = {}; bufferedCount = 0; bytes = 0; };
+    const accept = (h, body) => { assert(validHash(h) && typeof body === 'string' && hash(body) === h, 'Transcript integrity check failed.'); const local = missing.delete(h), shared = globalMissing?.delete(h); if (!local && !shared) return; buffer[h] = body; bufferedCount++; bytes += Buffer.byteLength(body); if(local)completed++; if (bytes >= 4 * 1024 * 1024 || bufferedCount >= 128) checkpoint(); progress(completed, total, started); };
     try {
         const packs = (graph.packs || []).filter(p => p.refs?.some(h => missing.has(h)));
         await mapConcurrent(packs, async p => {
+            if (!p.refs.some(h => missing.has(h))) return;
             assert(validHash(p.ref) && Array.isArray(p.refs) && p.refs.every(h => validHash(h)), 'Invalid record pack descriptor.');
             const blob = await dav.get('objects/' + p.ref + '.bin', p.wireBytes || p.bytes); assert(blob, 'Cloud record pack is missing.');
             const value = unseal(blob, key); assert(digest(value) === p.ref && value.schema === 'grove-record-pack-1' && value.objects && !Array.isArray(value.objects), 'Record pack integrity check failed.');

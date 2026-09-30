@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.14.0
+
+- Replace Sync with one Pull / Push control, directional arrow animations, linked stage indicators and completion checks. Transfers are manual by default; automatic Push is opt-in.
+- Keep transfer details compact: remaining time above the progress bar, download speed below, and actual failures in place of the bar. Technical counters live in Information.
+- Keep local activation, naming, node organization and Trash available during transfers. New edits stay queued after the uploaded snapshot; newer session modification times govern reconciliation.
+- Show cloud-only, locally active and modified-session state icons in lists and rails.
+- Unify node activation with prefix/token/title previews and optional tool conversion. Native titles use `[Grove] session · node`; existing suffixes remain intact.
+- Preserve transcript scroll position, graph focus and camera across message expansion and branch changes; use a lightweight Trash endpoint.
+- Reuse verified local and downloaded records during cloud cleanup, persist verified downloads across retries, and count missing shared records across sessions instead of restarting each session's progress.
+- Keep Pull active through shared-history preparation; avoid a redundant publication after cleanup already committed its snapshot. Integrity checks, deletion fences and shared-prefix protection remain in place.
+- Bound manifest memory, use indexed reconciliation and provide reproducible resource and isolated browser benchmarks. See the updated design and sync policy for the white-box contract.
+
 ## 0.13.0
 
 - Replace new Archive actions with Trash; retain previous archives behind an explicit migration entry.

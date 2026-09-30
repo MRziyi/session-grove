@@ -10,6 +10,7 @@ import http from 'node:http';
 import { performance } from 'node:perf_hooks';
 import { Diagnostics } from './diagnostics.js';
 import { activationInfo } from './activation.js';
+import { nodeActivation, groveTitle } from './node-activation.js';
 import { prepareConversion, createConversion } from './conversion.js';
 import { packGraph } from './graph-wire.js';
 import fs from 'node:fs';
@@ -41,7 +42,7 @@ export function createApp({ root, roots, guard, demo = false }) {
     const savedKey = settings.savedKey();
     if (savedKey !== null && !fs.existsSync(settings.journal)) autoSync.unlock(savedKey);
     const management = () => new Map(store.collections().items.map(i => [i.id, hash(JSON.stringify([
-        i.projectId ? store.get('project', i.projectId) : inboxProject(), i.sessionIds.map(id => { const b = store.get('branch', id); return [b.id, b.name, b.projectId, b.archived, b.parentId, b.forkEnd, b.nodeHead, b.layoutHead, b.contextPolicy]; }),
+        i.projectId ? store.get('project', i.projectId) : inboxProject(), i.sessionIds.map(id => { const b = store.get('branch', id); return [b.id, b.name, b.projectId, b.archived, b.parentId, b.forkEnd, b.nodeHead, b.layoutHead, b.contextPolicy, b.endpointName]; }),
         store.get('branch', i.id).layoutHead
     ]))]));
     const streams = new Set(); let updateOperation = null;
@@ -51,7 +52,8 @@ export function createApp({ root, roots, guard, demo = false }) {
     autoSync.onOperation = value => operation('sync', {...value, status:autoSync.status()});
     const timing = () => ({ appVersion: VERSION, serverNow: Date.now(), stateVersion: diagnostics.startedAt + ':' + store.version + ':' + store.cloudVersion, update: { nextRunAt: nextCaptureAt, lastRunAt: lastCaptureAt, started: !!store.local('localUpdateStarted'), operation: updateOperation } });
     let expiryTimer;const configureExpiry=()=>{clearTimeout(expiryTimer);const entries=expireTrash(store),next=entries.filter(e=>!e.expired).map(e=>Date.parse(e.expiresAt)).sort((a,b)=>a-b)[0];if(next){expiryTimer=setTimeout(configureExpiry,Math.max(1000,Math.min(2147483647,next-Date.now())));expiryTimer.unref();}};configureExpiry();
-    const snapshot = () => ({ ...autoSync.decorate(store.snapshot()), preferences: preferences(store), trashEntries:(store.local('trashEntries')||[]).filter(e=>!e.expired||e.state!=='cleaned'), trashNative:store.instances().filter(i=>isTrashed(store,i.branchId)&&i.file&&fs.existsSync(i.file)).map(i=>({id:i.id,branchId:i.branchId,title:i.title,agent:i.agent,active:i.applied})) });
+    const trashSnapshot = () => ({ trashEntries:(store.local('trashEntries')||[]).filter(e=>!e.expired||e.state!=='cleaned'), trashNative:store.instances().filter(i=>isTrashed(store,i.branchId)&&i.file&&fs.existsSync(i.file)).map(i=>({id:i.id,branchId:i.branchId,title:i.title,agent:i.agent,active:i.applied})) });
+    const snapshot = () => ({ ...autoSync.decorate(store.snapshot()), preferences: preferences(store), ...trashSnapshot() });
     const server = http.createServer(async (req, res) => {
         const started = performance.now(), requestId = id().slice(0, 8);
         const beforeManagement = req.method !== 'GET' && /^\/api\/(trees|move|manage|projects|branches|conflicts)(?:\/|$)/.test(req.url) ? management() : null;
@@ -93,9 +95,8 @@ export function createApp({ root, roots, guard, demo = false }) {
                 catch {
                     throw Object.assign(new Error('JSON 格式错误'), { status: 400 });
                 }
-                assert(!autoSync.running || ['/api/settings/confirm','/api/settings/verify','/api/settings/timers'].includes(route), '同步进行中，请稍后操作', 409);
                 assert(!capturePromise || route==='/api/collect', 'Local update in progress.', 409);
-                assert(settings.job?.state !== 'running', 'Settings migration in progress.', 409);
+                assert(settings.job?.state !== 'running' || !/^\/api\/(sync|synchronize|settings|webdav)/.test(route), 'Settings migration in progress.', 409);
             }
             if (req.method === 'GET' && route === '/api/events') {
                 res.writeHead(200, {'Content-Type':'text/event-stream','Cache-Control':'no-store','X-Content-Type-Options':'nosniff'}); res.write(': connected\n\n'); streams.add(res); req.on('close',()=>streams.delete(res)); return;
@@ -109,6 +110,9 @@ export function createApp({ root, roots, guard, demo = false }) {
                 return send(200,{path:directory,parent:path.dirname(directory),home:os.homedir(),folders});
             }
             if (req.method === 'GET' && route === '/api/status') return send(200, { ...timing(), cloud: autoSync.status() });
+            if (req.method === 'GET' && route === '/api/synchronize/pending') return send(200, { items: autoSync.pendingItems() });
+            if (req.method === 'POST' && route === '/api/synchronize/transfer') return send(202, autoSync.startTransfer(body.direction));
+            if (req.method === 'GET' && route === '/api/trash') return send(200, trashSnapshot());
             if (req.method === 'POST' && route === '/api/synchronize/plan') return send(200, await autoSync.prepareSync());
             if (req.method === 'POST' && route === '/api/synchronize/start') return send(202, autoSync.startSync(body.planId, body.confirmed));
             if (req.method === 'GET' && route === '/api/state')
@@ -132,7 +136,8 @@ export function createApp({ root, roots, guard, demo = false }) {
             if(req.method==='POST'&&route==='/api/trash'){
                 const requestedTrees=body.itemIds||[];for(const id of requestedTrees)await autoSync.openTree(id);
                 const archived=b=>b.archived||b.projectId&&store.get('project',b.projectId).archived;
-                const ids=requestedTrees.length?[...new Set(requestedTrees.flatMap(id=>treeMembers(store,id).filter(b=>!b.synthetic&&!isTrashed(store,b.id)&&(body.view==='archived'?archived(b):!archived(b))).map(b=>b.id)))]:body.branchIds||[];
+                const activeAgent = /^active:(codex|claude)$/.exec(body.view || '')?.[1];
+                const ids=requestedTrees.length?[...new Set(requestedTrees.flatMap(id=>treeMembers(store,id).filter(b=>!b.synthetic&&!isTrashed(store,b.id)&&(body.view==='archived'?archived(b):!archived(b))&&(!activeAgent||b.agent===activeAgent&&store.instances().some(i=>i.branchId===b.id&&isActive(i)))).map(b=>b.id)))]:body.branchIds||[];
                 assert(ids.length,'Select sessions first.');
                 const treeIds=requestedTrees.filter(id=>treeMembers(store,id).filter(b=>!b.synthetic&&!isTrashed(store,b.id)).every(b=>ids.includes(b.id)));
                 if(!requestedTrees.length){assert(ids.length===1,'Select one complete path.');const graph=store.treeGraph(ids[0],'all');assert(graph.version===body.version&&graph.nodes.some(n=>n.id===body.nodeId&&n.endBranchIds.includes(ids[0])),'Select a complete session endpoint.',409);}
@@ -154,17 +159,34 @@ export function createApp({ root, roots, guard, demo = false }) {
                 return send(200, store.moveItems(body));
             }
             if (req.method === 'POST' && route === '/api/activation-check') return send(200, activationInfo(store, native, body.branchId, body.cwd));
+            if (req.method === 'POST' && ['/api/node-activation/check', '/api/node-activation/activate'].includes(route)) {
+                const selected = nodeActivation(store, native, body), check = selected.preview;
+                if (route.endsWith('/check')) return send(200, check);
+                assert(check.complete, 'Select a node ending at a completed turn.');
+                assert(body.contextAcknowledgement === check.fingerprint, 'Activation preview changed. Review it again.', 409);
+                assert(typeof body.cwd === 'string' && path.isAbsolute(body.cwd) && fs.existsSync(body.cwd) && fs.statSync(body.cwd).isDirectory(), 'Choose an existing working directory.');
+                native.guard([selected.branch.agent]);
+                let branch = selected.branch;
+                if (!selected.terminal) { branch = store.fork(branch.id, { name: branch.name.slice(0, 200), end: selected.end, revisionId: branch.head }); branch = store.put('branch', { ...branch, activationNodeName: check.nodeName }); }
+                const before = store.instances();
+                try { native.setActive(branch.id, body.cwd, true, { nodeName: check.nodeName }); native.apply([branch.id]); }
+                catch (e) { store.local('instances', before); if (!selected.terminal) e.message = 'Continuation saved, but activation failed: ' + e.message; throw e; }
+                autoSync.schedule([branch.id]);
+                return send(201, { branch, title: check.title, nodeId: selected.terminal ? selected.node.id : 'empty-' + branch.id });
+            }
             if (req.method === 'POST' && ['/api/conversion-check', '/api/convert'].includes(route)) {
+                const selected = body.nodeId ? nodeActivation(store, native, body) : null;
+                if (selected) { assert(selected.end, 'Select a node ending at a completed turn.'); body.end = selected.end; }
                 const prepared = prepareConversion(store, body.branchId, body);
                 const projected = { context: { model: null, compactions: [], lastUsage: null }, messages: prepared.entries.map((e, i) => ({ ...e, line: i + 1 })), records: [], complete: true, errors: [], warnings: [] };
                 const virtual = { get: () => ({ ...prepared.branch, agent: body.target, contextPolicy: null }), parsed: () => projected, instances: () => [] };
                 const budget = activationInfo(virtual, native, body.branchId, body.cwd);
-                if (route === '/api/conversion-check') return send(200, { ...prepared.preview, budget });
+                if (route === '/api/conversion-check') return send(200, { ...prepared.preview, budget, title: groveTitle(prepared.branch.name, selected?.preview.nodeName || 'Pending') });
                 assert(!budget.risk || body.contextAcknowledgement === budget.fingerprint, 'Review the context-length warning before activating.', 409);
                 assert(typeof body.cwd === 'string' && path.isAbsolute(body.cwd) && fs.existsSync(body.cwd) && fs.statSync(body.cwd).isDirectory(), 'Choose an existing working directory.');
                 native.guard([body.target]);
                 const result = createConversion(store, body.branchId, body);
-                try { native.setActive(result.branch.id, body.cwd, true); native.apply([result.branch.id]); }
+                try { native.setActive(result.branch.id, body.cwd, true, { nodeName: selected?.preview.nodeName || 'Pending' }); native.apply([result.branch.id]); }
                 catch (e) { native.setActive(result.branch.id, null, false); throw Object.assign(new Error(`Conversion was saved in Grove but activation failed: ${e.message}`), { status: e.status || 409 }); }
                 autoSync.schedule([result.branch.id]);
                 return send(201, result);
@@ -296,7 +318,11 @@ export function createApp({ root, roots, guard, demo = false }) {
             if (req.method === 'POST' && route === '/api/conflicts/resolve') {
                 const conflicts = store.local('conflicts') || [], c = conflicts[body.index];
                 assert(c, '冲突不存在');
-                if (c.kind === 'layout') {
+                if (c.kind === 'session') {
+                    assert(['local', 'remote'].includes(body.choice), 'Unknown session choice.');
+                    const current = store.get('branch', c.local.id), chosen = body.choice === 'remote' ? c.remote : current;
+                    store.put('branch', metadata(current, { ...chosen, metaAncestors: [...new Set([...(chosen.metaAncestors || []), c.remote.metaVersion].filter(Boolean))] }));
+                } else if (c.kind === 'layout') {
                     assert(['local', 'remote'].includes(body.choice), 'Unknown conflict choice.');
                     const b = store.get('branch', c.local.id);
                     const chosen = store.get('layout', body.choice === 'remote' ? c.remote.layoutHead : b.layoutHead);
@@ -354,7 +380,7 @@ export function createApp({ root, roots, guard, demo = false }) {
         const p = preferences(store); if (stopping || !p.localUpdateEnabled || !store.local('localUpdateStarted')) return;
         nextCaptureAt = Date.now() + p.localUpdateMinutes * 60000;
         interval = setTimeout(async () => {
-            try { if (!autoSync.running && settings.job?.state !== 'running') await captureLocal(); else configureCapture(); }
+            try { if (settings.job?.state !== 'running') await captureLocal(); else configureCapture(); }
             catch { diagnostics.record('capture-error', { code: 'capture_failed' }); configureCapture(); }
         }, p.localUpdateMinutes * 60000); interval.unref();
     }

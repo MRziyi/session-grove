@@ -1,6 +1,7 @@
 import {claudeFork} from './claude.js';
 import {retainedGraph,bodyRefs,withForkMetadata} from './retention.js';
 import {deletedIds,isTrashed} from './trash.js';
+import { modifiedAt, nextModifiedAt } from './session-time.js';
 import { claudeTitle } from './claude-title.js';
 import { sessionExclusion, backgroundKind } from './session-kind.js';
 import { supportedHistory } from './codex-history.js';
@@ -33,6 +34,7 @@ export class Store {
         fs.chmodSync(path.join(root, 'grove.sqlite'), 0o600);
         this.version = 0; this.cloudVersion = 0; this.cloudCache = new Map(); this.memoCache = new Map(); this.parseCache = new Map(); this.parseBytes = 0; this.summaryCache = new Map(); this.recordCache = new Map(); this.recordBytes = 0;
         this.getStatement = this.db.prepare('SELECT body FROM entities WHERE kind=? AND id=?');
+        this.entityById = this.db.prepare('SELECT body FROM entities WHERE id=?');
         this.objectStatement = this.db.prepare('SELECT body FROM objects WHERE hash=?');
         this.insertObject = this.db.prepare('INSERT OR IGNORE INTO objects VALUES (?,?)');
         this.allStatement = this.db.prepare('SELECT body FROM entities WHERE kind=?');
@@ -102,6 +104,7 @@ export class Store {
     }
     all(kind) { return this.allStatement.all(kind).map(x => JSON.parse(x.body)); }
     get(kind, key) { const row = this.getStatement.get(kind, key); assert(row, `${kind} 不存在`, 404); return JSON.parse(row.body); }
+    find(kind, key) { const row = this.getStatement.get(kind, key); return row ? JSON.parse(row.body) : undefined; }
     put(kind, value) { this.invalidate(); this.entityWrite.run(kind, value.id, JSON.stringify(value)); return value; }
     local(key, value, options = {}) {
         if (key.startsWith('cloud:')) {
@@ -166,18 +169,20 @@ export class Store {
         assert(parsed.checkpoints.some(c => c.end === end), '只能从已完成的轮次创建分支');
         const contextPolicy = parent.contextPolicy ? { disabled: parent.contextPolicy.disabled.filter(id => parsed.context.compactions.some(e => e.id === id && e.line <= end)) } : undefined;
         const revision = this.revision(this.raw(rev.id, end), rev.id, { agent: parent.agent, operation: 'fork', ...(parent.agent === 'claude' ? { claudeCheckpoint: parsed.checkpoints.find(c => c.end === end).turnId } : {}) });
-        return this.put('branch', { ...parent, contextPolicy, id: id(), name: text(name), head: revision.id, nodeHead: null, layoutHead: null, chatIdentity: null, parentId: parent.id, forkRevision: rev.id, forkEnd: end, forkParentEnd: end, archived: false, synthetic: false, inferred: false, nativeLinked: false, prefixUnavailable: false, createdViaGroveFork: true, contentUpdatedAt: now(), createdAt: now(), updatedAt: now(), metaVersion: id(), metaAncestors: [] });
+        return this.put('branch', { ...parent, contextPolicy, id: id(), name: text(name), head: revision.id, nodeHead: null, layoutHead: null, endpointName: null, chatIdentity: null, parentId: parent.id, forkRevision: rev.id, forkEnd: end, forkParentEnd: end, archived: false, synthetic: false, inferred: false, nativeLinked: false, prefixUnavailable: false, createdViaGroveFork: true, contentUpdatedAt: now(), createdAt: now(), updatedAt: now(), metaVersion: id(), metaAncestors: [] });
     }
     edit(branchId, patch) {
         const b = this.get('branch', branchId), previous = structuredClone(b);
         if ('name' in patch)
             b.name = text(patch.name);
+        if ('endpointName' in patch) b.endpointName = text(patch.endpointName, 'Node title');
         if ('group' in patch)
             b.group = String(patch.group).slice(0, 100);
         if ('contextPolicy' in patch) { assert(validPolicy(patch.contextPolicy), 'Invalid context policy.'); b.contextPolicy = patch.contextPolicy; }
         if ('archived' in patch)
             b.archived = !!patch.archived;
         if ('archived' in patch && b.background) b.backgroundManaged = true;
+        if (JSON.stringify(b) === JSON.stringify(previous)) return b;
         b.updatedAt = now();
         return this.put('branch', metadata(previous, b));
     }
@@ -208,7 +213,7 @@ export class Store {
         const rev = this.revision(raw, b.head, { ...source, rewritten: !raw.startsWith(current) }, current);
         const previousContentTime = b.contentUpdatedAt || b.updatedAt;
         b.head = rev.id;
-        b.updatedAt = now();
+        b.updatedAt = nextModifiedAt(b);
         b.contentUpdatedAt = source.operation === 'native-settings' ? previousContentTime : b.updatedAt;
         return this.put('branch', b);
     }
@@ -278,18 +283,18 @@ export class Store {
         const graph = { schema: 3, layouts: this.all('layout').filter(l => branchIds.has(l.rootId)), projects: [...this.all('project'), ...(branches.some(b => b.projectId === INBOX_ID) ? [inboxProject()] : [])], branches, nodes, revisions: [...revisions.values()] };
         return this.local('trashState')||this.local('trashPending')?.length ? retainedGraph(withForkMetadata(graph,h=>this.objectStatement.get(h)?.body,claudeFork,deletedIds(this,graph)),deletedIds(this,graph)) : graph;
     }
-    merge(graph, objects) {
+    merge(graph, objects, { latest = false, protectedIds = new Set() } = {}) {
         assert([1, 2, 3].includes(graph?.schema) && Array.isArray(graph.projects) && Array.isArray(graph.branches) && Array.isArray(graph.revisions), '不兼容的同步格式');
         assert(graph.revisions.length < 100000 && graph.branches.length < 100000, '远端资料库过大');
         graph = { ...graph, projects: graph.projects.filter(p => p.id !== INBOX_ID), branches: graph.branches.map(b => b.projectId === INBOX_ID ? { ...b, projectId: null } : b) };
         return this.transaction(() => {
             for (const [h, body] of Object.entries(objects)) {
                 assert(hash(body) === h, '远端对象校验失败');
-                this.db.prepare('INSERT OR IGNORE INTO objects VALUES (?,?)').run(h, body);
+                this.insertObject.run(h, body);
             }
             for (const r of graph.revisions) {
                 assert(typeof r.id === 'string' && Array.isArray(r.refs) && r.refs.every(h => typeof h === 'string' && /^[a-f0-9]{64}$/.test(h)), '无效版本');
-                const old = this.db.prepare('SELECT body FROM entities WHERE id=?').get(r.id);
+                const old = this.entityById.get(r.id);
                 if (old)
                     assert(old.body === JSON.stringify(r), '不可变版本发生冲突');
                 else
@@ -300,7 +305,7 @@ export class Store {
             const retained=new Set(bodyRefs(graph));
             if(graph.retention?.extras)this.local('retentionExtras',{...this.local('retentionExtras'),...graph.retention.extras});
             for (const r of graph.revisions) {
-                for (const h of r.refs.filter(h=>retained.has(h))) if (!checkedObjects.has(h)) { assert(objectExists.get(h), `缺少历史对象 ${h}`, 409); checkedObjects.add(h); }
+                for (const h of r.refs) if (retained.has(h) && !checkedObjects.has(h)) { assert(objectExists.get(h), `缺少历史对象 ${h}`, 409); checkedObjects.add(h); }
                 const visited = new Set(); let cursor = r;
                 while (cursor && !checkedRevisions.has(cursor.id)) {
                     assert(!visited.has(cursor.id), '版本图存在环'); visited.add(cursor.id);
@@ -308,10 +313,15 @@ export class Store {
                 }
                 for (const id of visited) checkedRevisions.add(id);
             }
-            const conflicts = this.local('conflicts') || [];
+            const conflicts = this.local('conflicts') || [], winners = new Map();
+            let keptLocal = 0, appliedRemote = 0;
             for (const p of graph.projects) {
                 text(p.name);
-                const old = this.all('project').find(x => x.id === p.id);
+                const old = this.find('project', p.id);
+                if (latest && old && JSON.stringify(old) !== JSON.stringify(p)) {
+                    if ((p.updatedAt || '') > (old.updatedAt || '')) { this.put('project', p); continue; }
+                    if ((p.updatedAt || '') < (old.updatedAt || '')) { keptLocal++; continue; }
+                }
                 if (!old)
                     this.put('project', p);
                 else if (old.name !== p.name || old.description !== p.description || !!old.archived !== !!p.archived) {
@@ -328,7 +338,7 @@ export class Store {
                 assert(['codex', 'claude'].includes(b.agent), '无效 Agent');
                 if (b.projectId) this.get('project', b.projectId);
                 this.get('revision', b.head);
-                const old = this.all('branch').find(x => x.id === b.id);
+                const old = this.find('branch', b.id);
                 if(isTrashed(this,b.id)&&!b.trashDependency)continue;
                 if(b.trashDependency){this.put('branch',{...b,layoutHead:old?.layoutHead||b.layoutHead});continue;}
                 if (!old) {
@@ -336,21 +346,31 @@ export class Store {
                     continue;
                 }
                 assert(old.agent === b.agent, '分支身份冲突');
+                if (latest) {
+                    const incomingTime = modifiedAt(b), localTime = modifiedAt(old);
+                    if (protectedIds.has(b.id) || incomingTime < localTime) { winners.set(b.id, 'local'); keptLocal++; continue; }
+                    if (incomingTime > localTime) { this.put('branch', { ...old, ...b }); winners.set(b.id, 'remote'); appliedRemote++; continue; }
+                    if (b.head !== old.head && !this.ancestor(old.head, b.head) && !this.ancestor(b.head, old.head)) {
+                        conflicts.push({ kind: 'session', local: old, remote: b }); winners.set(b.id, 'local'); keptLocal++; continue;
+                    }
+                }
+                if ((b.metadataUpdatedAt || '') > (old.metadataUpdatedAt || ''))
+                    this.put('branch', { ...old, metadataUpdatedAt: b.metadataUpdatedAt });
                 if (old.head !== b.head) {
                     if (this.ancestor(old.head, b.head))
-                        this.put('branch', { ...old, head: b.head, updatedAt: b.updatedAt, contentUpdatedAt: b.contentUpdatedAt || b.updatedAt });
+                        this.put('branch', { ...this.get('branch', b.id), head: b.head, updatedAt: b.updatedAt, contentUpdatedAt: b.contentUpdatedAt || b.updatedAt });
                     else if (!this.ancestor(b.head, old.head)) {
                         const forkId = `conflict-${hash(b.id + ':' + b.head).slice(0, 32)}`;
-                        if (!this.all('branch').some(x => x.id === forkId)) {
+                        if (!this.getStatement.get('branch', forkId)) {
                             this.put('branch', { ...b, id: forkId, chatIdentity: b.chatIdentity || b.id, parentId: old.id, name: `${b.name} · 远端分歧`, conflict: true });
                             forks++;
                         }
                         remapped.set(b.id, forkId);
                     }
                 }
-                if (old.name !== b.name || old.archived !== b.archived || old.group !== b.group || old.projectId !== b.projectId || old.parentId !== b.parentId || old.forkRevision !== b.forkRevision || JSON.stringify(old.contextPolicy || {}) !== JSON.stringify(b.contextPolicy || {})) {
+                if (old.name !== b.name || old.endpointName !== b.endpointName || old.archived !== b.archived || old.group !== b.group || old.projectId !== b.projectId || old.parentId !== b.parentId || old.forkRevision !== b.forkRevision || JSON.stringify(old.contextPolicy || {}) !== JSON.stringify(b.contextPolicy || {})) {
                     if (b.metaAncestors?.includes(old.metaVersion))
-                        this.put('branch', { ...this.get('branch', b.id), name: b.name, archived: b.archived, group: b.group, projectId: b.projectId, contextPolicy: b.contextPolicy, parentId: b.parentId, forkRevision: b.forkRevision, forkEnd: b.forkEnd, forkParentEnd: b.forkParentEnd, metaVersion: b.metaVersion, metaAncestors: b.metaAncestors });
+                        this.put('branch', { ...this.get('branch', b.id), name: b.name, endpointName: b.endpointName, archived: b.archived, group: b.group, projectId: b.projectId, contextPolicy: b.contextPolicy, parentId: b.parentId, forkRevision: b.forkRevision, forkEnd: b.forkEnd, forkParentEnd: b.forkParentEnd, metaVersion: b.metaVersion, metaAncestors: b.metaAncestors });
                     else if (!old.metaAncestors?.includes(b.metaVersion))
                         conflicts.push({ kind: 'branch', local: old, remote: b });
                 }
@@ -362,7 +382,7 @@ export class Store {
                 assert(Number.isInteger(incoming.start) && Number.isInteger(incoming.end) && incoming.start >= 0 && incoming.end > incoming.start && incoming.end <= revision.refs.length, 'Invalid logical node range');
                 const forkId = remapped.get(incoming.branchId);
                 const n = forkId ? { ...incoming, id: `${incoming.id}-${forkId}`, previousId: incoming.previousId ? `${incoming.previousId}-${forkId}` : null, branchId: forkId } : incoming;
-                const existing = this.all('node').find(x => x.id === n.id);
+                const existing = this.find('node', n.id);
                 if (existing)
                     assert(JSON.stringify(existing) === JSON.stringify(n), 'Immutable node conflict');
                 else
@@ -375,7 +395,7 @@ export class Store {
                     assert(typeof key === 'string' && key.length < 200, 'Invalid chat reference.');
                     if (value !== null) { assert(typeof value.id === 'string', 'Invalid node identity.'); text(value.name, 'Node name'); }
                 }
-                const existing = this.all('layout').find(x => x.id === l.id);
+                const existing = this.find('layout', l.id);
                 if (existing) assert(JSON.stringify(existing) === JSON.stringify(l), 'Immutable layout conflict.');
                 else this.put('layout', l);
             }
@@ -406,9 +426,11 @@ export class Store {
             };
             for (const l of graph.layouts || []) checkLayout(l);
             for (const b of graph.branches) {
+                if (winners.get(b.id) === 'local') continue;
                 if (!b.layoutHead) continue;
                 assert(this.get('layout', b.layoutHead).rootId === b.id, 'Layout belongs to another tree.');
                 const current = this.get('branch', b.id);
+                if (current.layoutHead === b.layoutHead) continue;
                 if (layoutAncestor(current.layoutHead, b.layoutHead)) this.put('branch', { ...current, layoutHead: b.layoutHead });
                 else if (!layoutAncestor(b.layoutHead, current.layoutHead)) conflicts.push({ kind: 'layout', local: { id: b.id, name: b.name, layoutHead: current.layoutHead }, remote: { id: b.id, name: b.name, layoutHead: b.layoutHead } });
             }
@@ -426,14 +448,25 @@ export class Store {
                 return false;
             };
             for (const b of graph.branches) {
+                if (winners.get(b.id) === 'local') continue;
                 const forkId = remapped.get(b.id), current = this.get('branch', forkId || b.id);
                 const remoteHead = b.nodeHead ? (forkId ? `${b.nodeHead}-${forkId}` : b.nodeHead) : null;
+                if (current.nodeHead === remoteHead) continue;
                 if (forkId || nodeAncestor(current.nodeHead, remoteHead))
                     this.put('branch', { ...current, nodeHead: remoteHead });
                 else if (remoteHead && !nodeAncestor(remoteHead, current.nodeHead))
                     conflicts.push({ kind: 'organization', local: { id: current.id, name: this.get('node', current.nodeHead).name, nodeHead: current.nodeHead }, remote: { id: current.id, name: this.get('node', remoteHead).name, nodeHead: remoteHead } });
             }
-            for (const b of this.all('branch')) {
+            const branches = this.all('branch');
+            if (latest) {
+                const roots = new Map(branches.map(b => [b.id, b]));
+                for (const b of branches) {
+                    let root = b; const seen = new Set();
+                    while (root.parentId && !seen.has(root.id)) { seen.add(root.id); root = roots.get(root.parentId); assert(root, 'Parent session is missing.'); }
+                    if (b.projectId !== root.projectId) { b.projectId = root.projectId; this.put('branch', b); }
+                }
+            }
+            for (const b of branches) {
                 let cursor = b.nodeHead, end = Infinity;
                 const seen = new Set();
                 while (cursor) {
@@ -446,18 +479,22 @@ export class Store {
                 }
             }
             // Validate imported project graphs before committing any remote state.
-            for (const b of this.all('branch')) {
+            const byId = new Map(branches.map(b => [b.id, b])), checkedBranches = new Set();
+            for (const b of branches) {
                 const visited = new Set();
                 let cursor = b;
-                while (cursor?.parentId) {
+                while (cursor?.parentId && !checkedBranches.has(cursor.id)) {
                     assert(!visited.has(cursor.id), '分支图存在环');
                     visited.add(cursor.id);
-                    cursor = this.get('branch', cursor.parentId);
-                    assert(cursor.projectId === b.projectId, '分支父节点不在同一项目');
+                    const parent = byId.get(cursor.parentId);
+                    assert(parent, 'Parent session is missing.');
+                    assert(cursor.projectId === parent.projectId, '分支父节点不在同一项目');
+                    cursor = parent;
                 }
+                for (const id of visited) checkedBranches.add(id);
             }
             this.local('conflicts', [...new Map(conflicts.map(c => [hash(JSON.stringify(c)), c])).values()]);
-            return { forks, conflicts: this.local('conflicts').length };
+            return { forks, conflicts: this.local('conflicts').length, keptLocal, appliedRemote };
         });
     }
 }

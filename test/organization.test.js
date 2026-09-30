@@ -1,3 +1,4 @@
+import { savePreferences } from '../src/preferences.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -124,6 +125,7 @@ test('cloud exports named projects and Ungrouped, including logical nodes; devic
 });
 test('automatic upload queue survives lock and failures and only runs after an organization trigger', async t => {
     const { store, cwd } = setup(t), p = store.project('Queued'), b = store.branch(p.id, 'Main', 'codex', codexSample(cwd, [['Context', 'Ready']]));
+    savePreferences(store, { autoUploadEnabled: true });
     let attempts = 0;
     const auto = new AutoSync(store, () => ({ url: 'https://example.com/dav' }), async () => { attempts++; throw new Error('offline'); });
     t.after(() => auto.close());

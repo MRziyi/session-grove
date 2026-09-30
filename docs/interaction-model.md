@@ -1,6 +1,10 @@
 # Session Grove interaction model
 
-Implemented in 0.8.0. This document supersedes earlier interface proposals. The product workflow is in the README; runtime and diagnosis details are in [operations.md](operations.md).
+The current sync and observability contract is defined by [Sync policy](sync-policy.md) and the mandatory white-box principles in [Design](design.md). These supersede historical controls below.
+
+The header uses a split **Pull | Push** control. Pull updates cloud lists and locally cached cloud sessions. Push visibly completes Pull before sending local changes. Hover/focus Push shows the pending local items. A bounded header inspector displays phases, real progress, transfer metrics and errors; failures never expand the banner. Automatic upload is opt-in; there is no download timer. Local editing, activation and Trash stay available throughout cloud transfers.
+
+Node actions use **Rename** and one **Activate** entry. Activation previews the selected prefix, token estimate and exact `[Grove] session · node` title; switching tools is inside that panel. Only path endpoints offer Trash. Graph selection retains focus/camera and positions the matching transcript after a branch change.
 
 ## Terms
 
@@ -17,11 +21,11 @@ Ordinary conversations start in the agent. Grove has no blank-session creator, e
 
 ## Navigation and list page
 
-The application bar contains **Sync**, **Update**, and **Settings**.
+The application bar contains **Pull | Push**, **Update**, and **Settings**.
 
 - Update refreshes native session capture without cloud publication.
-- Sync publishes unsent changes, including Pending, and checks the cloud directory. Its tooltip shows last upload/check times.
-- Settings contains Language, a staged WebDAV/encryption form and automatic-update intervals. About and Information live at the sidebar bottom; Information contains action help and diagnostics. There is no separate top-level language or Upload button.
+- Pull refreshes cloud metadata and cached content. Push first downloads, then publishes unsent local changes, including Pending. Transfer details and failures are shown in the header inspector.
+- Settings contains Language, a staged WebDAV/encryption form and automatic-update intervals. About and Information live at the sidebar bottom; Information contains action help and diagnostics. Language remains in Settings; Push is the right half of the split sync control.
 
 Navigation has Current Active (Codex / Claude Code with native-session counts), Projects (one count per tree or standalone session), and Archived. Named projects are omitted when empty; the built-in Ungrouped inbox remains visible. Current Active groups entries only by Project or Ungrouped, ordered by latest conversation activity.
 
@@ -62,16 +66,13 @@ Existing fork boundaries remain meaningful even if a sibling path is currently a
 
 | Condition | Action |
 | --- | --- |
-| Selected in-use Node | Rename |
-| Selected Pending Node | Rename; saving its title creates a named Node |
-| Selected in-use Node ends at a complete native turn | Fork |
-| Selected endpoint of an inactive path with a supported materialization or unchanged native copy | Activate |
-| Selected endpoint of an active path | Deactivate |
-| Selected endpoint of an in-use path | Archive that one complete session |
-| Selected endpoint of an archived path | Restore |
-| Archived content | No Rename, Fork, Combine or Dissolve |
+| Any selected node, including empty continuation/archived nodes | Rename |
+| Selected in-use node | Activate: preview the prefix and exact tool title; incomplete turn boundaries explain why activation is unavailable |
+| Active path endpoint | Deactivate inside the activation panel |
+| Path endpoint | Move that complete path to Trash |
+| Archived path endpoint | Restore |
 
-Rename works on the selected segment; an unchanged title does not create a new layout or upload. Fork pins an immutable native checkpoint and does not activate automatically. Activation uses the entire latest path, including Pending. It checks local configuration/recorded context usage and requires acknowledgement for a near-limit warning. Unknown limits are not guessed.
+Rename changes the selected segment; unchanged titles do not create new versions. Activating an internal completed node creates a continuation containing that node and all preceding context while preserving existing suffixes. New native interactions attach after the selected prefix. Tool conversion is inside the same confirmation panel. Token costs are estimates; unknown limits are explicit. There are no separate Fork, Activate as or Apply context toolbar buttons.
 
 ## Path-specific archive projection
 
@@ -89,16 +90,16 @@ Historical whole-project archives are still readable/restorable. The normal UI d
 
 ## Updates, sync and feedback
 
-New complete JSON records extend Pending locally, including during an ongoing turn. Organizing, filing, renaming, Grove forks and archive/restore changes queue the affected tree for upload after a short debounce. Manual Sync can publish unfinished Pending. Automatic directory checks and lazy loading remain independent of native Active choices.
+New complete JSON records extend Pending locally, including during an ongoing turn. Organization, naming, transcript and Trash changes become visible pending uploads. Automatic upload is off by default; an opted-in countdown runs the same download-before-upload sequence as manual Push. Browsing and window focus never check the cloud.
 
 All graph edits carry a version to reject stale selections. Native compatibility and cold-write guards remain in force. A failed action keeps its error visible with a reference code; Information offers diagnostic export without conversation text or credentials.
 
 
 ## Compaction choices and graph navigation
 
-Compaction switches are stored per path. The Transcript boundary and its graph-edge badge control the same choice. Enabling a boundary grays earlier Nodes superseded by that path's latest enabled compaction. Disabling it restores their normal appearance. This is a preview until Activate or Apply context succeeds; another path's choice is unchanged. Source history is retained in both cases. A later native auto-compaction is a new boundary, enabled by default.
+Compaction switches are stored per path. The Transcript boundary and its graph-edge badge control the same choice. Enabling a boundary grays earlier Nodes superseded by that path's latest enabled compaction. Disabling it restores their normal appearance. This is a preview until Activate succeeds; another path's choice is unchanged. Source history is retained in both cases. A later native auto-compaction is a new boundary, enabled by default.
 
-For a changed active path, Apply context uses the cold-write guard and backup journal. Adopted native data is preserved while a compatible local continuation is rebuilt. Unknown formats or unavailable pre-compaction history are rejected rather than guessed. See [context details](context-and-sync.md).
+For a changed active path, the unified Activate action uses the cold-write guard and backup journal. Adopted native data is preserved while a compatible local continuation is rebuilt. Unknown formats or unavailable pre-compaction history are rejected rather than guessed. See [context details](context-and-sync.md).
 
 The graph has a dotted canvas. Drag its background to pan, use the controls or Ctrl/Command-wheel to zoom, and Reset to return to the root. Only fully visible graph cards connect to visible Transcript spans. Compact path/language/project selectors share one keyboard-accessible popover style.
 

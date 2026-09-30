@@ -7,12 +7,18 @@ import { Store } from './store.js';
 import { Cloud } from './cloud.js';
 import { WebDAV, sealAsync, unseal, davSucceeded, assertDavListing } from './sync.js';
 import { decodeRevisionRefs } from './revision-wire.js';
-import { downloadRecords } from './record-packs.js';
-import { assert, atomic, hash, id, now } from './util.js';
+import { copyRecords, copySummaries, downloadRecords } from './record-packs.js';
+import { assert, atomic, hash, id, now, mapConcurrent } from './util.js';
 import { retainedGraph, bodyRefs, withForkMetadata } from './retention.js';
 import { applyTrashState, trashState, deletedIds, cleanupLocal } from './trash.js';
 import { withVaultLock } from './dav-lock.js';
 const directories = ['objects/', 'trees/', 'projects/', 'heads/', 'commits/'];
+export function transferCachePath(cloud) { return path.join(cloud.store.root, 'transfer-cache', hash(cloud.cacheKey)); }
+function retainedInput(graph, deleted) {
+    const kept = retainedGraph(graph, deleted), revisions = new Map(graph.revisions.map(r => [r.id, r]));
+    const needsMetadata = kept.branches.some(b => b.agent === 'claude' && revisions.get(b.head)?.source?.operation === 'fork' && revisions.get(b.head)?.source?.claudeCheckpoint);
+    return { kept, needsMetadata, input: needsMetadata ? graph : { ...kept, packs: graph.packs } };
+}
 async function cleanupTargets(rootDav, newGeneration) {
     const targets = [...directories];
     const r = await rootDav.request('PROPFIND', 'generations/', undefined, { Depth: '1' });
@@ -35,7 +41,7 @@ function readManifest(encoded, key, ref) {
 }
 // Generation staging gives cleanup a single publication point. Bodies from
 // trashed suffixes are never placed in the new generation.
-export async function collectTrash(cloud, passphrase) {
+export async function collectTrash(cloud, passphrase, { onPrepared = () => {}, onProgress = () => {} } = {}) {
     const connection = await cloud.connect(passphrase),
         { rootDav, dav, key, vaultBytes } = connection;
     return withVaultLock(rootDav, async (assertHeld) => {
@@ -63,7 +69,9 @@ export async function collectTrash(cloud, passphrase) {
             journal = path.join(cloud.store.root, 'trash-cleanup.json');
         const generation = randomBytes(16).toString('hex'),
             nextDav = rootDav.scoped('generations/' + generation + '/');
-        let committed = false;
+        const cachePath = transferCachePath(cloud); fs.mkdirSync(cachePath, { recursive: true, mode: 0o700 });
+        const verified = new Store(cachePath);
+        let committed = false, completedCleanup = false;
         try {
             await cloud.catalog(passphrase);
             for (const p of cloud.summaries()) await cloud.project(p.id, passphrase);
@@ -77,30 +85,45 @@ export async function collectTrash(cloud, passphrase) {
                     events: [...new Map(events.map((e) => [e.id, e])).values()],
                 };
             applyTrashState(stage, state);
-            const allItems = cloud.items({ includeTrashed: true }),
-                graphs = [];
-            for (const item of allItems)
-                for (const v of item.versions) {
-                    const encoded = cloud.cache().legacyGraphs[v.ref];
-                    const g =
-                        encoded ||
-                        readManifest(await dav.get('trees/' + v.ref + '.bin'), key, v.ref);
-                    graphs.push({ g, ref: v.ref });
-                }
-            const allBranches = graphs.flatMap((x) => x.g.branches),
-                deleted = deletedIds(stage, { branches: allBranches });
+            const versions = [...new Map(cloud.items({ includeTrashed: true }).flatMap(item => item.versions).map(v => [v.ref, v])).values()];
+            const manifests = [], branchGroups = [], manifestCount = versions.length, manifestStart = Date.now();
+            let manifestDone = 0;
+            cloud.report('Reading cloud session manifests', 0, manifestCount, manifestStart);
+            await mapConcurrent(versions, async (v, index) => {
+                const encoded = cloud.cache().legacyGraphs[v.ref];
+                const g = encoded || readManifest(await dav.get('trees/' + v.ref + '.bin'), key, v.ref);
+                // Spool manifests to disk; retain only branch metadata between downloads.
+                const file = path.join(temp, 'manifest-' + index + '.json');
+                fs.writeFileSync(file, JSON.stringify(g), { mode: 0o600 });
+                manifests[index] = file;
+                branchGroups[index] = g.branches;
+                cloud.report('Reading cloud session manifests', ++manifestDone, manifestCount, manifestStart);
+            });
+            const allBranches = branchGroups.flat();
+            const deleted = deletedIds(stage, { branches: allBranches });
             // Existing cloud archives/background records are not implicitly
             // migrated to Trash by the current upload visibility policy.
             stage.local('preserveRemoteForRetention', [
                 ...new Set(allBranches.filter((b) => !deleted.has(b.id)).map((b) => b.id)),
             ]);
             stage.invalidate();
-            let count = 0;
-            for (const { g } of graphs) {
-                let kept = retainedGraph(g, deleted);
+            // Count missing records across all sessions once. Reuse verified downloads
+            // across retries, and prefetch shared pack members needed by later sessions.
+            const wanted = new Set();
+            for (const file of manifests) { const g = JSON.parse(fs.readFileSync(file, 'utf8')), { kept, input } = retainedInput(g, deleted); if (kept.branches.length) for (const ref of bodyRefs(input)) wanted.add(ref); }
+            const refs = [...wanted];
+            copyRecords(cloud.store, stage, refs); const reused = copyRecords(verified, stage, refs);
+            const exists = stage.db.prepare('SELECT 1 FROM objects WHERE hash=?'), missing = new Set(refs.filter(h => !exists.get(h))), total = missing.size, started = Date.now();
+            cloud.store.local('lastTransferCache', { reused, missing: total, at: now() });
+            const report = detail => { const done = total - missing.size; onProgress({ completed: done, total }); cloud.report('Preparing shared history', done, total, started, detail); };
+            report(null);
+            for (const file of manifests) {
+                const g = JSON.parse(fs.readFileSync(file, 'utf8'));
+                let { kept, input, needsMetadata } = retainedInput(g, deleted);
                 if (kept.branches.length) {
-                    if (kept.branches.some((b) => b.agent === 'claude')) {
-                        await downloadRecords(stage, dav, key, g, () => {});
+                    const name = kept.branches.find(b => !b.synthetic && !b.trashDependency)?.name || null;
+                    await downloadRecords(stage, dav, key, input, () => report(name), () => {}, { cache: verified, globalMissing: missing });
+                    if (needsMetadata) {
                         kept = retainedGraph(
                             withForkMetadata(
                                 g,
@@ -110,34 +133,27 @@ export async function collectTrash(cloud, passphrase) {
                             ),
                             deleted,
                         );
-                    } else
-                        await downloadRecords(
-                            stage,
-                            dav,
-                            key,
-                            { ...kept, packs: g.packs },
-                            () => {},
-                        );
-                    stage.merge(kept, {});
+                    }
+                    stage.merge(kept, {}, { latest: !!cloud.mergeByModified });
+                    copySummaries(cloud.store, stage, kept);
                 }
-                cloud.report('Preserving shared context', ++count, graphs.length);
+                fs.unlinkSync(file);
+                await new Promise(resolve => setImmediate(resolve));
             }
+            report(null);
             // Local surviving edits are included so Trash never races this device's work.
             const local = cloud.store.exportGraph();
             if (local.branches.length) {
                 const kept = retainedGraph(local, deletedIds(cloud.store, local));
-                const objects = {};
-                for (const h of bodyRefs(kept)) {
-                    const row = cloud.store.objectStatement.get(h);
-                    assert(row, 'Missing local retained context.');
-                    objects[h] = row.body;
-                }
-                stage.merge(kept, objects);
+                copyRecords(cloud.store, stage, bodyRefs(kept));
+                stage.merge(kept, {}, { latest: !!cloud.mergeByModified });
+                copySummaries(cloud.store, stage, kept);
             }
             assert(
                 !(stage.local('conflicts') || []).length,
                 'Resolve context conflicts before reclaiming Trash.',
             );
+            onPrepared();
             await rootDav.mkdir('generations/');
             await nextDav.mkdir();
             for (const dir of directories) await nextDav.mkdir(dir);
@@ -160,7 +176,7 @@ export async function collectTrash(cloud, passphrase) {
             staged.connect = async () => staged.connection;
             staged.onProgress = (p) => cloud.onProgress?.(p);
             const ids = stage.syncCollections().items.map((i) => i.id);
-            if (ids.length) await staged.publish(ids, passphrase, { catalogFresh: true });
+            const publication = ids.length ? await staged.publish(ids, passphrase, { catalogFresh: true }) : { uploaded: 0, published: 0 };
             const stateBytes = await sealAsync(state, key);
             await nextDav.put('trash-state.bin', stateBytes);
             assert(
@@ -176,8 +192,7 @@ export async function collectTrash(cloud, passphrase) {
                         hash(JSON.stringify(index)) === p.index,
                         'Staged index verification failed.',
                     );
-                    for (const i of index.items)
-                        readManifest(await nextDav.get('trees/' + i.ref + '.bin'), key, i.ref);
+                    await mapConcurrent(index.items, async i => readManifest(await nextDav.get('trees/' + i.ref + '.bin'), key, i.ref));
                 }
             }
             const oldFiles = await cleanupTargets(rootDav, generation);
@@ -253,9 +268,10 @@ export async function collectTrash(cloud, passphrase) {
             fs.rmSync(journal, { force: true });
             cloud.store.local(
                 'trashEntries',
-                (cloud.store.local('trashEntries') || []).map((e) => ({ ...e, state: 'cleaned' })),
+                (cloud.store.local('trashEntries') || []).map((e) => state.events.some(event => event.id === (e.rescueFor || e.id)) ? { ...e, state: 'cleaned' } : e),
             );
-            return { removed: deleted.size, cleaned: true };
+            completedCleanup = true;
+            return { ...publication, removed: deleted.size, cleaned: true, rebuilt: true };
         } catch (e) {
             if (!committed) {
                 try {
@@ -273,6 +289,8 @@ export async function collectTrash(cloud, passphrase) {
             throw e;
         } finally {
             stage.close();
+            verified.close();
+            if (completedCleanup) fs.rmSync(cachePath, { recursive: true, force: true });
             fs.rmSync(temp, { recursive: true, force: true });
             try {
                 if ((await rootDav.get('migration.json'))?.equals(lease)) {
@@ -352,9 +370,10 @@ export async function resumeTrashCleanup(cloud, passphrase) {
         applyTrashState(cloud.store, j.state);
         cleanupLocal(cloud.store);
         fs.rmSync(file, { force: true });
+        fs.rmSync(transferCachePath(cloud), { recursive: true, force: true });
         cloud.store.local(
             'trashEntries',
-            (cloud.store.local('trashEntries') || []).map((e) => ({ ...e, state: 'cleaned' })),
+            (cloud.store.local('trashEntries') || []).map((e) => j.state.events.some(event => event.id === (e.rescueFor || e.id)) ? { ...e, state: 'cleaned' } : e),
         );
         return { cleaned: true };
     });

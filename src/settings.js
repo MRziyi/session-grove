@@ -82,5 +82,5 @@ export class Settings {
         vaultKey(vault, pending.passphrase); this.commit(pending.destination, pending.passphrase); this.autoSync.unlock(pending.passphrase);
         this.job = null; this.draft = null; return this.status();
     }
-    timers(body) { const p = savePreferences(this.store, body); this.autoSync.configureTimer(); this.onTimers(); return p; }
+    timers(body) { const p = savePreferences(this.store, body); if (body.autoUploadEnabled === true) this.store.local('syncStarted', true); this.autoSync.configureTimer(); this.onTimers(); return p; }
 }

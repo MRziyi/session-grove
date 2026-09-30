@@ -14,13 +14,22 @@ const digest = value => hash(JSON.stringify(value));
 const sorted = rows => [...rows].sort((a, b) => a.id.localeCompare(b.id));
 export function treeSnapshot(store, treeId) { return store.memo('cloud-tree:' + treeId, () => buildSnapshot(store, treeId)); }
 function buildSnapshot(store, treeId) {
-    const graph = store.exportGraph(), branches = graph.branches.filter(b => rootOf(store, b.id).id === treeId);
+    const index = store.memo('cloud-snapshot-index', () => {
+        const graph = store.exportGraph(), families = new Map(), nodes = new Map(), layouts = new Map();
+        const add = (map, id, value) => { if (!map.has(id)) map.set(id, []); map.get(id).push(value); };
+        for (const b of graph.branches) add(families, rootOf(store, b.id).id, b);
+        for (const n of graph.nodes || []) add(nodes, n.branchId, n);
+        for (const l of graph.layouts || []) add(layouts, l.rootId, l);
+        return { graph, families, nodes, layouts, revisions: new Map(graph.revisions.map(r => [r.id, r])) };
+    });
+    const branches = index.families.get(treeId) || [];
     if (!branches.length) return null;
-    return sliceGraph(graph, branches.map(b => b.id));
+    const graph = { ...index.graph, branches, nodes: branches.flatMap(b => index.nodes.get(b.id) || []), layouts: branches.flatMap(b => index.layouts.get(b.id) || []) };
+    return sliceGraph(graph, branches.map(b => b.id), index.revisions);
 }
-function sliceGraph(graph, ids) {
+function sliceGraph(graph, ids, revisionIndex) {
     const selected = new Set(ids), branches = graph.branches.filter(b => selected.has(b.id));
-    const projectIds = new Set(branches.map(b => b.projectId)), revisions = new Map(), all = new Map(graph.revisions.map(r => [r.id, r]));
+    const projectIds = new Set(branches.map(b => b.projectId)), revisions = new Map(), all = revisionIndex || new Map(graph.revisions.map(r => [r.id, r]));
     const visit = id => { if (!id || revisions.has(id)) return; const r = all.get(id); assert(r, 'Missing revision in cloud tree.'); revisions.set(id, r); visit(r.parent); };
     const nodes = (graph.nodes || []).filter(n => selected.has(n.branchId));
     for (const b of branches) { visit(b.head); visit(b.forkRevision); }
@@ -34,16 +43,18 @@ function tips(items) {
     return unique.filter(i => !unique.some(other => other.ref !== i.ref && other.ancestors?.includes(i.ref)));
 }
 export class Cloud {
-    constructor(store, readConfig) { this.store = store; this.readConfig = readConfig; this.connection = null; }
+    constructor(store, readConfig) { this.store = store; this.readConfig = readConfig; this.connection = null; this.manifests = new Map(); this.manifestBytes = 0; this.metrics = { requests: 0, methods: {}, bytesSent: 0, bytesReceived: 0, requestMs: 0, responseBodyMs: 0, failures: 0 }; }
     cache() { return this.store.local(this.cacheKey || 'cloud:no-vault') || cacheDefault(); }
     save(c, quiet = false) { this.store.local(this.cacheKey, c, { quiet }); }
-    async connect(passphrase) {
+    async connect(passphrase, { readOnly = false } = {}) {
         const config = this.readConfig(), signature = digest([config, passphrase]);
         if (this.connection?.signature === signature) return this.connection;
         const dav = new WebDAV(config);
+        dav.metrics = this.metrics;
         let created=false;
         let bytes = await dav.get('vault.json');
         if (!bytes) {
+            if (readOnly) return null;
             await dav.mkdir();created=true;
             const { vault } = createVault(passphrase);
             await dav.put('vault.json', Buffer.from(JSON.stringify(vault)), true);
@@ -58,7 +69,26 @@ export class Cloud {
         return this.connection = { dav: dataDav, rootDav, vaultBytes: bytes, key, signature, protocol:vault.schema };
     }
     useSavedCache() { this.cacheKey ||= this.store.local('cloudCacheKey'); }
-    lock() { this.connection = null; }
+    lock() { this.connection = null; this.manifests.clear(); this.manifestBytes = 0; }
+    async manifest(ref) {
+        assert(/^[a-f0-9]{64}$/.test(ref), 'Invalid cloud manifest reference.');
+        const cacheId = this.connection.dav.base + ref;
+        let entry = this.manifests.get(cacheId);
+        if (entry) { this.manifests.delete(cacheId); this.manifests.set(cacheId, entry); return JSON.parse(entry.json); }
+        const legacy = this.cache().legacyGraphs[ref];
+        const bytes = legacy ? null : await this.connection.dav.get('trees/' + ref + '.bin');
+        const value = legacy || (bytes && unseal(bytes, this.connection.key));
+        const json = JSON.stringify(value);
+        assert(value && hash(json) === ref, 'Cloud manifest integrity check failed.');
+        // Cache immutable JSON, not mutable decoded graphs. Bound both bytes and entries.
+        const size = json.length * 2;
+        while (this.manifests.size && (this.manifestBytes + size > 16 * 1024 * 1024 || this.manifests.size >= 32)) {
+            const oldest = this.manifests.keys().next().value;
+            this.manifestBytes -= this.manifests.get(oldest).size; this.manifests.delete(oldest);
+        }
+        if (size <= 16 * 1024 * 1024) { this.manifests.set(cacheId, { json, size }); this.manifestBytes += size; }
+        return value;
+    }
     projectRefs() {
         this.useSavedCache(); const groups = new Map();
         for (const head of Object.values(this.cache().heads)) for (const p of head.projects || []) {
@@ -74,9 +104,9 @@ export class Cloud {
             return { ...chosen, count: rows.every(p => Array.isArray(p.treeIds)) ? new Set(rows.flatMap(p => p.treeIds)).size : Math.max(...rows.map(p => p.count || 0)) };
         });
     }
-    report(phase, completed=0, total=null, startedAt=Date.now()) {
+    report(phase, completed=0, total=null, startedAt=Date.now(), detail = null) {
         const elapsed=(Date.now()-startedAt)/1000;
-        this.onProgress?.({phase,completed,total,etaSeconds:total && completed>0 && elapsed>=1 ? Math.ceil(elapsed/completed*(total-completed)) : null});
+        this.onProgress?.({phase,completed,total,detail,etaSeconds:total && completed>0 && elapsed>=1 ? Math.ceil(elapsed/completed*(total-completed)) : null});
     }
     async catalog(passphrase) {
         this.report('Checking cloud directory');
@@ -86,16 +116,19 @@ export class Cloud {
         const { dav, key } = connection, c = this.cache();
         if(connection.protocol===3){const bytes=await dav.get('trash-state.bin');assert(bytes,'Cloud deletion markers are missing.');applyTrashState(this.store,unseal(bytes,key));}
         const names = await dav.list('heads/', /^[a-f0-9-]+\.bin$/);
-        for (const name of names) {
+        const updates = new Array(names.length);
+        await mapConcurrent(names, async (name, index) => {
             const response = await dav.request('GET', 'heads/' + name, undefined, c.heads[name]?.etag ? { 'If-None-Match': c.heads[name].etag } : {});
-            if (response.status === 304) continue;
+            if (response.status === 304) return;
             assert(response.ok, `Cloud directory read failed (${response.status}).`);
             const bytes = await dav.readResponse(response, 16 * 1024 * 1024); assert(bytes.length < 16 * 1024 * 1024, 'Cloud directory too large.');
             const value = unseal(bytes, key);
             assert([4, 5, 6].includes(value.schema) && Array.isArray(value.projects), 'Unsupported cloud directory.');
             for (const p of value.projects) assert(typeof p.id === 'string' && typeof p.name === 'string' && /^[a-f0-9]{64}$/.test(p.index), 'Invalid cloud project.');
-            c.heads[name] = { ...value, etag: response.headers.get('etag') };
-        }
+            updates[index] = { ...value, etag: response.headers.get('etag') };
+        });
+        // Preserve listing order, independent of request completion order.
+        for (let index = 0; index < names.length; index++) if (updates[index]) c.heads[names[index]] = updates[index];
         // An old vault is indexed from its manifests, without fetching transcripts.
         if (!names.length) await this.legacyCatalog(dav, key, c);
         c.checkedAt = now(); this.save(c);
@@ -172,9 +205,7 @@ export class Cloud {
         const exists = this.store.db.prepare('SELECT 1 FROM objects WHERE hash=?');
         for (const item of downloads) for (const version of item.versions) {
             if ((c.loaded[item.id] || []).includes(version.ref)) continue;
-            const bytes = c.legacyGraphs[version.ref] ? null : await this.connection.dav.get('trees/' + version.ref + '.bin');
-            const graph = c.legacyGraphs[version.ref] || (bytes && unseal(bytes, this.connection.key));
-            assert(graph && digest(graph) === version.ref, 'Cloud manifest integrity check failed.');
+            const graph = await this.manifest(version.ref);
             for (const h of bodyRefs(decodeRevisionRefs(graph))) if (!exists.get(h)) missing.add(h);
         }
         const uploads = this.dirtyIds(), refs = new Set(uploads.flatMap(id => {const graph=treeSnapshot(this.store,id);return graph?bodyRefs(graph):[];}));
@@ -183,27 +214,35 @@ export class Cloud {
         const bytes = this.store.db.prepare('SELECT COALESCE(SUM(length(CAST(body AS BLOB))),0) AS bytes FROM objects WHERE hash IN (SELECT value FROM json_each(?))').get(JSON.stringify(pending)).bytes;
         return { pull: { trees: downloads.length, records: missing.size }, push: { trees: uploads.length, records: pending.length, bytes }, large: missing.size > 2000 || pending.length > 2000 || bytes > 32 * 1024 * 1024, downloadIds: downloads.map(i => i.id) };
     }
-    async hydrate(treeId, passphrase) {
+    async hydrate(treeId, passphrase, { latest = this.mergeByModified || false } = {}) {
         const { dav, key } = await this.connect(passphrase), item = this.items().find(i => i.id === treeId);
         if (!item) return;
         let c = this.cache();
         if (item.versions.every(v => (c.loaded[treeId] || []).includes(v.ref))) return;
         const loaded = c.loaded[treeId] || [], wasDirty = this.dirtyIds().includes(treeId);
+        let editedDuringDownload = false, keptLocal = false;
         for (const version of item.versions) {
             if (loaded.includes(version.ref)) continue;
-            const bytes = c.legacyGraphs[version.ref] ? null : await dav.get('trees/' + version.ref + '.bin');
-            const encoded = c.legacyGraphs[version.ref] || (bytes && unseal(bytes, key));
-            assert(encoded && digest(encoded) === version.ref && encoded.branches.some(b => b.id === treeId), 'Invalid cloud tree manifest.');
+            const beforeSnapshot = treeSnapshot(this.store, treeId), beforeDownload = digest(beforeSnapshot);
+            const beforeBranches = new Map(this.store.all('branch').map(b => [b.id, JSON.stringify(b)]));
+            const encoded = await this.manifest(version.ref);
+            assert(encoded.branches.some(b => b.id === treeId), 'Invalid cloud tree manifest.');
             let graph = decodeRevisionRefs(encoded);
+            if (latest && beforeSnapshot?.branches.some(b => !graph.branches.some(remote => remote.id === b.id))) keptLocal = true;
             assert(!graph.retention||this.connection.protocol===3||this.connection.retentionStaging,'Sparse history requires a Trash-aware vault.');
             if(this.store.local('trashState')||this.store.local('trashPending')?.length)graph=retainedGraph(graph,deletedIds(this.store,graph));
-            this.report('Downloading records', 0, null);
-            await downloadRecords(this.store, dav, key, graph, (done, total, started) => this.report('Downloading records', done, total, started), pack => { c.packs ||= []; if (!c.packs.some(p => p.ref === pack.ref)) c.packs.push(pack); });
-            this.report('Applying downloaded changes');
-            this.store.merge(graph, {}); loaded.push(version.ref);
+            this.report('Downloading records', 0, null, Date.now(), item.name);
+            await downloadRecords(this.store, dav, key, graph, (done, total, started) => this.report('Downloading records', done, total, started, item.name), pack => { c.packs ||= []; if (!c.packs.some(p => p.ref === pack.ref)) c.packs.push(pack); });
+            this.report('Applying downloaded changes', 0, graph.branches.length, Date.now(), item.name);
+            editedDuringDownload ||= beforeDownload !== digest(treeSnapshot(this.store, treeId));
+            const protectedIds = new Set(this.store.all('branch').filter(b => beforeBranches.has(b.id) && beforeBranches.get(b.id) !== JSON.stringify(b)).map(b => b.id));
+            // Trash and edits may have happened while the network was awaiting bytes.
+            if(this.store.local('trashState')||this.store.local('trashPending')?.length)graph=retainedGraph(graph,deletedIds(this.store,graph));
+            const result = this.store.merge(graph, {}, { latest, protectedIds }); keptLocal ||= !!result.keptLocal;
+            loaded.push(version.ref);
             c.loaded[treeId] = loaded; this.save(c);
         }
-        if (!wasDirty && !(this.store.local('conflicts') || []).length) c.ack[treeId] = digest(treeSnapshot(this.store, treeId));
+        if ((!wasDirty || latest && !keptLocal) && !editedDuringDownload && !(this.store.local('conflicts') || []).length) c.ack[treeId] = digest(treeSnapshot(this.store, treeId));
         this.save(c);
     }
     async publish(treeIds, passphrase, { catalogFresh = false, locked = false } = {}) {
@@ -224,23 +263,24 @@ export class Cloud {
         assert(!(this.store.local('conflicts') || []).length, 'Resolve sync conflicts before uploading.');
         const c = this.cache(), replacements = new Map(), fingerprints = {};
         const graphs=new Map(treeIds.map(id=>[id,treeSnapshot(this.store,id)])), snapshotItems=new Map(this.store.syncCollections().items.map(i=>[i.id,i]));
+        const snapshotProjects = new Map([...graphs.values()].filter(Boolean).flatMap(g => g.projects).map(p => [p.id, p]));
         let uploaded = 0, doneBefore = 0;
         const recordTotal = [...graphs.values()].filter(Boolean).reduce((n,g)=>n+bodyRefs(g).length,0), pushStarted = Date.now();
         for (const id of treeIds) {
             const graph = graphs.get(id); if (!graph) continue;
+            const item = snapshotItems.get(id);
             assert(!graph.retention||this.connection.protocol===3||this.connection.retentionStaging,'Sync pending Trash before publishing retained history.');
             const fingerprint = digest(graph), previous = this.items().find(i => i.id === id);
             if (c.ack[id] === fingerprint && previous?.versions.length === 1) continue;
             const refs = bodyRefs(graph);
-            this.report('Uploading records', doneBefore, recordTotal, pushStarted);
-            const packed = await uploadPacks(this.store, dav, key, refs, c, () => this.save(c, true), (done, total) => this.report('Uploading records', doneBefore + refs.length - total + done, recordTotal, pushStarted));
+            this.report('Uploading records', doneBefore, recordTotal, pushStarted, item.name);
+            const packed = await uploadPacks(this.store, dav, key, refs, c, () => this.save(c, true), (done, total) => this.report('Uploading records', doneBefore + refs.length - total + done, recordTotal, pushStarted, item.name));
             doneBefore += refs.length;
-            this.report('Uploading records', doneBefore, recordTotal, pushStarted);
+            this.report('Uploading records', doneBefore, recordTotal, pushStarted, item.name);
             uploaded += packed.uploaded;
             const transport = encodeRevisionRefs(packed.packs.length ? { ...graph, packs: packed.packs } : graph), ref = digest(transport);
             await dav.put('trees/' + ref + '.bin', await sealAsync(transport, key), true);
             const ancestors = [...new Set((previous?.versions || []).flatMap(v => [v.ref, ...(v.ancestors || [])]))].filter(h => h !== ref);
-            const item = snapshotItems.get(id);
             replacements.set(id, { ...item, projectId: cloudProjectId(item.projectId), sessions: item.sessions.map(s => ({ ...s, active: false })), ref, ancestors });
             fingerprints[id] = fingerprint;
         }
@@ -248,7 +288,7 @@ export class Cloud {
         this.report('Publishing project indexes');
         const ownProjects = new Map((c.heads[this.store.device.id + '.bin']?.projects || c.ownProjects || []).map(p => [p.id, p]));
         for (const projectId of projectIds) {
-            const project = (projectId === INBOX_ID ? inboxProject() : this.store.all('project').find(p => p.id === projectId)) || this.summaries().find(p => p.id === projectId); if (!project) continue;
+            const project = snapshotProjects.get(projectId) || (projectId === INBOX_ID ? inboxProject() : this.store.all('project').find(p => p.id === projectId)) || this.summaries().find(p => p.id === projectId); if (!project) continue;
             const retired = new Set([...replacements.values()].flatMap(i => i.sessionIds.filter(id => id !== i.id)));
             const oldItems = this.items().filter(i => i.projectId === projectId).flatMap(i => i.versions).filter(i => !replacements.has(i.id) && !retired.has(i.id));
             const items = [...oldItems, ...[...replacements.values()].filter(i => i.projectId === projectId)];

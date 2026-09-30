@@ -2,6 +2,30 @@ import test from 'node:test';import assert from 'node:assert/strict';import fs f
 import {Store} from '../src/store.js';import {Native} from '../src/native.js';import {createApp} from '../src/server.js';import {codexSample,codexTurn} from '../src/demo.js';import {savePreferences} from '../src/preferences.js';import {parse,renderNative} from '../src/transcript.js';import {recordPreview} from '../src/record-preview.js';
 const lines=rows=>rows.map(r=>JSON.stringify(r)+'\n').join('');
 function fixture(t){const root=fs.mkdtempSync(path.join(os.tmpdir(),'grove-quick-')),store=new Store(path.join(root,'library')),roots={codex:path.join(root,'codex'),claude:path.join(root,'claude')};fs.mkdirSync(path.join(roots.codex,'sessions'),{recursive:true});t.after(()=>{store.close();fs.rmSync(root,{recursive:true,force:true});});return{root,store,roots};}
+test('local renames work during sync and Active Trash only removes active sessions', async t => {
+ const f=fixture(t),app=createApp({root:path.join(f.root,'app'),roots:f.roots,guard:()=>{}});
+ app.server.listen(0,'127.0.0.1');await once(app.server,'listening');t.after(async()=>{await new Promise(resolve=>app.close(resolve));});
+ const base='http://127.0.0.1:'+app.server.address().port,headers={'X-Grove-Token':app.token,'Content-Type':'application/json'};
+ const request=(route,method,body)=>fetch(base+'/api/'+route,{method,headers,body:JSON.stringify(body)});
+ const parent=app.store.branch(null,'Parent','codex',codexSample(f.root,[['Setup','Ready'],['More','Done']]));
+ const child=app.store.fork(parent.id,{name:'Inactive child',end:app.store.detail(parent.id).checkpoints[0].end});
+ app.native.setActive(parent.id,f.root,true);app.native.apply([parent.id]);
+ let release;const pending=app.autoSync.exclusive(()=>new Promise(resolve=>{release=resolve;}));await Promise.resolve();
+ try {
+  assert.equal((await request('branches/'+parent.id,'PATCH',{name:'Renamed during sync'})).status,200);
+  const graph=app.store.treeGraph(parent.id);
+  assert.equal((await request('trees/'+parent.id,'POST',{version:graph.version,pathId:parent.id,nodeId:graph.nodes[0].id,action:'rename',name:'Renamed node'})).status,200);
+  const current=app.store.treeGraph(parent.id),target={branchId:child.id,nodeId:'empty-'+child.id,version:current.version,cwd:f.root};
+  const preview=await(await request('node-activation/check','POST',target)).json();
+  assert.equal((await request('node-activation/activate','POST',{...target,contextAcknowledgement:preview.fingerprint})).status,201);
+  assert.ok(app.store.instances().some(i=>i.branchId===child.id&&i.applied));
+  assert.equal((await request('manage','POST',{action:'deactivate',branchIds:[child.id]})).status,200);
+  assert.equal((await request('trash','POST',{itemIds:[parent.id],view:'active:codex'})).status,202);
+  assert.equal(app.store.cleanupDeferred,true);
+ } finally {release();await pending;}
+ assert.equal(app.store.listing('active:codex').items.length,0);
+ assert.ok(app.store.collections().items.some(i=>i.sessions.some(s=>s.id===child.id)));
+});
 test('fresh startup stays empty until Update, streams actual completion, and enables the local timer afterward',async t=>{
  const f=fixture(t),file=path.join(f.roots.codex,'sessions','sample.jsonl');fs.writeFileSync(file,codexSample(f.root,[['Question','Answer']]));
  const app=createApp({root:path.join(f.root,'app'),roots:f.roots,guard:()=>{}});app.server.listen(0,'127.0.0.1');await once(app.server,'listening');t.after(async()=>{if(app.server.listening)await new Promise(resolve=>app.close(resolve));});

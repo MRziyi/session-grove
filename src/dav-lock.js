@@ -12,6 +12,7 @@ export async function withVaultLock(rootDav, fn, { renewMs = 30000 } = {}) {
     );
     const lockBody = await rootDav.readResponse(r, 1048576);
     const token = r.headers.get('lock-token');
+    if (davStatuses(r, lockBody).includes(423)) throw Object.assign(new Error('Cloud is busy with another transfer. Wait for its lock to expire before retrying.'), { code: 'WEBDAV_BACKOFF', retryAfterMs: 120000 });
     if (!davSucceeded(r, lockBody) && token) {
         const unlock = await rootDav.request('UNLOCK', '', undefined, { 'Lock-Token': token });
         await rootDav.readResponse(unlock, 1048576);
