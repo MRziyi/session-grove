@@ -1,3 +1,4 @@
+import {setImmediate as yieldTask} from 'node:timers/promises';
 import {readyToDeactivate} from './native-readiness.js';
 import {isTrashed,nativeSuppressed} from './trash.js';
 import { claudeTitle } from './claude-title.js';
@@ -249,10 +250,11 @@ export class Native {
         this.store.local('instances', instances);
         return this.plan();
     }
-    collect() {
+    collect(branchIds = null) {
         const instances = this.store.instances();
         const results = [], errors = [];
         for (const i of instances) {
+            if(branchIds&&!branchIds.includes(i.branchId))continue;
             if (isTrashed(this.store,i.branchId) || i.excluded && this.store.get('branch', i.branchId).excluded !== 'empty') continue;
             if (!i.file || !fs.existsSync(i.file)) {
                 if (i.applied)
@@ -359,27 +361,41 @@ export class Native {
         return safePath(root, path.join(root, files[0]));
     }
     apply(branchIds = null) {
+        const steps=this.applySteps(branchIds);
+        for(let step=steps.next();;step=steps.next())if(step.done)return step.value;
+    }
+    async applyAsync(branchIds = null,{onProgress=async()=>{}}={}) {
+        const steps=this.applySteps(branchIds);
+        for(let step=steps.next();;step=steps.next()){
+            if(step.done)return step.value;
+            await onProgress(step.value);await yieldTask();
+        }
+    }
+    *applySteps(branchIds = null) {
         const targeted = this.plan().operations.filter(op => !branchIds || branchIds.includes(op.branchId));
         if (!targeted.length) return { applied: 0 };
         const initialInstances = this.store.instances();
         const additive = targeted.every(op => op.action === 'activate' && initialInstances.some(i => i.id === op.instanceId && !i.file && !i.applied && !i.adopted));
         if (!additive) this.guard([...new Set(targeted.map(op => op.agent))]);
         assert(!this.plan().pendingRecovery.length, '存在未完成操作，请先恢复备份', 409);
-        this.collect();
+        yield {phase:'Reading selected native histories',completed:0,total:null};
+        this.collect(branchIds);
         const instances = this.store.instances(), plan = this.plan();
         if (branchIds) plan.operations = plan.operations.filter(op => branchIds.includes(op.branchId));
         if (!plan.operations.length)
             return { applied: 0 };
-        const job = { id: id(), createdAt: now(), status: 'prepared', additive, files: [], instancesBefore: instances, operations: plan.operations };
+        const job = { id: id(), createdAt: now(), status: 'prepared', additive, files: [], scopedInstances:true, instancesBefore: instances.filter(i=>plan.operations.some(op=>op.instanceId===i.id)), operations: plan.operations };
         const jobFile = path.join(this.jobs, `${job.id}.json`), dbs = new Map(), writes = new Map(), appends = new Map();
-        const after = structuredClone(instances), createdFiles = new Set();
+        const after = instances.map(i=>({...i})), createdFiles = new Set();
         const backup = file => {
             if (job.files.some(f => f.path === file))
                 return;
             job.files.push({ path: file, content: fs.existsSync(file) ? fs.readFileSync(file).toString('base64') : null });
         };
         try {
+            let completed=0;
             for (const op of plan.operations) {
+                if(!dbs.size)yield {phase:'Preparing native session',detail:op.name,completed,total:plan.operations.length};completed++;
                 const i = after.find(i => i.id === op.instanceId), b = this.store.get('branch', i.branchId);
                 if (additive) assert(op.action === 'activate' && !i.file && !i.applied && !i.adopted, 'Activation changed. Retry.', 409);
                 assert(i.root === this.roots[i.agent], '原生存储配置已改变，请重新绑定');
@@ -401,14 +417,14 @@ export class Native {
                         dbs.set(root, null);
                 }
                 if (op.action === 'activate') {
-                    const raw = this.store.raw(b.head), parsed = parse(raw, b.agent);
+                    const raw = this.store.raw(b.head), parsed = this.store.parsed(b.head,b.agent);
                     const lineage = this.store.detail(b.id).lineage;
                     const nativeClaudeFork = b.agent === 'claude' && lineage[0]?.source.operation === 'fork';
                     assert(nativeClaudeFork || !lineage.some(r => r.source.requiresAuxiliary) || lineage.some(r => r.source.auxiliary), '此分支继承了含伴随目录的会话，当前版本尚不支持完整物化');
                     assert(!parsed.warnings.some(w => w.includes('外部附件')), '此会话包含外部附件引用。当前版本可浏览和分支，完整附件迁移尚未支持。');
                     const original = !!i.file && fs.existsSync(i.file) && i.baseRevision === b.head && (i.contextPolicyHash || policyHash(null)) === policyHash(b.contextPolicy) && parsed.cwd === i.cwd;
                     const forkSource = nativeClaudeFork && lineage[0].parent && lineage[0].source.claudeCheckpoint ? { raw: this.store.availableRaw(lineage[0].parent), upToMessageId: lineage[0].source.claudeCheckpoint } : null;
-                    let output = original && i.file && fs.existsSync(i.file) ? this.read(i.file) : renderNative(raw, b.agent, i.nativeId, i.cwd, this.title(b, i), b.contextPolicy, forkSource, !!lineage[0]?.source.nodeBoundary);
+                    let output = original && i.file && fs.existsSync(i.file) ? this.read(i.file) : renderNative(raw, b.agent, i.nativeId, i.cwd, this.title(b, i), b.contextPolicy, forkSource, !!lineage[0]?.source.nodeBoundary || lineage.some(r=>r.source.nodeBoundary)&&readyToDeactivate(this.store,i));
                     if (original && i.groveTitle && b.agent === 'claude' && claudeTitle(parsed.records).title !== this.title(b, i)) output = output.replace(/\n?$/, '\n') + JSON.stringify({type:'custom-title',customTitle:this.title(b, i),sessionId:i.nativeId}) + '\n';
                     const dest = safePath(root, op.file);
                     assert(!fs.existsSync(dest) || dest === i.file, '目标记录已存在，拒绝覆盖');
@@ -507,6 +523,7 @@ export class Native {
                     }
                 }
             }
+            if(!dbs.size)yield {phase:'Saving native recovery journal',completed:0,total:null};
             job.files = job.files.map(f => ({ ...f, afterHash: writes.has(f.path) && writes.get(f.path) !== null ? hash(writes.get(f.path)) : null }));
             atomic(jobFile, JSON.stringify(job));
             job.status = 'applying';
@@ -615,7 +632,7 @@ export class Native {
         });
         atomic(path.join(this.store.root, 'recovery-snapshots', `${jobId}-${id()}.json`), JSON.stringify({ createdAt: now(), files: rescue, instances: this.store.instances() }));
         this.restoreFiles(job);
-        this.store.local('instances', job.instancesBefore);
+        this.store.local('instances', job.scopedInstances?[...this.store.instances().filter(i=>!job.instancesBefore.some(previous=>previous.id===i.id)),...job.instancesBefore]:job.instancesBefore);
         job.status = 'recovered';
         atomic(file, JSON.stringify(job));
         return { recovered: jobId };

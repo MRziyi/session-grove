@@ -83,3 +83,50 @@ test('client archive changes follow an adopted identity without confusing Grove 
  fs.renameSync(archived,instance.file);native.refreshLocal();assert.equal(store.get('branch',b.id).archived,false);assert.ok(store.listing('projects').items.some(i=>i.sessionIds.includes(b.id)));
  native.setActive(b.id,null,false);native.apply([b.id]);native.refreshLocal();assert.ok(!nativeTrashCandidates(store).some(i=>i.branchId===b.id&&i.clientArchived));
 });
+
+test('client archive recovery keeps its shared parent, sibling and named layout',async t=>{
+ const {root,store,native,b,instance}=setup(t);
+ const child=store.fork(b.id,{name:'Sibling',end:store.detail(b.id).checkpoints[0].end});
+ const g=store.treeGraph(b.id);store.organize(b.id,{version:g.version,pathId:b.id,action:'combine',name:'Shared label',chatIds:g.paths.find(p=>p.branchId===b.id).messages.map(m=>m.id)});
+ const before=native.history(instance.file,b.agent);store.edit(b.id,{archived:true});
+ const result=await moveNativeToRecovery(store,native,[instance.id],options);assert.deepEqual(result.blocked,[]);
+ const restored=restoreTrash(store,result.recoveryIds[0]);
+ const item=store.listing('projects').items.find(i=>i.sessionIds.includes(child.id));
+ assert.ok(item.sessionIds.includes(restored.branchIds[0]),'restored parent stays with its kept sibling');
+ const tree=store.treeGraph(item.id);assert.equal(tree.paths.length,2);assert.ok(tree.nodes.some(n=>n.name==='Shared label'&&n.branchIds.length===2));
+ assert.equal(store.raw(store.get('branch',restored.branchIds[0]).head),before);
+});
+test('separately discarded siblings restore into one tree in either order',t=>{
+ const {store,b}=setup(t);const end=store.detail(b.id).checkpoints[0].end;
+ const children=['A','B'].map(name=>store.fork(b.id,{name,end}));
+ const entries=children.map(c=>stageTrash(store,[c.id]));cleanupLocal(store);
+ const restored=entries.reverse().map(e=>restoreTrash(store,e.id).branchIds[0]);
+ assert.ok(store.listing('projects').items.some(i=>[b.id,...restored].every(id=>i.sessionIds.includes(id))));
+});
+test('restoring an entire deleted tree retains every path and stable chat identity',t=>{
+ const {store,b}=setup(t);const c=store.fork(b.id,{name:'Child',end:store.detail(b.id).checkpoints[0].end});
+ const before=store.treeGraph(b.id),entry=stageTrash(store,[b.id,c.id],[b.id]);cleanupLocal(store);
+ const restored=restoreTrash(store,entry.id),tree=store.treeGraph(restored.branchIds[0]);
+ assert.equal(tree.paths.length,2);assert.equal(new Set(tree.paths.map(p=>p.nodeIds[0])).size,1);
+ assert.deepEqual(tree.paths.map(p=>p.messages.map(m=>m.id)),before.paths.map(p=>p.messages.map(m=>m.id)));
+});
+
+test('parent and child restored from separate entries reunite in either order after all paths were trashed',t=>{
+ for(const reverse of [false,true]){
+  const {store,b}=setup(t);const child=store.fork(b.id,{name:'Nested',end:store.detail(b.id).checkpoints[0].end});
+  const entries=[stageTrash(store,[child.id]),stageTrash(store,[b.id])];cleanupLocal(store);
+  if(reverse)entries.reverse();const restored=entries.map(e=>restoreTrash(store,e.id).branchIds[0]);
+  assert.ok(store.listing('projects').items.some(i=>restored.every(id=>i.sessionIds.includes(id))));
+  const g=store.treeGraph(restored[0]);assert.equal(g.paths.length,2);assert.equal(new Set(g.paths.map(p=>p.nodeIds[0])).size,1);
+ }
+});
+test('restoring a child follows its surviving family into the current project',t=>{
+ const {store,b}=setup(t);const child=store.fork(b.id,{name:'Child',end:store.detail(b.id).checkpoints[0].end}),entry=stageTrash(store,[child.id]);cleanupLocal(store);
+ const destination=store.project('Moved while child was discarded');store.moveItems({itemIds:[b.id],projectId:destination.id});
+ const restored=restoreTrash(store,entry.id);assert.equal(store.get('branch',restored.branchIds[0]).projectId,destination.id);assert.deepEqual(restored.projectIds,[destination.id]);
+});
+test('restoring into a surviving family reopens its archived project without activating siblings',t=>{
+ const {store,b}=setup(t),project=store.project('Destination');store.moveItems({itemIds:[b.id],projectId:project.id});
+ const child=store.fork(b.id,{name:'Child',end:store.detail(b.id).checkpoints[0].end}),entry=stageTrash(store,[child.id]);cleanupLocal(store);store.put('project',{...project,archived:true});
+ const restored=restoreTrash(store,entry.id);assert.ok(store.listing('projects').items.some(i=>i.sessionIds.includes(restored.branchIds[0])));assert.equal(store.get('project',project.id).archived,false);assert.ok(!store.instances().some(i=>i.branchId===restored.branchIds[0]));
+});

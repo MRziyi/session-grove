@@ -264,6 +264,7 @@ export function moveItems(store, { itemIds, projectId, projectName }) {
     assert(Array.isArray(itemIds) && itemIds.length, 'Select sessions to move.');
     return store.transaction(() => {
         const roots = [...new Set(itemIds.map(id => rootOf(store, id).id))];
+        assert(roots.every(id=>treeMembers(store,id).some(b=>!b.synthetic&&!isTrashed(store,b.id))), 'Restore from Trash before moving.',409);
         const project = projectId === INBOX_ID ? inboxProject() : projectId ? store.get('project', projectId) : store.project(projectName);
         assert(!project.archived, 'Restore the destination project first.');
         for (const id of roots) {

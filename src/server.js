@@ -1,7 +1,9 @@
+import {installedClientLinks} from './client-links.js';
+import {repairLegacyRecoveries} from './recovery-lineage.js';
 import { discardChanges } from './discard-changes.js';
 import { refreshNativeClients } from './client-refresh.js';
-import {stageTrash,stageTrashAsync,restoreTrash,expireTrash,cleanupLocal,isTrashed} from './trash.js';
-import {nativeTrashCandidates,moveNativeToRecovery,deleteRecoveryCopies,restoreRecoveryCopies} from './trash-actions.js';
+import {stageTrashAsync,restoreTrashAsync,expireTrash,cleanupLocal,isTrashed} from './trash.js';
+import {nativeTrashCandidates,moveNativeToRecovery,deleteRecoveryCopies,restoreRecoveryCopiesAsync} from './trash-actions.js';
 import os from 'node:os';
 import { recordPreview } from './record-preview.js';
 import { VERSION } from './version.js';
@@ -32,9 +34,11 @@ import { assert, atomic, json, text, now, id, hash } from './util.js';
 const webRoot = fileURLToPath(new URL('../web/', import.meta.url));
 export function createApp({ root, roots, guard, demo = false }) {
     const store = new Store(root), native = new Native(store, { roots, guard }), token = randomBytes(32).toString('hex');
+    const lineageRepair=repairLegacyRecoveries(store);
     const webAssets = new Map(['index.html', 'app.js', 'library-view.js', 'session-drag.js', 'select.js', 'markdown.js', 'i18n.js', 'style.css'].map(file => [file, fs.readFileSync(path.join(webRoot, file))]));
     const configFile = path.join(root, 'git-sync.json');
     const diagnostics = new Diagnostics(root);
+    if(lineageRepair.repaired.length||lineageRepair.skipped.length)diagnostics.record('recovery-lineage-repair',lineageRepair);
     const autoSync = new AutoSync(store, () => ({ ...json(configFile, {}), provider: 'git' }), null, { provider: 'git' });
     autoSync.diagnostics = diagnostics;
     if (store.local('localUpdateStarted') === null) store.local('localUpdateStarted', demo || store.instances().length > 0);
@@ -51,14 +55,14 @@ export function createApp({ root, roots, guard, demo = false }) {
     ]))]));
     const streams = new Set(); let updateOperation = null, trashOperation = null, trashPromise = null;
     let stopping = false, discardPromise = null, discardOperation = null, discardRequest = null;
-    const instance = id();
+    const instance = id(),clientLinks=installedClientLinks();
     const operation = (kind, value) => { for (const res of streams) res.write('event: operation\ndata: ' + JSON.stringify({kind, ...value}) + '\n\n'); };
     autoSync.onOperation = value => operation('sync', {...value, status:autoSync.status()});
     const intelligence = new Intelligence(store, { onChange: id => autoSync.schedule([id]), onStatus: value => operation('intelligence', value), canApply: () => !capturePromise && !trashPromise && !discardPromise && !stopping });
     const timing = () => ({ discardOperation, intelligence: intelligence.status(), trashOperation, appVersion: VERSION, serverNow: Date.now(), stateVersion: diagnostics.startedAt + ':' + store.version + ':' + store.cloudVersion, update: { nextRunAt: nextCaptureAt, lastRunAt: lastCaptureAt, started: !!store.local('localUpdateStarted'), operation: updateOperation } });
     let expiryTimer;const configureExpiry=()=>{clearTimeout(expiryTimer);const entries=expireTrash(store),next=entries.filter(e=>!e.expired).map(e=>Date.parse(e.expiresAt)).sort((a,b)=>a-b)[0];if(next){expiryTimer=setTimeout(configureExpiry,Math.max(1000,Math.min(2147483647,next-Date.now())));expiryTimer.unref();}};configureExpiry();
-    const trashSnapshot = () => ({ trashEntries:(store.local('trashEntries')||[]).filter(e=>!e.expired&&!e.restoredAt), trashNative:nativeTrashCandidates(store) });
-    const snapshot = () => ({ ...autoSync.decorate(store.snapshot()), preferences: preferences(store), ...trashSnapshot() });
+    const trashSnapshot = () => ({ trashEntries:(store.local('trashEntries')||[]).filter(e=>!e.expired&&!e.restoredAt).map(e=>({...e,projectIds:e.projectIds||[...new Set(e.branchIds.map(id=>store.find('branch',id)?.projectId||INBOX_ID))]})), trashNative:nativeTrashCandidates(store) });
+    const snapshot = () => ({ clientLinks, ...autoSync.decorate(store.snapshot()), preferences: preferences(store), ...trashSnapshot() });
     const server = http.createServer(async (req, res) => {
         const started = performance.now(), requestId = id().slice(0, 8);
         const beforeManagement = req.method !== 'GET' && /^\/api\/(trees|move|manage|projects|branches|conflicts)(?:\/|$)/.test(req.url) ? management() : null;
@@ -78,7 +82,7 @@ export function createApp({ root, roots, guard, demo = false }) {
                 return send(200, webAssets.get(file), file.endsWith('.css') ? 'text/css' : file.endsWith('.js') ? 'text/javascript' : 'text/html; charset=utf-8');
             }
             if (req.method === 'GET' && route === '/api/bootstrap') {
-                return send(200, { token, demo, ...snapshot(), ...timing(), roots: native.roots, cloud: autoSync.status(), lastSync: store.local('lastSync'), plan: native.plan() });
+                return send(200, { token, demo, ...snapshot(), ...timing(), clientLinks, roots: native.roots, cloud: autoSync.status(), lastSync: store.local('lastSync'), plan: native.plan() });
             }
             const supplied = Buffer.from(req.headers['x-grove-token'] || '');
             assert(supplied.length === token.length && timingSafeEqual(supplied, Buffer.from(token)), '本地访问凭证无效，请刷新页面', 403);
@@ -138,7 +142,7 @@ export function createApp({ root, roots, guard, demo = false }) {
                         discardPromise=discardChanges(store,autoSync.cloud,native,body.selections,{confirmation:body.confirmation,onProgress:report,deactivate:async branchIds=>{
                             const before=store.instances();
                             if(!demo&&!guard)await archiveNative(store,native,branchIds,{archiveBranches:false});
-                            else{try{for(const id of branchIds)native.setActive(id,null,false);native.apply(branchIds);}catch(error){const current=store.instances();for(const i of current){const old=before.find(v=>v.id===i.id);i.desired=old?.desired||false;}store.local('instances',current);throw error;}}
+                            else{try{for(const id of branchIds)native.setActive(id,null,false);await native.applyAsync(branchIds,{onProgress:report});}catch(error){const current=store.instances();for(const i of current){const old=before.find(v=>v.id===i.id);i.desired=old?.desired||false;}store.local('instances',current);throw error;}}
                             await refreshNativeClients(native,before);
                         }});
                         const result=await discardPromise;const dirty=new Set(autoSync.cloud.dirtyIds());autoSync.queue=new Set([...autoSync.queue].filter(id=>dirty.has(id)));store.local('uploadQueue',[...autoSync.queue]);return result;
@@ -184,7 +188,7 @@ export function createApp({ root, roots, guard, demo = false }) {
                 const selectedIds=new Set(requestedTrees.length?requestedTrees.flatMap(id=>treeMembers(store,id).filter(b=>!b.synthetic&&!isTrashed(store,b.id)).map(b=>b.id)):ids);
                 assert(!store.instances().some(i=>selectedIds.has(i.branchId)&&isActive(i)),'Deactivate all active sessions in the selection before moving it to Trash.',409);
                 const entry=await runTrash('trash',async report=>{
-                    await report({phase:'Reading local changes',completed:0,total:null});native.collect();
+                    await report({phase:'Reading local changes',completed:0,total:null});native.collect(ids);
                     assert(!store.instances().some(i=>selectedIds.has(i.branchId)&&isActive(i)),'Deactivate all active sessions in the selection before moving it to Trash.',409);
                     const entry=await stageTrashAsync(store,ids,treeIds,{onProgress:report});
                     const copies=store.instances().filter(i=>ids.includes(i.branchId)&&i.file&&fs.existsSync(i.file));
@@ -193,15 +197,17 @@ export function createApp({ root, roots, guard, demo = false }) {
                     configureExpiry();autoSync.reconcileTimer();return {...entry,blocked:cleanup.blocked};
                 });return send(202,entry);
             }
-            if(req.method==='POST'&&route==='/api/trash/restore'){const result=restoreTrash(store,body.id);autoSync.schedule();return send(201,result);}
+            if(req.method==='POST'&&route==='/api/trash/restore'){const result=await runTrash('restore',report=>restoreTrashAsync(store,body.id,{onProgress:report}));repairLegacyRecoveries(store);autoSync.schedule();return send(201,result);}
             if(req.method==='POST'&&route==='/api/trash/native'){
                 const ids=body.instanceIds || nativeTrashCandidates(store).filter(i=>(body.branchIds||[]).includes(i.branchId)).map(i=>i.id);
+                assert(Array.isArray(ids)&&ids.length&&ids.every(id=>typeof id==='string'),'Select available client copies.');
                 const result=await runTrash('recovery',report=>moveNativeToRecovery(store,native,ids,{onProgress:report}));configureExpiry();autoSync.schedule();return send(200,result);
             }
             if(req.method==='POST'&&route==='/api/trash/recovery'){
                 assert(Array.isArray(body.ids)&&body.ids.length&&body.ids.every(id=>typeof id==='string'),'Select recovery copies.');
                 assert(['restore','delete'].includes(body.action),'Choose Restore or Delete now.');
-                const result=body.action==='restore'?restoreRecoveryCopies(store,body.ids):deleteRecoveryCopies(store,body.ids);
+                const result=await runTrash(body.action,async report=>body.action==='restore'?restoreRecoveryCopiesAsync(store,body.ids,{onProgress:report}):(await report({phase:'Deleting recovery copies',completed:0,total:body.ids.length}),deleteRecoveryCopies(store,body.ids)));
+                if(body.action==='restore')repairLegacyRecoveries(store);
                 configureExpiry();autoSync.schedule();return send(200,result);
             }
             if (req.method === 'POST' && route === '/api/move') {
@@ -216,17 +222,22 @@ export function createApp({ root, roots, guard, demo = false }) {
             if (req.method === 'POST' && ['/api/node-activation/check', '/api/node-activation/activate'].includes(route)) {
                 const selected = nodeActivation(store, native, body), check = selected.preview;
                 if (route.endsWith('/check')) return send(200, check);
+                const result=await runTrash('activate',async report=>{
+                    await report({phase:'Preparing selected context',completed:0,total:null});
                 assert(check.complete, 'Select a node ending at a completed turn.');
                 assert(body.contextAcknowledgement === check.fingerprint, 'Activation preview changed. Review it again.', 409);
                 assert(typeof body.cwd === 'string' && path.isAbsolute(body.cwd) && fs.existsSync(body.cwd) && fs.statSync(body.cwd).isDirectory(), 'Choose an existing working directory.');
                 let branch = selected.branch;
                 if (check.createsContinuation) { branch = store.fork(branch.id, { name: branch.name.slice(0, 200), end: selected.end, revisionId: branch.head, nodeBoundary: selected.nodeBoundary }); branch = store.put('branch', { ...branch, activationNodeName: check.nodeName }); }
                 const before = store.instances();
-                try { native.setActive(branch.id, body.cwd, true, { nodeName: check.nodeName }); native.apply([branch.id]); }
+                await report({phase:'Writing native session',completed:0,total:null});
+                try { native.setActive(branch.id, body.cwd, true, { nodeName: check.nodeName }); await native.applyAsync([branch.id],{onProgress:report}); }
                 catch (e) { store.local('instances', before); if (check.createsContinuation) e.message = 'Continuation saved, but activation failed: ' + e.message; throw e; }
                 autoSync.schedule([branch.id]); intelligence.observe();
+                await report({phase:'Refreshing client sessions',completed:0,total:null});
                 const clientRefresh=await refreshNativeClients(native,before);
-                return send(201, { branch, clientRefresh, title: check.title, nodeId: check.createsContinuation ? 'empty-' + branch.id : selected.node.id });
+                return { branch, clientRefresh, title: check.title, nodeId: check.createsContinuation ? 'empty-' + branch.id : selected.node.id };
+                });return send(201,result);
             }
             if (req.method === 'POST' && ['/api/conversion-check', '/api/convert'].includes(route)) {
                 const selected = body.nodeId ? nodeActivation(store, native, body) : null;
@@ -238,16 +249,23 @@ export function createApp({ root, roots, guard, demo = false }) {
                 if (route === '/api/conversion-check') return send(200, { ...prepared.preview, budget, title: groveTitle(prepared.branch.name, selected?.preview.nodeName || 'Pending') });
                 assert(!budget.risk || body.contextAcknowledgement === budget.fingerprint, 'Review the context-length warning before activating.', 409);
                 assert(typeof body.cwd === 'string' && path.isAbsolute(body.cwd) && fs.existsSync(body.cwd) && fs.statSync(body.cwd).isDirectory(), 'Choose an existing working directory.');
+                const converted=await runTrash('convert',async report=>{
+                await report({phase:'Converting selected context',completed:0,total:null});
                 const result = createConversion(store, body.branchId, body);
                 const before=store.instances();
-                try { native.setActive(result.branch.id, body.cwd, true, { nodeName: selected?.preview.nodeName || 'Pending' }); native.apply([result.branch.id]); }
+                await report({phase:'Writing native session',completed:0,total:null});
+                try { native.setActive(result.branch.id, body.cwd, true, { nodeName: selected?.preview.nodeName || 'Pending' }); await native.applyAsync([result.branch.id],{onProgress:report}); }
                 catch (e) { native.setActive(result.branch.id, null, false); throw Object.assign(new Error(`Conversion was saved in Grove but activation failed: ${e.message}`), { status: e.status || 409 }); }
                 autoSync.schedule([result.branch.id]);
+                await report({phase:'Refreshing client sessions',completed:0,total:null});
                 result.clientRefresh=await refreshNativeClients(native,before);
-                return send(201, result);
+                return result;
+                });return send(201,converted);
             }
             if (req.method === 'POST' && route === '/api/manage') {
                 assert(['activate', 'deactivate', 'archive', 'restore'].includes(body.action), 'Unknown session action.');
+                const managed=await runTrash(body.action,async report=>{
+                await report({phase:'Checking selected sessions',completed:0,total:null});
                 if (body.projectId && autoSync.passphrase !== null) {
                     await autoSync.openProject(body.projectId);
                     for (const i of autoSync.cloud.items().filter(i => i.projectId === body.projectId)) await autoSync.openTree(i.id);
@@ -283,12 +301,13 @@ export function createApp({ root, roots, guard, demo = false }) {
                 }
                 // Metadata changes follow successful native changes. A busy client leaves
                 // both membership and Archive state untouched; the user can retry safely.
+                await report({phase:'Updating native sessions',completed:0,total:null});
                 const before = store.instances();
-                if (['archive','deactivate'].includes(body.action) && !demo && !guard) await archiveNative(store,native,members.filter(b=>!b.synthetic).map(b=>b.id),{archiveBranches:body.action==='archive'});
+                if (['archive','deactivate'].includes(body.action) && !demo && !guard) await archiveNative(store,native,members.filter(b=>!b.synthetic).map(b=>b.id),{archiveBranches:body.action==='archive',onProgress:report});
                 else if (body.action !== 'restore') {
                     try {
                         for (const b of members.filter(b => !b.synthetic)) native.setActive(b.id, body.cwd, body.action === 'activate');
-                        if (native.plan().operations.some(op => members.some(b => b.id === op.branchId))) native.apply(members.map(b => b.id));
+                        if (native.plan().operations.some(op => members.some(b => b.id === op.branchId))) await native.applyAsync(members.map(b => b.id),{onProgress:report});
                     } catch (e) {
                         const after = store.instances();
                         for (const i of after) { const old = before.find(v => v.id === i.id); i.desired = old ? old.desired : false; }
@@ -305,6 +324,7 @@ export function createApp({ root, roots, guard, demo = false }) {
                         members = members.map(b => store.get('branch', b.id));
                     }
                     for (const b of members) store.edit(b.id, { archived: body.action === 'archive' });
+                    if(body.action==='restore'){const selected=new Set(members.map(b=>b.id));store.local('instances',store.instances().map(i=>selected.has(i.branchId)&&i.nativeArchived?{...i,deactivatedByGrove:true,desired:false,applied:false}:i));}
                     if (body.projectId) {
                         const p = store.get('project', body.projectId);
                         store.put('project', metadata(p, { archived: body.action === 'archive' }));
@@ -315,8 +335,10 @@ export function createApp({ root, roots, guard, demo = false }) {
                         }
                     }
                 });
+                await report({phase:'Refreshing client sessions',completed:0,total:null});
                 const clientRefresh=await refreshNativeClients(native,before);
-                return send(200, { changed: members.filter(b => !b.synthetic).length, clientRefresh });
+                return { changed: members.filter(b => !b.synthetic).length, clientRefresh,branchIds:members.filter(b=>!b.synthetic).map(b=>b.id),projectIds:[...new Set(members.map(b=>b.projectId||INBOX_ID))] };
+                });return send(200,managed);
             }
             const compaction = route.match(/^\/api\/branches\/([^/]+)\/compaction$/);
             if (req.method === 'POST' && compaction) return send(200, store.setCompaction(compaction[1], body));
@@ -420,7 +442,7 @@ export function createApp({ root, roots, guard, demo = false }) {
         let emittedAt=0,phaseStartedAt=Date.now();
         const report=async progress=>{const at=Date.now(),changed=trashOperation.progress?.phase!==progress.phase;if(changed&&trashOperation.progress)diagnostics.record('trash-phase',{phase:trashOperation.progress.phase,durationMs:at-phaseStartedAt});if(changed)phaseStartedAt=at;trashOperation={...trashOperation,progress};if(changed||progress.completed===progress.total||at-emittedAt>=100){operation('trash',trashOperation);emittedAt=at;}await new Promise(resolve=>setImmediate(resolve));};
         trashPromise=(async()=>{
-            try {const result=await task(report);trashOperation={...trashOperation,state:result?.blocked?.length?'error':'success',error:result?.blocked?.map(e=>e.reason).join('\n')||null,finishedAt:Date.now()};return result;}
+            try {const result=await task(report);trashOperation={...trashOperation,state:(result?.blocked?.length||result?.failed?.length)?'error':'success',error:[...(result?.blocked||[]),...(result?.failed||[])].map(e=>e.reason).join('\n')||null,finishedAt:Date.now()};return result;}
             catch(error){trashOperation={...trashOperation,state:'error',error:error.message,finishedAt:Date.now()};throw error;}
             finally{if(trashOperation.progress)diagnostics.record('trash-phase',{phase:trashOperation.progress.phase,durationMs:Date.now()-phaseStartedAt});operation('trash',trashOperation);}
         })();

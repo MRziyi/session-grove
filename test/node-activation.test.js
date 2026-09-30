@@ -224,3 +224,16 @@ test('discard waits for an existing operation instead of requiring the user to r
   const result=await request;assert.equal(result.status,200,JSON.stringify(result.value));assert.equal(result.value.discarded,1);assert.ok(!app.store.find('branch',b.id));
  }finally{release?.();await transfer;}
 });
+
+test('settings-only capture keeps a mid-turn continuation reactivatable in another directory',async t=>{
+ const {app,root}=await setup(t),store=app.store;
+ const raw=codexSample(root,[['Question','Boundary answer']]).trim().split('\n').slice(0,-1).join('\n')+'\n';
+ const source=store.branch(null,'Boundary','codex',raw),fork=store.fork(source.id,{name:'Continuation',end:store.parsed(source.head,'codex').records.length,nodeBoundary:true});store.put('branch',{...fork,activationNodeName:'Boundary'});
+ app.native.setActive(fork.id,root,true);await app.native.applyAsync([fork.id]);const instance=store.instances().find(i=>i.branchId===fork.id);
+ fs.appendFileSync(instance.file,JSON.stringify({type:'event_msg',payload:{type:'thread_settings_applied'}})+'\n');app.native.collect();
+ // Production archive clears this pending marker after checking readyToDeactivate.
+ store.local('instances',store.instances().map(i=>i.id===instance.id?{...i,pending:null}:i));app.native.setActive(fork.id,null,false);await app.native.applyAsync([fork.id]);
+ const destination=path.join(root,'another-directory');fs.mkdirSync(destination);app.native.setActive(fork.id,destination,true);await app.native.applyAsync([fork.id]);
+ assert.ok(store.instances().some(i=>i.branchId===fork.id&&i.cwd===fs.realpathSync(destination)&&i.applied));
+ assert.equal(store.raw(source.head),raw);
+});

@@ -71,7 +71,7 @@ export async function discardChanges(store,cloud,native,selections,{confirmation
     }
     await onProgress({phase:'Saving recovery copy'});
     // Keep a normal, expiring recovery copy before replacing local state.
-    const live=[...replaced].filter(id=>!isTrashed(store,id)),recovery=live.length?await stageTrashAsync(store,live,[],{rescueFor:'discard-pending'}):null;
+    const live=[...replaced].filter(id=>!isTrashed(store,id)),recovery=live.length?await stageTrashAsync(store,live,[],{rescueFor:'discard-pending',onProgress}):null;
     validate();
     await onProgress({phase:'Restoring synced changes'});
     validate();

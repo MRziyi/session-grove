@@ -147,3 +147,13 @@ Fork is a before-node operation. The root has no preceding context and offers no
 Project contents default to a seven-day visible window, with count-based or uncollapsed alternatives in Settings. Empty Ungrouped is absent from the directory; a nonempty Ungrouped remains pinned among recent projects. Sync runs directly with bounded inline progress. Activation and cross-agent conversion choose an existing directory through a local folder browser.
 
 Trash is implemented in 0.13; see [trash-design.md](trash-design.md). Existing Archived records are not automatically converted to deletions. New discard actions use Trash; legacy archives expose an explicit Move to Trash action.
+
+## 1.1 recovery, categories and feedback
+
+Current Active rows support the same whole-tree drag and Move action as Projects; changing project membership preserves native activation. Client archive and Trash group entries by project, with category selection. Restoring from either view returns to Projects, expands the destination and scrolls the restored tree into view with two highlights (a static highlight under reduced motion).
+
+Pending uploads keeps title/category on one line. The date sits beneath its checkbox, alongside the first change bullet; subsequent bullets use the full row width. Select all / Deselect occupies a fixed position and width.
+
+Recovery and native operations report their actual phases in the lower-right task panel. Discard keeps its hover-menu confirmation and also forwards task progress there. Error state persists until dismissed or replaced by a new task. Recovery verifies all referenced records before making the restored graph visible; it does not run a full-library cleanup afterward.
+
+Recovery retains a stable ancestry identity separate from the new restored session ID. Reused family roots keep their current labels and project membership. The 1.0.x detached-recovery repair requires explicit old recovery-event provenance and a verified completed shared prefix, writes a local rollback journal, and never infers lineage from matching titles.

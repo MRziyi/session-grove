@@ -1,7 +1,7 @@
 import { claudeFork } from './claude.js';
 import fs from 'node:fs';
 import path from 'node:path';
-import { gzipSync, gunzipSync, gzip } from 'node:zlib';
+import { gzipSync, gunzipSync, gunzip, gzip } from 'node:zlib';
 import { assert, atomic, id, now, hash } from './util.js';
 import { retainedGraph, bodyRefs, withForkMetadata } from './retention.js';
 import { promisify } from 'node:util';
@@ -193,6 +193,7 @@ function* trashSteps(store, branchIds, treeIds = [], { rescueFor = null, transie
         entry = {
             ...event,
             names: branches.filter((b) => !b.synthetic).map((b) => b.name),
+            projectIds: [...new Set(branches.map(b=>b.projectId||'00000000-0000-4000-8000-000000000001'))],
             expiresAt,
             state: rescueFor ? 'removed' : 'pending',
             ...(rescueFor ? { rescueFor } : {}),
@@ -393,13 +394,9 @@ export function expireTrash(store, at = Date.now()) {
     }
     return entries;
 }
-export function restoreTrash(store, entryId) {
-    const entry = expireTrash(store).find((e) => e.id === entryId);
+function* restoreSteps(store, entryId, backup) {
+    const entry = (store.local('trashEntries')||[]).find((e) => e.id === entryId);
     assert(entry && !entry.expired && !entry.restoredAt, 'The local recovery copy has expired.');
-    const file = path.join(store.root, 'trash', entry.id + '.json.gz'),
-        backup = JSON.parse(
-            gunzipSync(fs.readFileSync(file), { maxOutputLength: 512 * 1024 * 1024 }).toString(),
-        );
     const dependencies = new Set(
         backup.graph.branches.filter((b) => !entry.branchIds.includes(b.id)).map((b) => b.id),
     );
@@ -411,27 +408,56 @@ export function restoreTrash(store, entryId) {
     const mapping = new Map(backup.graph.branches.map((b) => [b.id, id()])),
         selected = new Set(entry.branchIds),
         created = [];
+    yield {phase:'Verifying recovery records',completed:0,total:wanted.size};
+    let verified=0;
+    for (const h of wanted) {
+        assert(typeof backup.objects[h]==='string' && hash(backup.objects[h])===h,'Recovery copy integrity failed.');
+        if(++verified%128===0||verified===wanted.size)yield {phase:'Verifying recovery records',completed:verified,total:wanted.size};
+    }
+    // Unreferenced immutable objects can be staged in short transactions. The graph
+    // and restored marker become visible together only after every body is ready.
+    let written=0;
+    const records=[...wanted];
+    for(let offset=0;offset<records.length;offset+=128){
+        store.transaction(()=>{for(const h of records.slice(offset,offset+128))store.insertObject.run(h,backup.objects[h]);});
+        written=Math.min(offset+128,records.length);
+        yield {phase:'Writing recovery records',completed:written,total:records.length};
+    }
+    yield {phase:'Restoring tree relationships',completed:0,total:null};
+    const existing=store.all('branch'),reused=new Set(),anchors=new Map();
+    const hasKeptPath=branch=>existing.some(candidate=>{
+        if(candidate.synthetic||isTrashed(store,candidate.id))return false;
+        let current=candidate;const seen=new Set();
+        while(current&&!seen.has(current.id)){if(current.id===branch.id)return true;seen.add(current.id);current=store.find('branch',current.parentId);}
+        return false;
+    });
+    for(const b of backup.graph.branches){
+        const identity=b.recoveryIdentity||b.id;
+        const anchor=existing.find(candidate=>(candidate.id===identity||candidate.recoveryIdentity===identity)&&hasKeptPath(candidate));
+        if(!anchor)continue;
+        if(!selected.has(b.id)){mapping.set(b.id,anchor.id);reused.add(b.id);}
+        else if(anchor.synthetic){anchors.set(b.id,anchor);}
+    }
     store.transaction(() => {
-        for (const [h, body] of Object.entries(backup.objects)) {
-            if (!wanted.has(h)) continue;
-            assert(hash(body) === h, 'Recovery copy integrity failed.');
-            store.insertObject.run(h, body);
-        }
         for (const r of backup.graph.revisions)
             if (!store.getStatement.get('revision', r.id)) store.put('revision', r);
         for (const p of backup.graph.projects)
             if (!store.getStatement.get('project', p.id)) store.put('project', p);
         for (const b of backup.graph.branches) {
+            if(reused.has(b.id))continue;
+            const anchor=anchors.get(b.id);
             const restored = {
                 ...b,
                 id: mapping.get(b.id),
                 chatIdentity: b.chatIdentity || b.id,
-                parentId: mapping.get(b.parentId) || null,
+                recoveryIdentity: b.recoveryIdentity || b.id,
+                parentId: anchor?.id || mapping.get(b.parentId) || null,
+                ...(anchor?{forkRevision:anchor.head,forkEnd:store.get('revision',anchor.head).refs.length,forkParentEnd:store.get('revision',anchor.head).refs.length,projectId:anchor.projectId}:{}),
                 trashed: false,
                 trashDependency: false,
                 synthetic: !selected.has(b.id) || b.synthetic,
                 projectId:
-                    b.projectId && store.get('project', b.projectId).archived ? null : b.projectId,
+                    anchor ? anchor.projectId : (b.projectId && store.get('project', b.projectId).archived ? null : b.projectId),
                 archived: false,
                 excluded: selected.has(b.id)?null:b.excluded,
                 background: selected.has(b.id)?null:b.background,
@@ -446,10 +472,20 @@ export function restoreTrash(store, entryId) {
             store.put('branch', restored);
             if (selected.has(b.id) && !restored.synthetic) created.push(restored.id);
         }
+        // A surviving family may have moved while this path was in Trash.
+        // Its current root owns project membership for every restored descendant.
+        for(const branchId of created){
+            const branch=store.get('branch',branchId);let root=branch;const seen=new Set();
+            while(root.parentId&&!seen.has(root.id)){seen.add(root.id);root=store.get('branch',root.parentId);}
+            if(branch.projectId!==root.projectId)store.put('branch',{...branch,projectId:root.projectId});
+            const project=root.projectId&&store.get('project',root.projectId);
+            if(project?.archived)store.put('project',{...project,archived:false,updatedAt:now(),metaVersion:id(),metaAncestors:[...new Set([...(project.metaAncestors||[]),project.metaVersion].filter(Boolean))]});
+        }
         for (const l of backup.graph.layouts) {
             if (!backup.graph.branches.some((b) => b.layoutHead === l.id)) continue;
-            const rootId = mapping.get(l.rootId),
-                layout = { ...l, id: id(), rootId, parent: null, mergeParents: [] };
+            const rootId = anchors.get(l.rootId)?.id || mapping.get(l.rootId), current=store.get('branch',rootId),
+                prior=current.layoutHead&&store.find('layout',current.layoutHead),
+                layout = { ...l, id: id(), rootId, parent: prior?.id||null, mergeParents: [],assignments:{...l.assignments,...(prior?.assignments||{})} };
             store.put('layout', layout);
             const root = store.get('branch', rootId);
             store.put('branch', { ...root, layoutHead: layout.id });
@@ -461,7 +497,7 @@ export function restoreTrash(store, entryId) {
             ),
         );
     });
-    cleanupLocal(store);
+    // Restoring only adds references; a library-wide reclamation is unnecessary.
     return {
         branchIds: created,
         projectIds: [
@@ -474,4 +510,31 @@ export function restoreTrash(store, entryId) {
         ],
         background: created.some((id) => store.get('branch', id).background),
     };
+}
+
+function recoveryFile(store,entryId) {
+    const entry=(store.local('trashEntries')||[]).find(e=>e.id===entryId);
+    assert(entry&&!entry.expired&&!entry.restoredAt&&Date.parse(entry.expiresAt)>Date.now(),'The local recovery copy has expired.');
+    return path.join(store.root,'trash',entry.id+'.json.gz');
+}
+export function restoreTrash(store,entryId) {
+    const backup=JSON.parse(gunzipSync(fs.readFileSync(recoveryFile(store,entryId)),{maxOutputLength:512*1024*1024}).toString());
+    const steps=restoreSteps(store,entryId,backup);
+    for(let step=steps.next();;step=steps.next())if(step.done)return step.value;
+}
+const decompressRecovery=promisify(gunzip);
+export async function restoreTrashAsync(store,entryId,{onProgress=async()=>{}}={}) {
+    store.transferReaders=(store.transferReaders||0)+1;
+    try {
+        await onProgress({phase:'Reading recovery backup',completed:0,total:null});await yieldTask();
+        const compressed=await fs.promises.readFile(recoveryFile(store,entryId));
+        await onProgress({phase:'Decompressing recovery backup',completed:0,total:null});
+        const raw=await decompressRecovery(compressed,{maxOutputLength:512*1024*1024});
+        await onProgress({phase:'Reading recovery graph',completed:0,total:null});await yieldTask();
+        const steps=restoreSteps(store,entryId,JSON.parse(raw.toString()));
+        for(let step=steps.next();;step=steps.next()){
+            if(step.done)return step.value;
+            await onProgress(step.value);await yieldTask();
+        }
+    }finally{store.transferReaders--;}
 }

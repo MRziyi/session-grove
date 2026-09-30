@@ -5,7 +5,7 @@ import {gunzipSync} from 'node:zlib';
 import {bodyRefs} from './retention.js';
 import {DatabaseSync} from 'node:sqlite';
 import {assert,hash,inside,now,safePath} from './util.js';
-import {stageTrashAsync,isTrashed,cleanupLocal,restoreTrash} from './trash.js';
+import {stageTrashAsync,isTrashed,cleanupLocal,restoreTrash,restoreTrashAsync} from './trash.js';
 import {removeTrashNativeCopies} from './trash-native.js';
 import {connect} from './codex-rpc.js';
 import {codexBinary} from './native-archive.js';
@@ -16,7 +16,7 @@ export function nativeTrashCandidates(store) {
     return store.instances().filter(i => {
         const b=store.find('branch',i.branchId);
         return b && (isTrashed(store,b.id) || b.archived || i.nativeArchived) && i.file && fs.existsSync(i.file);
-    }).map(i=>({id:i.id,branchId:i.branchId,title:store.find('branch',i.branchId)?.name || i.title,agent:i.agent,active:i.applied,discarded:isTrashed(store,i.branchId),background:store.find('branch',i.branchId)?.background||null,clientArchived:!isTrashed(store,i.branchId)&&!i.deactivatedByGrove&&(!!i.nativeArchived||!!store.find('branch',i.branchId)?.archived),updatedAt:fs.statSync(i.file).mtime.toISOString(),archived:!!i.nativeArchived || i.file.includes(path.sep+'archived_sessions'+path.sep)}));
+    }).map(i=>({id:i.id,branchId:i.branchId,title:store.find('branch',i.branchId)?.name || i.title,projectId:store.find('branch',i.branchId)?.projectId||null,agent:i.agent,active:i.applied,discarded:isTrashed(store,i.branchId),background:store.find('branch',i.branchId)?.background||null,clientArchived:!isTrashed(store,i.branchId)&&!i.deactivatedByGrove&&(!!i.nativeArchived||!!store.find('branch',i.branchId)?.archived),updatedAt:fs.statSync(i.file).mtime.toISOString(),archived:!!i.nativeArchived || i.file.includes(path.sep+'archived_sessions'+path.sep)}));
 }
 export function checkFileIdle(file) {
     if(process.platform==='win32'){
@@ -70,9 +70,20 @@ export async function moveNativeToRecovery(store,native,instanceIds,{checkFile=c
             let entry=stamp===i.observedHash&&!auxiliary.length&&verifiedRecovery(store,existing)?existing:null;
             if(!entry) {
                 const original=store.find('branch',i.branchId),raw=native.history(i.file,i.agent);
-                const snapshot=temporary=store.branch(original?.projectId,original?.name||i.title||'Session',i.agent,raw,{operation:'import',nativeId:i.nativeId,cwd:i.cwd,...(auxiliary.length?{auxiliary}:{})});
-                store.put('branch',{...snapshot,excluded:'recovery-staging'});
-                entry=await stageTrashAsync(store,[snapshot.id],[snapshot.id],{onProgress:report,transient:true});
+                const source={operation:'import',nativeId:i.nativeId,cwd:i.cwd,...(auxiliary.length?{auxiliary}:{})};
+                const anotherActive=store.instances().some(other=>other.id!==i.id&&other.branchId===i.branchId&&other.applied&&!other.nativeArchived&&!other.missing);
+                if(original&&!isTrashed(store,original.id)&&!anotherActive){
+                    // Archive the real graph path, not an unrelated transcript-only branch.
+                    // Capture native changes/companions before backing up its ancestry and labels.
+                    const revision=store.revision(raw,original.head,source);
+                    store.put('branch',{...original,head:revision.id});
+                    entry=await stageTrashAsync(store,[original.id],[],{onProgress:report});
+                }else{
+                    const snapshot=temporary=store.branch(original?.projectId,original?.name||i.title||'Session',i.agent,raw,source);
+                    const parent=anotherActive&&!original?.parentId&&store.find('revision',original?.head)?original:null;
+                    store.put('branch',{...snapshot,...(original?{parentId:original.parentId,forkRevision:original.forkRevision,forkEnd:original.forkEnd,forkParentEnd:original.forkParentEnd,chatIdentity:original.chatIdentity||original.id,recoveryIdentity:original.recoveryIdentity||original.id}:{}),...(parent?{parentId:parent.id,forkRevision:parent.head,forkEnd:store.get('revision',parent.head).refs.length,forkParentEnd:store.get('revision',parent.head).refs.length}:{}),excluded:'recovery-staging'});
+                    entry=await stageTrashAsync(store,[snapshot.id],[],{onProgress:report,transient:true});
+                }
                 if(!isTrashed(store,i.branchId) && !store.instances().some(other=>other.id!==i.id&&other.branchId===i.branchId&&other.applied&&!other.nativeArchived&&!other.missing)) {
                     const add=e=>e.id===entry.id?{...e,branchIds:[...e.branchIds,i.branchId],heads:{...e.heads,[i.branchId]:original.head}}:e;
                     store.local('trashPending',(store.local('trashPending')||[]).map(add));store.local('trashEntries',(store.local('trashEntries')||[]).map(add));store.invalidate();
@@ -108,5 +119,16 @@ export function deleteRecoveryCopies(store,entryIds) {
 export function restoreRecoveryCopies(store,ids) {
     const restored=[],failed=[];
     for(const id of [...new Set(ids)])try{restored.push({id,...restoreTrash(store,id)});}catch(e){failed.push({id,reason:e.message});}
+    return {restored,failed};
+}
+
+export async function restoreRecoveryCopiesAsync(store,ids,{onProgress=async()=>{}}={}) {
+    const restored=[],failed=[],unique=[...new Set(ids)];
+    for(const [index,id] of unique.entries()) {
+        await onProgress({phase:'Restoring recovery copies',completed:index,total:unique.length});
+        try { restored.push({id,...await restoreTrashAsync(store,id,{onProgress})}); }
+        catch(error) { failed.push({id,reason:error.message}); }
+    }
+    await onProgress({phase:'Recovery finished',completed:unique.length,total:unique.length});
     return {restored,failed};
 }

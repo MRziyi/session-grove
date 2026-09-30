@@ -76,7 +76,7 @@ pnpm run demo
 
 ## 继续了解
 
-[部署与排错](docs/operations.md) · [上下文与分支](docs/context-and-sync.md) · [Git 同步](docs/git-sync.md) · [1.0 验证与性能](docs/1.0-windows-validation.md) · [更新记录](CHANGELOG.md)
+[部署与排错](docs/operations.md) · [上下文与分支](docs/context-and-sync.md) · [Git 同步](docs/git-sync.md) · [1.0 验证与性能](docs/1.0-windows-validation.md) · [1.1 真实资料库验证](docs/1.1-validation.md) · [更新记录](CHANGELOG.md)
 
 反馈问题时，请附上选择了什么、发生了什么，以及界面的错误编号。请勿将私密对话或凭据放入公开 issue。
 

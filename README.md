@@ -76,7 +76,7 @@ Sessions remain local and the sync repository contains readable history. Your pr
 
 ## Learn more
 
-[Setup and troubleshooting](docs/operations.md) · [Context and branches](docs/context-and-sync.md) · [Git sync](docs/git-sync.md) · [1.0 validation and performance](docs/1.0-windows-validation.md) · [Changelog](CHANGELOG.md)
+[Setup and troubleshooting](docs/operations.md) · [Context and branches](docs/context-and-sync.md) · [Git sync](docs/git-sync.md) · [1.0 validation and performance](docs/1.0-windows-validation.md) · [1.1 real-workspace validation](docs/1.1-validation.md) · [Changelog](CHANGELOG.md)
 
 For a bug report, include what you selected, what happened and the error reference shown in the interface. Please keep private conversation text and credentials out of public issues.
 

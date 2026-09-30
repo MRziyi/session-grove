@@ -30,7 +30,8 @@ export class Store {
       CREATE INDEX IF NOT EXISTS entities_kind ON entities(kind);
       CREATE TABLE IF NOT EXISTS objects (hash TEXT PRIMARY KEY, body TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS summaries (id TEXT, agent TEXT, version INTEGER, body TEXT, PRIMARY KEY(id,agent));
-      CREATE TABLE IF NOT EXISTS local (key TEXT PRIMARY KEY, body TEXT NOT NULL);`);
+      CREATE TABLE IF NOT EXISTS local (key TEXT PRIMARY KEY, body TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS instance_baselines (hash TEXT PRIMARY KEY, body TEXT NOT NULL);`);
         fs.chmodSync(path.join(root, 'grove.sqlite'), 0o600);
         this.version = 0; this.cloudVersion = 0; this.cloudCache = new Map(); this.memoCache = new Map(); this.parseCache = new Map(); this.parseBytes = 0; this.summaryCache = new Map(); this.recordCache = new Map(); this.recordBytes = 0;
         this.getStatement = this.db.prepare('SELECT body FROM entities WHERE kind=? AND id=?');
@@ -117,10 +118,29 @@ export class Store {
         }
 
         if (key === 'instances') {
-            if (this.instanceCache === undefined) { const row = this.localRead.get(key); this.instanceCache = row ? JSON.parse(row.body) : []; }
+            if (this.instanceCache === undefined) {
+                const row = this.localRead.get(key);this.instanceCache=row?JSON.parse(row.body):[];
+                for(const instance of this.instanceCache)if(instance.baselineRef){const baseline=this.db.prepare('SELECT body FROM instance_baselines WHERE hash=?').get(instance.baselineRef);assert(baseline,'Native baseline is missing.',409);instance.baseline=baseline.body;}
+            }
             if (arguments.length === 2) {
                 const same = this.instanceCache.length === value.length && value.every((v, i) => Object.keys(v).length === Object.keys(this.instanceCache[i]).length && Object.keys(v).every(k => v[k] === this.instanceCache[i][k]));
-                if (!same) { this.invalidate(); this.localWrite.run(key, JSON.stringify(value)); this.instanceCache = value.map(i => ({ ...i })); }
+                if (!same) {
+                    const previous=new Map(this.instanceCache.map(i=>[i.id,i]));
+                    const persist=()=>{
+                        const rows=value.map(instance=>{
+                            const old=previous.get(instance.id),{baseline,baselineRef:ignored,...metadata}=instance;
+                            if(!baseline)return {...metadata,baseline};
+                            const baselineRef=old?.baseline===baseline&&old.baselineRef?old.baselineRef:hash(baseline);
+                            if(baselineRef!==old?.baselineRef)this.db.prepare('INSERT OR IGNORE INTO instance_baselines VALUES (?,?)').run(baselineRef,baseline);
+                            return {...metadata,baseline:null,baselineRef};
+                        });
+                        this.localWrite.run(key,JSON.stringify(rows));
+                        const kept=new Set(rows.map(i=>i.baselineRef).filter(Boolean));
+                        for(const ref of new Set(this.instanceCache.map(i=>i.baselineRef).filter(Boolean)))if(!kept.has(ref))this.db.prepare('DELETE FROM instance_baselines WHERE hash=?').run(ref);
+                        this.instanceCache=rows.map((row,index)=>({...row,baseline:value[index].baseline}));this.invalidate();
+                    };
+                    if(this.db.isTransaction)persist();else this.transaction(persist);
+                }
                 return value;
             }
             // Instance fields are scalar. Reuse immutable baseline strings rather than
@@ -237,7 +257,7 @@ export class Store {
         if (lineage.some(r => r.source.requiresAuxiliary))
             if (!lineage.some(r => r.source.auxiliary) && !(b.agent === 'claude' && lineage[0]?.source.operation === 'fork')) p.warnings.push('来源含尚未收纳的伴随目录；当前版本禁止激活或移除原生实例');
         if (b.prefixUnavailable) p.warnings.push('Native parent is known, but its shared prefix was changed or compacted. Ancestry is retained without merging unverifiable chats.');
-        return { ...b, nativeTitleSource: this.summary(b.head,b.agent).titleSource, ...pendingDetail(this, b, p), messages: p.messages, checkpoints: p.checkpoints, warnings: p.warnings, cwd: p.cwd, records: p.records.length, lineage, instances: this.instances().filter(i => i.branchId === b.id).map(({ baseline, observedHash, ...i }) => i) };
+        return { ...b, nativeTitleSource: this.summary(b.head,b.agent).titleSource, ...pendingDetail(this, b, p), messages: p.messages, checkpoints: p.checkpoints, warnings: p.warnings, cwd: p.cwd, records: p.records.length, lineage, instances: this.instances().filter(i => i.branchId === b.id).map(({ baseline, baselineRef, observedHash, ...i }) => i) };
     }
     setCompaction(branchId, { eventId, enabled, head }) {
         const b = this.get('branch', branchId); assert(!isTrashed(this,b.id)&&!b.archived && !b.excluded && !(b.projectId && this.get('project', b.projectId).archived), 'Restore this session before organizing.');
@@ -267,7 +287,7 @@ export class Store {
     snapshot() { return this.memo('snapshot', () => this.buildSnapshot()); }
     buildSnapshot() {
         return { ...this.collections(), device:this.device, projects:this.all('project'), branches:this.all('branch').filter(b=>!b.excluded&&!isTrashed(this,b.id)),
-            instances:this.instances().filter(i=>!i.excluded).map(({baseline,observedHash,summaryJson,summaryRevision,summaryVersion,observedStamp,...i})=>i), conflicts:this.local('conflicts') || [] };
+            instances:this.instances().filter(i=>!i.excluded).map(({baseline,baselineRef,observedHash,summaryJson,summaryRevision,summaryVersion,observedStamp,...i})=>i), conflicts:this.local('conflicts') || [] };
     }
 
     isTrashed(id) { return isTrashed(this,id); }

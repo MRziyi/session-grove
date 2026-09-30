@@ -43,14 +43,14 @@ let clockTimer = null, modalVersion = 0;
 const operations = {}, operationTimers = {}, seenOperations={};
 let activityGroups=[];
 function showOperation(kind, value) {
-    if(kind==='discard'){if(state.pendingDiscard){if(value.phase&&!state.pendingDiscard.steps.includes(value.phase))state.pendingDiscard.steps.push(value.phase);renderDiscardProgress();}return;}
+    if(kind==='discard'){if(state.pendingDiscard){if(value.phase&&!state.pendingDiscard.steps.includes(value.phase))state.pendingDiscard.steps.push(value.phase);renderDiscardProgress();}showOperation('trash',{...value,action:'discard',progress:{phase:value.phase,completed:value.completed,total:value.total,detail:value.detail},state:value.state==='confirmation'?'success':value.state,finishedAt:value.state!=='running'?Date.now():undefined});return;}
     if(kind==='intelligence'){if(state.data)state.data.intelligence=value;renderCloudStatus();return;}
     const signature=value.id+':'+value.state+':'+JSON.stringify(value.progress||null); if(seenOperations[kind]===signature)return;seenOperations[kind]=signature;
-    if (value.finishedAt && Date.now() - value.finishedAt > 3500) { if(kind==='trash'){delete operations.trash;if(state.data)state.data.trashOperation=value;renderCloudStatus();} return; }
+    if (value.state==='success' && value.finishedAt && Date.now() - value.finishedAt > 3500) { if(kind==='trash'){delete operations.trash;if(state.data)state.data.trashOperation=value;renderCloudStatus();} return; }
     operations[kind] = value;
     if(value.status && state.data){ if(kind==='sync')state.data.cloud=value.status;else state.data.update={...state.data.update,...value.status}; }
     clearTimeout(operationTimers[kind]);
-    if (value.state !== 'running') operationTimers[kind] = setTimeout(() => { delete operations[kind]; renderCloudStatus(); }, 3500);
+    if (value.state === 'success') operationTimers[kind] = setTimeout(() => { delete operations[kind]; renderCloudStatus(); }, 3500);
     renderCloudStatus();
 }
 let eventController;
@@ -164,7 +164,7 @@ const pendingSelection=new Map();
 let pendingTimer, pendingTicket = 0, completionTimer, fillOperation = null, fillState = {pull:0,push:0};
 const bytesLabel = bytes => bytes < 1024 ? `${bytes || 0} B` : bytes < 1048576 ? `${(bytes / 1024).toFixed(1)} KiB` : `${(bytes / 1048576).toFixed(1)} MiB`;
 function positionSyncPanel(panel, anchor) {
-    const rect = anchor.getBoundingClientRect(), width = Math.min(420, innerWidth - 20), top = Math.min(Math.max(rect.bottom, $('.banner').getBoundingClientRect().bottom) + (panel.id==='pending-uploads'?0:8), innerHeight - 80);
+    const rect = anchor.getBoundingClientRect(), width = Math.min(panel.id==='pending-uploads'?380:420, innerWidth - 20), top = Math.min(Math.max(rect.bottom, $('.banner').getBoundingClientRect().bottom) + (panel.id==='pending-uploads'?0:8), innerHeight - 80);
     Object.assign(panel.style, { width: width + 'px', left: Math.max(10, Math.min(rect.right - width, innerWidth - width - 10)) + 'px', top: top + 'px', maxHeight: Math.max(60, innerHeight - top - 12) + 'px' });
 }
 function showSyncPanel(panel, anchor) { panel.hidden = false; panel.showPopover?.(); positionSyncPanel(panel, anchor); }
@@ -246,15 +246,16 @@ function renderTransfer() {
 }
 function renderTrashProgress() {
     const op=operations.trash||state.data?.trashOperation,box=$('#trash-progress');
-    box.hidden=!op||op.state!=='running'&&Date.now()-(op.finishedAt||0)>3500;
+    box.hidden=!op||state.dismissedTask===op.id||op.state==='success'&&Date.now()-(op.finishedAt||0)>3500;
     if(box.hidden){box.hidePopover?.();return;}
     if(box.showPopover&&!box.matches(':popover-open'))box.showPopover();
     const p=op.progress||{},total=p.total,count=p.completed||0;
-    box.innerHTML=`<strong>${t(op.action==='recovery'?'Move to recovery':'Move to Trash')}</strong><div>${esc(t(op.state==='error'?op.error:op.state==='success'?'Complete':p.phase||'Checking selection'))}</div>${p.detail?`<small class="task-detail">${esc(p.detail)}</small>`:''}${op.state==='running'?`<progress ${total>0?`max="${total}" value="${count}"`:''}></progress>${total>0?`<small>${count} / ${total}</small>`:''}`:''}`;
+    box.innerHTML=`<strong>${t(({recovery:'Move to recovery',restore:'Restore to Projects',delete:'Delete recovery copies',activate:'Activate',deactivate:'Deactivate',archive:'Client archive',convert:'Activate as',discard:'Discard'})[op.action]||'Move to Trash')}</strong>${op.state==='error'?`<button type="button" data-dismiss-task aria-label="${t('Close')}">×</button>`:''}<div>${esc(t(op.state==='error'?op.error:op.state==='success'?'Complete':p.phase||'Checking selection'))}</div>${p.detail?`<small class="task-detail">${esc(p.detail)}</small>`:''}${op.state==='running'?`<progress ${total>0?`max="${total}" value="${count}"`:''}></progress>${total>0?`<small>${count} / ${total}</small>`:''}`:''}`;
+    const dismiss=box.querySelector('[data-dismiss-task]');if(dismiss)dismiss.onclick=()=>{state.dismissedTask=op.id;renderTrashProgress();};
 }
 async function trashRequest(path,body,action) {
     showOperation('trash',{id:'pending-'+Date.now(),action,state:'running',startedAt:Date.now(),progress:{phase:'Checking selection'}});
-    try {const result=await api(path,'POST',body);if(operations.trash?.state==='running')showOperation('trash',{...operations.trash,state:result.blocked?.length?'error':'success',error:result.blocked?.map(e=>e.reason).join('\n'),finishedAt:Date.now()});return result;}
+    try {const result=await api(path,'POST',body);if(operations.trash?.state==='running')showOperation('trash',{...operations.trash,state:(result.blocked?.length||result.failed?.length)?'error':'success',error:[...(result.blocked||[]),...(result.failed||[])].map(e=>e.reason).join('\n'),finishedAt:Date.now()});return result;}
     catch(error){showOperation('trash',{...operations.trash,state:'error',error:error.message,finishedAt:Date.now()});throw error;}
 }
 function renderDiscardProgress(){
@@ -284,7 +285,7 @@ async function showPendingUploads(force=false){
     try{
         const data=await api('/synchronize/pending');if(ticket!==pendingTicket||box.hidden)return;
         for(const id of pendingSelection.keys()){const item=data.items.find(i=>i.id===id);if(item)pendingSelection.set(id,item.version);else pendingSelection.delete(id);}
-        box.innerHTML=`<div class="pending-heading"><strong>${t('Pending uploads')}</strong><div class="actions"><button type="button" id="pending-select-all"></button><button type="button" id="discard-pending" hidden>${t('Discard')}</button></div></div>${data.items.length?`<ul>${data.items.map(i=>`<li class="pending-row"><div><span>${esc(i.name)}</span>${i.project?`<small>${esc(i.project)}</small>`:''}${i.changes?.length?`<ul class="pending-changes">${i.changes.map(c=>`<li>${c.session&&c.session!==i.name?esc(c.session)+': ':''}${esc(t(c.label,c))}</li>`).join('')}</ul>`:''}<small>${esc(date(i.updatedAt))}</small></div><input type="checkbox" data-pending-select="${esc(i.id)}" aria-label="${esc(t('Select {name}',{name:i.name}))}" ${pendingSelection.has(i.id)?'checked':''}></li>`).join('')}</ul>`:`<p>${t('No local changes waiting to upload.')}</p>`}<div id="pending-progress" role="status" aria-live="polite"></div>`;
+        box.innerHTML=`<div class="pending-heading"><strong>${t('Pending uploads')}</strong><div class="actions"><button type="button" id="discard-pending" hidden>${t('Discard')}</button><button type="button" id="pending-select-all"></button></div></div>${data.items.length?`<ul>${data.items.map(i=>`<li class="pending-row"><div class="pending-title"><span title="${esc(i.name)}">${esc(i.name)}</span>${i.project?`<small title="${esc(i.project)}">${esc(i.project)}</small>`:''}</div><input type="checkbox" data-pending-select="${esc(i.id)}" aria-label="${esc(t('Select {name}',{name:i.name}))}" ${pendingSelection.has(i.id)?'checked':''}><div class="pending-summary"><time>${esc(date(i.updatedAt))}</time>${i.changes?.length?`<ul class="pending-changes">${i.changes.map(c=>`<li>${c.session&&c.session!==i.name?esc(c.session)+': ':''}${esc(t(c.label,c))}</li>`).join('')}</ul>`:''}</div></li>`).join('')}</ul>`:`<p>${t('No local changes waiting to upload.')}</p>`}<div id="pending-progress" role="status" aria-live="polite"></div>`;
         const update=()=>{$('#discard-pending').hidden=!pendingSelection.size;$('#pending-select-all').textContent=t(pendingSelection.size?'Deselect':'Select all');$('#pending-select-all').disabled=!data.items.length;};update();
         const clearProgress=()=>{state.pendingDiscard=null;$('#pending-progress').replaceChildren();};
         $('#pending-select-all').onclick=()=>{clearProgress();if(pendingSelection.size)pendingSelection.clear();else for(const i of data.items)pendingSelection.set(i.id,i.version);for(const el of $$('[data-pending-select]'))el.checked=pendingSelection.has(el.dataset.pendingSelect);update();};
@@ -356,7 +357,7 @@ function renderList() {
     $('#list-count').textContent = t('{count} sessions', { count: state.list.sessionCount || 0 });
     const selected = state.list.items.filter(i => state.selected.has(i.id));
     const activeIds=[...new Set(selected.flatMap(i=>(state.data.items.find(v=>v.id===i.id)||i).sessions.filter(s=>s.active).map(s=>s.id)))];
-    const organizing = !state.scope.startsWith('active:') && state.scope !== 'archived';
+    const organizing = state.scope !== 'archived';
     $('#list-actions').innerHTML = '<button id="select-all"></button>' + (selected.length ? `<span class="selection-count">${t('{count} selected',{count:selected.length})}</span>${selected.length===1?'<button id="rename-items"></button>':''}${state.scope==='archived'?'<button id="restore-items"></button>':organizing?'<button id="move-items"></button>':''}<button id="archive-items"></button>`:'');
     button('#rename-items', 'Rename', () => renameSession(selected[0]));
     button('#select-all',state.selected.size?'Deselect':'Select all',()=>{state.selected=state.selected.size?new Set():new Set(state.list.items.map(i=>i.id));renderList();});
@@ -440,7 +441,7 @@ function renderDetailActions() {
     const dissolve = state.tree.nodes.some(n => !n.pending && n.chatIds.some(id => state.chats.has(id)));
     $('#detail-actions').innerHTML = state.chats.size ? `<span>${t('{count} selected', { count: state.chats.size })}</span>${editable && state.rangeEnd !== null && canCombine() ? '<button id="combine"></button>' : ''}${editable && state.rangeEnd !== null && dissolve ? '<button id="dissolve"></button>' : ''}<button id="clear-selection"></button>` : node ? `<button id="rename-node"></button>${editable ? '<button id="activate-node"></button>' : ''}${terminal && !p.active ? `${archived ? '<button id="restore-session"></button>' : ''}<button id="archive-path"></button>` : ''}` : '';
     const nativeInstance=terminal&&p.active&&state.data.instances.find(i=>i.branchId===p.branchId&&i.applied&&!i.missing);
-    if(nativeInstance){const href=nativeInstance.agent==='claude'?'vscode://anthropic.claude-code/open?session='+encodeURIComponent(nativeInstance.nativeId):'vscode://openai.chatgpt/local/'+encodeURIComponent(nativeInstance.nativeId);$('#detail-actions').insertAdjacentHTML('beforeend',`<a class="native-client-link" href="${esc(href)}" title="${esc(t('Open the matching workspace in VS Code first.'))}">${t('Open in VS Code')}</a>`);}
+    if(nativeInstance&&state.data.clientLinks?.[nativeInstance.agent]){const href=nativeInstance.agent==='claude'?'vscode://anthropic.claude-code/open?session='+encodeURIComponent(nativeInstance.nativeId):'vscode://openai.chatgpt/local/'+encodeURIComponent(nativeInstance.nativeId);$('#detail-actions').insertAdjacentHTML('beforeend',`<a class="native-client-link" href="${esc(href)}" title="${esc(t('Open the matching workspace in VS Code first.'))}">${t('Open in VS Code')}</a>`);}
     button('#activate-node', terminal && p.active ? 'Deactivate' : 'Activate', () => terminal && p.active ? run(()=>api('/manage','POST',{action:'deactivate',branchIds:[p.branchId]})) : activateDialog(p));
     button('#combine', 'Combine', combineDialog);
     button('#dissolve', 'Dissolve', () => run(async () => { await saveOrganization('dissolve'); clearRange(); }));
@@ -661,7 +662,7 @@ async function refresh({ checkCloud = false } = {}) {
         state.chats = new Set([...state.chats].filter(id => route()?.messages.some(m => m.id === id)));
     }
     const listTop = $('#session-list').scrollTop, scroll = $('#transcripts').scrollTop, graphTop = $('#graph-scroll').scrollTop, graphLeft = $('#graph-scroll').scrollLeft;
-    render(); $('#session-list').scrollTo({top:listTop,behavior:'instant'}); $('#transcripts').scrollTo({top:scroll,behavior:'instant'}); $('#graph-scroll').scrollTo({top:graphTop,left:graphLeft,behavior:'instant'}); scheduleRibbons();
+    render(); $('#session-list').scrollTo({top:listTop,behavior:'instant'}); $('#transcripts').scrollTo({top:scroll,behavior:'instant'}); $('#graph-scroll').scrollTo({top:graphTop,left:graphLeft,behavior:'instant'}); scheduleRibbons();revealRestored();
 }
 function moveDialog(itemIds, restoreTarget = null) {
     const selectedItems=state.data.items.filter(i=>itemIds.includes(i.id));
@@ -675,7 +676,7 @@ function moveDialog(itemIds, restoreTarget = null) {
     $('#destination').onchange = e => $('#new-project-field').hidden = e.target.value !== 'new';
     enhanceSelect($('#destination'));
 }
-function restore(target) { return run(() => api('/manage', 'POST', { ...target, action: 'restore' })); }
+function restore(target) { return run(async()=>{const result=await trashRequest('/manage',{...target,action:'restore'},'restore');state.restoredBranchIds=result.branchIds;state.tree=null;state.scope=PROJECTS;state.query='';$('#search').value='';state.selected.clear();}); }
 
 function clearRange() { state.chats.clear(); state.rangeStart = null; state.rangeEnd = null; }
 function renameSession(item) {
@@ -698,28 +699,56 @@ function trashDialog(target,count=1){
     modal('Move to Trash',`<p>${t('Discard {count} complete paths or trees?',{count})}</p><p class="dialog-copy">${t('Recoverable on this device for {days} days.',{days})}</p>`,async()=>{const result=await trashRequest('/trash',target,'trash');state.trashFeedback=(result.blocked||[]).map(e=>t(e.reason)).join('\n');state.tree=null;state.selected.clear();clearRange();},'Move to Trash');
 }
 function archivePath(){const p=route(),node=selectedNode();if(!node?.endBranchIds.includes(p.branchId))return;trashDialog({branchIds:[p.branchId],nodeId:node.id,version:state.tree.version});}
+function recoveryCategories(rows){
+    return projectGroups(rows.flatMap(r=>(r.projectIds?.length?r.projectIds:[INBOX]).map(projectId=>({...r,projectId,updatedAt:r.at||''}))),state.data.projects);
+}
+function recoveryGroups(rows,row,kind){
+    return recoveryCategories(rows).map(g=>`<section class="list-group project-group" data-recovery-project="${esc(g.id)}"><h2>${esc(g.id===INBOX?t('Ungrouped'):g.name)}<span class="group-actions"><span>${g.items.length}</span><input type="checkbox" data-${kind}-group="${esc(g.id)}" aria-label="${esc(t('Select group {name}',{name:g.name}))}"></span></h2>${g.items.map(row).join('')}</section>`).join('');
+}
+function bindRecoveryGroups(rows,kind,render){
+    const groups=recoveryCategories(rows);
+    $$(`[data-${kind}-group]`).forEach(el=>{
+        const items=groups.find(g=>g.id===el.getAttribute(`data-${kind}-group`)).items,count=items.filter(r=>state.selected.has(r.key)).length;
+        el.checked=count===items.length;el.indeterminate=count>0&&count<items.length;
+        el.onchange=()=>{for(const r of items)el.checked?state.selected.add(r.key):state.selected.delete(r.key);render();};
+    });
+}
+function revealRestored(){
+    if(!state.restoredBranchIds?.length||state.scope!==PROJECTS)return;
+    const ids=new Set(state.restoredBranchIds),items=state.list.items.filter(i=>i.sessionIds.some(id=>ids.has(id)));
+    if(!items.length)return;
+    state.restoredBranchIds=null;state.olderProjects=true;
+    for(const item of items)state.expandedProjects.add(item.projectId||INBOX);
+    renderList();focusProject(items[0].projectId||INBOX);
+    const rows=items.map(i=>$$('[data-item]').find(el=>el.dataset.item===i.id)).filter(Boolean);
+    rows[0]?.scrollIntoView({block:'center',behavior:'instant'});
+    for(const row of rows){row.classList.add('restored-highlight');row.addEventListener('animationend',()=>row.classList.remove('restored-highlight'),{once:true});}
+}
 function renderClientArchive(){
     $('#list-title').textContent=t('Client archive');$('#active-notice').hidden=true;
     const query=state.query.toLocaleLowerCase(),copies=(state.data.trashNative||[]).filter(i=>i.clientArchived&&(!i.background||state.data.preferences?.showScheduledSessions)&&(!query||(i.title||'').toLocaleLowerCase().includes(query)));
     const copyBranches=new Set(copies.map(i=>i.branchId));
-    const rows=[...copies.map(i=>({key:'client:'+i.id,id:i.id,kind:'native',name:i.title||i.agent,agent:i.agent,at:i.updatedAt})),...state.list.items.filter(i=>!i.sessionIds.every(id=>copyBranches.has(id))).map(i=>({key:i.id,id:i.id,kind:'legacy',name:i.name,agent:i.agent,at:i.updatedAt}))];
+    const rows=[...copies.map(i=>({key:'client:'+i.id,id:i.id,kind:'native',branchIds:[i.branchId],name:i.title||i.agent,agent:i.agent,at:i.updatedAt,projectIds:[i.projectId||INBOX]})),...state.list.items.filter(i=>!i.sessionIds.every(id=>copyBranches.has(id))).map(i=>({key:i.id,id:i.id,kind:'legacy',branchIds:i.sessionIds,name:i.name,agent:i.agent,at:i.updatedAt,projectIds:[i.projectId||INBOX]}))];
     const visible=new Set(rows.map(r=>r.key));state.selected=new Set([...state.selected].filter(id=>visible.has(id)));
     const selected=rows.filter(r=>state.selected.has(r.key));$('#list-count').textContent=t('{count} sessions',{count:rows.length});
-    $('#list-actions').innerHTML='<button id="archive-select-all"></button>'+(selected.length?'<button id="archive-move-trash"></button>':'');
+    $('#list-actions').innerHTML='<button id="archive-select-all"></button>'+(selected.length?'<button id="archive-restore"></button><button id="archive-move-trash"></button>':'');
     button('#archive-select-all',state.selected.size?'Deselect':'Select all',()=>{state.selected=state.selected.size?new Set():new Set(rows.map(r=>r.key));renderClientArchive();});
+    button('#archive-restore','Restore to Projects',()=>restore({branchIds:[...new Set(selected.flatMap(r=>r.branchIds))]}));
     button('#archive-move-trash','Move to Trash',()=>run(async()=>{
         const native=selected.filter(r=>r.kind==='native'),legacy=selected.filter(r=>r.kind==='legacy');
         if(native.length){const result=await trashRequest('/trash/native',{instanceIds:native.map(r=>r.id)},'recovery');if(result.blocked.length)throw Error(result.blocked.map(e=>e.reason).join('\n'));}
         if(legacy.length)await trashRequest('/trash',{itemIds:legacy.map(r=>r.id),view:'archived'},'trash');
         state.scope='trash';state.selected.clear();state.query='';$('#search').value='';
     }));
-    $('#session-list').innerHTML=rows.map(r=>`<article class="session-row ${state.selected.has(r.key)?'checked':''}"><div class="row-open trash-copy"><span class="row-text"><span class="row-title">${esc(r.name)}</span><span class="row-meta">${r.agent==='codex'?'Codex':'Claude Code'}</span></span><time class="row-date">${date(r.at)}</time></div><input type="checkbox" data-client-select="${esc(r.key)}" aria-label="${esc(t('Select {name}',{name:r.name}))}" ${state.selected.has(r.key)?'checked':''}></article>`).join('')||`<p class="empty">${t('No archived sessions.')}</p>`;
+    const archiveRow=r=>`<article class="session-row ${state.selected.has(r.key)?'checked':''}"><div class="row-open trash-copy"><span class="row-text"><span class="row-title">${esc(r.name)}</span><span class="row-meta">${r.agent==='codex'?'Codex':'Claude Code'}</span></span><time class="row-date">${date(r.at)}</time></div><input type="checkbox" data-client-select="${esc(r.key)}" aria-label="${esc(t('Select {name}',{name:r.name}))}" ${state.selected.has(r.key)?'checked':''}></article>`;
+    $('#session-list').innerHTML=recoveryGroups(rows,archiveRow,'client')||`<p class="empty">${t('No archived sessions.')}</p>`;
+    bindRecoveryGroups(rows,'client',renderClientArchive);
     $$('[data-client-select]').forEach(el=>el.onchange=()=>{el.checked?state.selected.add(el.dataset.clientSelect):state.selected.delete(el.dataset.clientSelect);renderClientArchive();});
 }
 function renderTrash(){
     $('#list-title').textContent=t('Trash');$('#active-notice').hidden=true;
     const query=state.query.toLocaleLowerCase(),entries=(state.data.trashEntries||[]).filter(e=>!e.expired&&!e.restoredAt&&(!query||e.names.some(n=>n.toLocaleLowerCase().includes(query)))),copies=[];
-    const rows=[...entries.map(e=>({key:'recovery:'+e.id,id:e.id,kind:'recovery',name:e.names.join(', '),at:e.at,description:t('Local recovery until {date}',{date:date(e.expiresAt)})})),...copies.map(i=>({key:'native:'+i.id,id:i.id,kind:'native',name:i.title||i.agent,agent:i.agent,at:i.updatedAt,description:t(i.archived?'Archived in client':i.active?'Client copy still present':'Inactive client copy')}))];
+    const rows=[...entries.map(e=>({key:'recovery:'+e.id,id:e.id,kind:'recovery',name:e.names.join(', '),projectIds:e.projectIds||[INBOX],at:e.at,description:t('Local recovery until {date}',{date:date(e.expiresAt)})})),...copies.map(i=>({key:'native:'+i.id,id:i.id,kind:'native',name:i.title||i.agent,agent:i.agent,at:i.updatedAt,description:t(i.archived?'Archived in client':i.active?'Client copy still present':'Inactive client copy')}))];
     const visible=new Set(rows.map(r=>r.key));state.selected=new Set([...state.selected].filter(id=>visible.has(id)));
     const recovery=rows.filter(r=>r.kind==='recovery'&&state.selected.has(r.key)),native=rows.filter(r=>r.kind==='native'&&state.selected.has(r.key));
     const cleanup=(state.data.trashNative||[]).filter(i=>i.discarded&&recovery.some(r=>entries.find(e=>e.id===r.id)?.branchIds.includes(i.branchId)));
@@ -734,14 +763,14 @@ function renderTrash(){
         if(result.moved.length)toast(t('Moved {count} copies to recovery.',{count:result.moved.length}));
     }));
     button('#trash-restore-selected',t('Restore ({count})',{count:recovery.length}),()=>run(async()=>{
-        const result=await api('/trash/recovery','POST',{action:'restore',ids:recovery.map(r=>r.id)});
+        const result=await trashRequest('/trash/recovery',{action:'restore',ids:recovery.map(r=>r.id)},'restore');
         state.trashFeedback=result.failed.map(e=>t(e.reason)).join('\n');for(const r of result.restored)state.selected.delete('recovery:'+r.id);
-        if(result.restored.length){state.scope=PROJECTS;state.query='';$('#search').value='';state.projectFocus=result.restored[0].projectIds[0]||INBOX;state.selected.clear();state.expandedProjects.add(state.projectFocus);toast(t('Restored to Projects'));}
+        if(result.restored.length){state.restoredBranchIds=result.restored.flatMap(r=>r.branchIds);state.tree=null;state.scope=PROJECTS;state.query='';$('#search').value='';state.projectFocus=result.restored[0].projectIds[0]||INBOX;state.selected.clear();state.expandedProjects.add(state.projectFocus);toast(t('Restored to Projects'));}
     }));
-    button('#trash-delete-selected',t('Delete now ({count})',{count:recovery.length}),()=>modal('Delete recovery copies',`<p>${t('Permanently delete {count} local recovery copies?',{count:recovery.length})}</p>`,async()=>{await api('/trash/recovery','POST',{action:'delete',ids:recovery.map(r=>r.id)});state.trashFeedback='';state.selected.clear();},'Delete now'));
+    button('#trash-delete-selected',t('Delete now ({count})',{count:recovery.length}),()=>modal('Delete recovery copies',`<p>${t('Permanently delete {count} local recovery copies?',{count:recovery.length})}</p>`,async()=>{await trashRequest('/trash/recovery',{action:'delete',ids:recovery.map(r=>r.id)},'delete');state.trashFeedback='';state.selected.clear();},'Delete now'));
     const row=r=>`<article class="session-row ${state.selected.has(r.key)?'checked':''}"><div class="row-open trash-copy"><span class="row-text"><span class="row-title">${esc(r.name)}</span><span class="row-meta">${esc(r.description)}${r.agent?' · '+esc(r.agent==='codex'?'Codex':'Claude'):''}</span></span><time class="row-date">${esc(date(r.at))}</time></div><input type="checkbox" data-trash-select="${esc(r.key)}" aria-label="${esc(t('Select {name}',{name:r.name}))}" ${state.selected.has(r.key)?'checked':''}></article>`;
-    $('#session-list').innerHTML=(state.trashFeedback?`<p class="trash-feedback" role="status">${esc(state.trashFeedback)}</p>`:'')+['recovery','native'].map(kind=>{const items=rows.filter(r=>r.kind===kind).sort((a,b)=>(b.at||'').localeCompare(a.at||'')||a.id.localeCompare(b.id));return items.length?`<section class="list-group"><h2>${t(kind==='recovery'?'Trash':'Client archive')}<span class="group-actions"><span>${items.length}</span><input type="checkbox" data-trash-group="${kind}" aria-label="${esc(t('Select group {name}',{name:t(kind==='recovery'?'Trash':'Client archive')}))}"></span></h2>${items.map(row).join('')}</section>`:'';}).join('')+(!rows.length?`<p class="empty">${t('Trash is empty.')}</p>`:'');
-    $$('[data-trash-group]').forEach(el=>{const items=rows.filter(r=>r.kind===el.dataset.trashGroup),count=items.filter(r=>state.selected.has(r.key)).length;el.checked=count===items.length;el.indeterminate=count>0&&count<items.length;el.onchange=()=>{for(const r of items)el.checked?state.selected.add(r.key):state.selected.delete(r.key);renderTrash();};});
+    $('#session-list').innerHTML=(state.trashFeedback?`<p class="trash-feedback" role="status">${esc(state.trashFeedback)}</p>`:'')+recoveryGroups(rows,row,'trash')+(!rows.length?`<p class="empty">${t('Trash is empty.')}</p>`:'');
+    bindRecoveryGroups(rows,'trash',renderTrash);
     $$('[data-trash-select]').forEach(el=>el.onchange=()=>{el.checked?state.selected.add(el.dataset.trashSelect):state.selected.delete(el.dataset.trashSelect);renderTrash();});
     renderCloudStatus();
 }
@@ -998,7 +1027,7 @@ try {
 } catch (e) { toast(e.message); }
 
 installSessionDrag({
-    canDrag:()=>state.scope===PROJECTS&&!state.tree&&!working&&state.connected!==false,
+    canDrag:()=>state.scope!=='archived'&&state.scope!=='trash'&&!state.tree&&!working&&state.connected!==false,
     items:()=>state.list.items,selected:()=>state.selected,projects:()=>state.data.projects,
     expandOlder:()=>{state.olderProjects=true;renderNavigation();},
     move:(itemIds,projectId)=>run(async()=>{await api('/move','POST',{itemIds,projectId});state.selected.clear();state.projectFocus=projectId;state.expandedProjects.add(projectId);})

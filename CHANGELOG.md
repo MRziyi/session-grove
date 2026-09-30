@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.1.0
+
+- Preserve complete tree ancestry and shared node labels when client archives enter Trash. Restore individual paths into their surviving family, including separately restored parents/children and families moved between projects. Repair provable 1.0.x transcript-only recoveries using saved branch identities and verified history, with a local repair journal.
+- Stream actual recovery read, decompression, integrity verification, record-write and graph phases into the lower-right task panel. Activation, conversion, deactivation and Discard use the same visible feedback; failures remain until dismissed. Restore no longer runs an unnecessary library-wide reclamation.
+- Keep unused intermediate-node continuations reactivatable after the official client appends settings records. New turns and unfinished tool calls retain their existing guards.
+- Store immutable native baselines separately and deduplicate them, capture only selected native histories during targeted operations, and scope rollback journals to affected instances.
+- Compact Pending uploads with title/category on one line, dates below checkboxes, full-width change lists and stationary Select all / Deselect controls. Enable Current Active drag to project categories. Group Client archive and Trash by project, and reveal restored project rows with two highlights.
+- Advertise VS Code links only for installed client extensions. Validate official Codex read/resume/archive/reactivate against real local history without submitting model turns.
+- Add repeatable private-corpus audits for all visible trees, representative root/middle/endpoint activation, legal/rejected HTTP operations, recovery, Discard, local Git round trips and browser layout. See [1.1 validation](docs/1.1-validation.md) for evidence and limitations.
+
 ## 1.0.2
 
 - Allow unused mid-turn activation continuations to deactivate after settings-only records; keep checks for new turns, tool calls, parse errors and changed file bytes. Empty placeholders disappear without entering Trash.

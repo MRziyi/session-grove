@@ -1443,3 +1443,24 @@ body{height:100dvh;display:flex;flex-direction:column;overflow:hidden}
 .pending-status{margin:0;padding:8px 12px;border-top:1px solid var(--border);line-height:1.5;color:#526477}.pending-status.warning{color:#a54b34}
 #sync-error{position:relative;max-width:100%}#sync-error summary{display:block;max-height:16px;line-height:16px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 #sync-error[open]>div{position:absolute;top:100%;right:0;width:min(360px,calc(100vw - 24px));max-height:30vh;margin-top:4px;padding:10px;background:#fff;color:#a54b34;border:1px solid #decac5;border-radius:6px;box-shadow:0 4px 18px #183b4b22;z-index:160}
+
+/* Compact pending menu: titles share a line; date sits below the checkbox. */
+#pending-uploads{background:var(--surface,#fff);font-family:inherit}
+#pending-uploads .pending-row{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:5px 10px;padding:10px 0;align-items:start}
+#pending-uploads .pending-title{display:flex;align-items:baseline;gap:8px;min-width:0}
+#pending-uploads .pending-title>span{font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
+#pending-uploads .pending-title>small{flex:0 1 38%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin:0;color:var(--muted)}
+#pending-uploads .pending-changes{margin:5px 0 0;padding-left:15px}
+#pending-uploads #pending-select-all{min-width:70px;text-align:center}
+#pending-uploads .pending-heading{background:var(--panel,#f5f7fa)}
+.restored-highlight{animation:restored-flash .8s ease-in-out 2}
+@keyframes restored-flash{0%,100%{background:transparent}50%{background:#cbe5ef;box-shadow:inset 3px 0 #477f9b}}
+@media(prefers-reduced-motion:reduce){.restored-highlight{animation:none;background:#cbe5ef;box-shadow:inset 3px 0 #477f9b}}
+#trash-progress [data-dismiss-task]{float:right;padding:0 4px;border:0;background:transparent;color:inherit;font-size:18px;line-height:1}
+
+#sync-control #pending-uploads #pending-select-all{width:74px;min-width:74px;flex:0 0 74px;justify-content:center}
+
+#pending-uploads .pending-row>input{width:16px;height:16px;margin:1px 0;accent-color:#477f9b}
+#pending-uploads .pending-summary{grid-column:1/-1;min-width:0}
+#pending-uploads .pending-summary time{float:right;margin-left:10px;font-size:10px;line-height:18px;color:var(--muted);white-space:nowrap}
+#pending-uploads .pending-summary .pending-changes{margin:0;padding-left:15px}
