@@ -219,3 +219,25 @@ test('immutable parsing and state caches invalidate on append and rollback; publ
     assert.throws(() => store.transaction(() => { store.edit(b.id, { archived: true }); store.snapshot(); throw new Error('rollback'); }));
     assert.equal(store.get('branch', b.id).archived, false); assert.equal(store.get('branch', b.id).head, head);
 });
+
+test('native ancestry without a cutoff shares exact prose and preserves child annotations', t => {
+    const root=fs.mkdtempSync(path.join(os.tmpdir(),'grove-native-prefix-')),store=new Store(root);
+    t.after(()=>{store.close();fs.rmSync(root,{recursive:true,force:true});});
+    const parent=store.branch(null,'Renamed parent','codex',codexSample('/work',[['Shared question','Shared answer'],['Parent suffix','Parent reply']]));
+    const child=store.branch(null,'Different display name','codex',codexSample('/work',[['Shared question','Shared answer'],['Child suffix','Child reply']]));
+    store.put('branch',{...child,parentId:parent.id,forkRevision:parent.head,forkEnd:0,forkParentEnd:0,nativeLinked:true,prefixUnavailable:true});
+    const graph=store.treeGraph(parent.id),p=graph.paths.find(p=>p.branchId===parent.id),c=graph.paths.find(p=>p.branchId===child.id);
+    assert.deepEqual(c.messages.slice(0,2).map(m=>m.id),p.messages.slice(0,2).map(m=>m.id));
+    assert.notEqual(c.messages[2].id,p.messages[2].id);
+    assert.equal(graph.nodes.filter(n=>n.branchIds.length===2).length,1);
+});
+
+test('native null/default serialization repairs a zero-length prefix without touching names or raw records',t=>{
+    const {store}=fixture(t),raw=codexSample('/work',[['Shared','Answer'],['Parent tail','Done']]);
+    const rows=raw.trim().split('\n').map(JSON.parse);rows.splice(2,0,{type:'response_item',payload:{type:'reasoning',summary:[],encrypted_content:'opaque'}});
+    const parentRaw=rows.map(r=>JSON.stringify(r)+'\n').join(''),parent=store.branch(null,'Grove alias','codex',parentRaw);
+    const childRaw=rows.map(r=>r.payload?.type==='reasoning'?{...r,payload:{...r.payload,content:null}}:r).map(r=>JSON.stringify(r)+'\n').join('');
+    const child=store.branch(null,'Native title','codex',childRaw);store.put('branch',{...child,parentId:parent.id,forkRevision:parent.head,forkEnd:0,nativeLinked:true,prefixUnavailable:true});
+    store.detectFamilies();assert.ok(store.get('branch',child.id).forkEnd>0);assert.equal(store.get('branch',child.id).prefixUnavailable,false);
+    assert.equal(store.get('branch',parent.id).name,'Grove alias');assert.equal(store.raw(parent.head),parentRaw);assert.equal(store.raw(child.head),childRaw);
+});

@@ -1,5 +1,6 @@
 let language = localStorage.getItem('grove-language') === 'zh' ? 'zh' : 'en';
 const dictionary = {
+"Collapse projects after":"超过此时间折叠项目",
 "Repository address":"仓库地址",
 "Recoverable on this device for {days} days.":"可在本机恢复，保留 {days} 天。",
 "Close the agent before removing its local copy.":"移除本地副本前，请先关闭对应工具。",

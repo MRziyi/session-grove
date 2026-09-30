@@ -7,7 +7,7 @@ import { supportedHistory } from './codex-history.js';
 import { assert, hash, id as newId, now } from './util.js';
 import { estimateTokens } from './context.js';
 import { policyHash } from './context-policy.js';
-import { rootOf, treeMembers } from './organization.js';
+import { rootOf, treeMembers, nativePrefixBoundary } from './organization.js';
 
 // Native threads, collection rows, and logical nodes are distinct projections.
 export const isActive = i => i.applied && !i.missing && !i.excluded && i.cwdAvailable !== false;
@@ -68,7 +68,7 @@ export function listing(store, scope = 'active:codex', query = '') {
 // IDs are derived from the owning native thread and the semantic prefix. Metadata
 // and materialized path changes never invalidate a user's organization.
 export function buildGraph(store, branchId) {
-    const root = rootOf(store, branchId), members = treeMembers(store, root.id), cache = new Map(), messages = new Map();
+    const root = rootOf(store, branchId), members = treeMembers(store, root.id), cache = new Map(), messages = new Map(), aliases = new Map();
     function pathFor(b, revisionId = b.head, end) {
         const key = `${b.id}:${revisionId}:${end??"all"}`;
         if (cache.has(key)) return cache.get(key);
@@ -76,11 +76,14 @@ export function buildGraph(store, branchId) {
         const byChat = new Map();
         for (const e of inventory.entries) { if (!byChat.has(e.chatLine)) byChat.set(e.chatLine, []); byChat.get(e.chatLine).push(e); }
         let inherited = [];
-        if (b.parentId && b.forkRevision && b.forkEnd > 0) {
+        const recovered = nativePrefixBoundary(store, b);
+        const forkEnd = b.forkEnd || recovered?.a.end;
+        const parentEnd = recovered?.b.end ?? b.forkParentEnd ?? forkEnd;
+        if (b.parentId && b.forkRevision && forkEnd > 0) {
             const parent = store.get('branch', b.parentId);
-            const parentPath = pathFor(parent, b.forkRevision, b.forkParentEnd??b.forkEnd);
-            const childPrefix = visible.filter(m => m.line <= b.forkEnd);
-            const parentPrefix = parentPath.filter(m => m.line <= (b.forkParentEnd ?? b.forkEnd)).slice(0,childPrefix.length);
+            const parentPath = pathFor(parent, b.forkRevision, parentEnd);
+            const childPrefix = visible.filter(m => m.line <= forkEnd);
+            const parentPrefix = parentPath.filter(m => m.line <= parentEnd).slice(0,childPrefix.length);
             // Rewritten native history must not be mistaken for its former prefix.
             if (childPrefix.length === parentPrefix.length && childPrefix.every((m, i) => m.role === parentPrefix[i].role && m.text === parentPrefix[i].text))
                 inherited = parentPrefix.map((m, i) => ({ ...m, line: childPrefix[i].line }));
@@ -89,6 +92,8 @@ export function buildGraph(store, branchId) {
         const path = visible.map((m, index) => {
             prefix = hash(prefix + JSON.stringify([m.role, m.text]));
             const message = inherited[index] || { ...m, id: `${b.chatIdentity || b.id}:${prefix.slice(0, 24)}`, ownerId: b.id, agent: b.agent, origin: contentOrigin(store, revisionId) };
+            const ownId = `${b.chatIdentity || b.id}:${prefix.slice(0, 24)}`;
+            if (ownId !== message.id) aliases.set(ownId, message.id);
             const value = { ...message, line: m.line, toolTokens: (byChat.get(m.line) || []).filter(e => ['tool-call', 'tool-result'].includes(e.kind)).reduce((n,e) => n + e.tokens, 0), activity: byChat.get(m.line) || [] };
             if (!messages.has(value.id)) messages.set(value.id, value);
             return value;
@@ -96,7 +101,7 @@ export function buildGraph(store, branchId) {
         cache.set(key, path);
         return path;
     }
-    const paths = members.filter(b => visibleSession(store, b)).map(b => { const parsed = store.parsed(b.head,b.agent), inventory = store.activity(b.head,b.agent); return { branchId: b.id, name: b.name, agent: b.agent, archived: !!b.archived, parentBranchId: b.parentId, prefixUnavailable: !!b.prefixUnavailable,
+    const paths = members.filter(b => visibleSession(store, b)).map(b => { const parsed = store.parsed(b.head,b.agent), inventory = store.activity(b.head,b.agent); return { branchId: b.id, name: b.name, originalTitle: store.instances().find(i=>i.branchId===b.id && i.applied)?.observedTitle || b.originalTitle || store.instances().find(i=>i.branchId===b.id)?.title || store.summary(b.head,b.agent).nativeTitle || b.nativeObservedTitle || b.name, agent: b.agent, archived: !!b.archived, parentBranchId: b.parentId, prefixUnavailable: !!b.prefixUnavailable,
         head: b.head, canRewriteContext: supportedHistory(parsed), canActivate: store.summary(b.head,b.agent).complete && !store.summary(b.head,b.agent).external && (supportedHistory(parsed) || store.instances().some(i => i.branchId === b.id && i.adopted && i.baseRevision === b.head && (i.contextPolicyHash || policyHash(null)) === policyHash(b.contextPolicy))), active: store.instances().some(i => i.branchId === b.id && isActive(i)),
         context: { ...parsed.context, ledger: (() => { const l = inventory; return { ...l, entries: l.entries.filter(e => e.chatLine === null) }; })(), compactions: parsed.context.compactions.map(e => ({ ...e, enabled: !(b.contextPolicy?.disabled || []).includes(e.id) })) }, contextPolicy: b.contextPolicy || null, contextPending: store.instances().some(i => i.branchId === b.id && isActive(i) && ((i.contextPolicyHash || policyHash(null)) !== policyHash(b.contextPolicy) || i.baseRevision !== b.head)), messages: pathFor(b), checkpoints: parsed.checkpoints }; });
     const assignments = {};
@@ -112,6 +117,8 @@ export function buildGraph(store, branchId) {
     }
     const layout = root.layoutHead ? store.get('layout', root.layoutHead) : null;
     if (layout) for (const [id, value] of Object.entries(layout.assignments)) assignments[id] = value;
+    // Existing annotations may address the formerly unshared child identity.
+    for (const [oldId, canonical] of aliases) if (assignments[oldId] && !assignments[canonical]) assignments[canonical] = assignments[oldId];
     const next = new Map(), previous = new Map(), endpoints = new Set(), compactStarts = new Set();
     for (const p of paths) for (const event of p.context.compactions) {
         const first = p.messages.find(m => m.line > event.line);

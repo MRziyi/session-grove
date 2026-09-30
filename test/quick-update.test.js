@@ -17,9 +17,9 @@ test('local renames work during sync and Active Trash only removes active sessio
   assert.equal((await request('trees/'+parent.id,'POST',{version:graph.version,pathId:parent.id,nodeId:graph.nodes[0].id,action:'rename',name:'Renamed node'})).status,200);
   const current=app.store.treeGraph(parent.id),target={branchId:child.id,nodeId:'empty-'+child.id,version:current.version,cwd:f.root};
   const preview=await(await request('node-activation/check','POST',target)).json();
-  assert.equal((await request('node-activation/activate','POST',{...target,contextAcknowledgement:preview.fingerprint})).status,201);
-  assert.ok(app.store.instances().some(i=>i.branchId===child.id&&i.applied));
-  assert.equal((await request('manage','POST',{action:'deactivate',branchIds:[child.id]})).status,200);
+  const activated=await request('node-activation/activate','POST',{...target,contextAcknowledgement:preview.fingerprint});assert.equal(activated.status,201);const continuation=(await activated.json()).branch;
+  assert.notEqual(continuation.id,child.id);assert.ok(app.store.instances().some(i=>i.branchId===continuation.id&&i.applied));
+  assert.equal((await request('manage','POST',{action:'deactivate',branchIds:[continuation.id]})).status,200);
   assert.equal((await request('trash','POST',{itemIds:[parent.id],view:'active:codex'})).status,202);
   assert.equal(app.store.cleanupDeferred,true);
  } finally {release();await pending;}

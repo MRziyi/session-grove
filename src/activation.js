@@ -58,7 +58,7 @@ export function activationInfo(store, native, branchId, cwd, env = process.env) 
     const risk = Number.isFinite(threshold) && estimated >= threshold;
     const original = store.instances().some(i => i.branchId === branchId && i.adopted && i.baseRevision === branch.head && i.cwd === target && !(branch.contextPolicy?.disabled || []).length);
     const formatSupported = supportedHistory(parsed) || original;
-    const complete = formatSupported && parsed.complete && !parsed.errors.length && !parsed.warnings.some(w => w.includes('历史格式') || w.includes('外部附件'));
+    const complete = formatSupported && (parsed.complete || branch.allowNodeBoundary && !parsed.pendingToolCalls) && !parsed.errors.length && !parsed.warnings.some(w => w.includes('历史格式') || w.includes('外部附件'));
     const fingerprint = hash(JSON.stringify([branch.head, branch.contextPolicy, target, model, window, compactAt, estimated, basis]));
-    return { readiness: !parsed.complete ? 'unfinished-turn' : parsed.warnings.some(w=>w.includes('外部附件')) ? 'external-attachments' : !formatSupported ? 'unsupported-history' : 'ready', fidelity: formatSupported ? 'record-preserving' : 'unsupported-history-mode', model, window, compactAt, source, estimated, basis, risk, unknown: !window && !compactAt, complete, fingerprint, cwd: target || '', observedAt: usage?.at || null };
+    return { readiness: !parsed.complete && !branch.allowNodeBoundary ? 'unfinished-turn' : parsed.warnings.some(w=>w.includes('外部附件')) ? 'external-attachments' : !formatSupported ? 'unsupported-history' : 'ready', fidelity: formatSupported ? 'record-preserving' : 'unsupported-history-mode', model, window, compactAt, source, estimated, basis, risk, unknown: !window && !compactAt, complete, fingerprint, cwd: target || '', observedAt: usage?.at || null };
 }

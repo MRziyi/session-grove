@@ -137,6 +137,7 @@ export class Native {
             const requiresAuxiliary = false;
             const displayTitle = String(name || item.title).trim() || 'Untitled session';
             const b = this.store.branch(projectId, displayTitle, item.agent, raw, { cwd: item.cwd, agent: item.agent, nativeId: item.nativeId, client: 'unknown', operation: 'import', requiresAuxiliary, ...(auxiliary.length ? { auxiliary } : {}) });
+            b.originalTitle = item.title;
             b.contentUpdatedAt = item.updatedAt;
             b.archived = !!item.archived; b.scheduled = !!item.scheduled; b.background = item.background || null;
             this.store.put('branch', b);
@@ -170,9 +171,12 @@ export class Native {
             if ((branch.excluded || null) !== observed.excluded) { patch.excluded = observed.excluded; metadataChanged = true; }
             if (observed.cwdAvailable !== undefined && instance.cwdAvailable !== observed.cwdAvailable) instance.cwdAvailable = observed.cwdAvailable;
             if (instance.excluded !== !!observed.excluded) { instance.excluded = !!observed.excluded; metadataChanged = true; }
-            if (!branch.groveNamed && !observed.excluded && observed.title && !(instance.groveTitle && observed.title === instance.title) && branch.name !== observed.title && (branch.name === instance.title || branch.nativeObservedTitle === branch.name)) {
-                patch.name = observed.title; patch.nativeObservedTitle = observed.title;
+            // Native names are observed by identity, never used as identity or
+            // copied over the independent Grove alias after initial import.
+            if (observed.title) {
+                instance.observedTitle = observed.title;
                 instance.title = observed.title;
+                if (observed.title !== branch.originalTitle) patch.originalTitle = observed.title;
             }
             if (Object.keys(patch).length) this.store.put('branch', metadata(branch, patch));
         }
@@ -199,8 +203,8 @@ export class Native {
         }
         timings.importMs = Math.round(performance.now() - importStart);
         const familyStart = performance.now();
-        const families = discovered || metadataChanged || this.store.local('familyDetectionVersion') !== 3 ? this.store.detectFamilies() : { grouped: 0 };
-        this.store.local('familyDetectionVersion', 3);
+        const families = discovered || metadataChanged || this.store.local('familyDetectionVersion') !== 4 ? this.store.detectFamilies() : { grouped: 0 };
+        this.store.local('familyDetectionVersion', 4);
         timings.familiesMs = Math.round(performance.now() - familyStart);
         return { ...collected, discovered, grouped: families.grouped, timings, errors: [...collected.errors, ...found.errors] };
     }
@@ -387,7 +391,7 @@ export class Native {
                     assert(!parsed.warnings.some(w => w.includes('外部附件')), '此会话包含外部附件引用。当前版本可浏览和分支，完整附件迁移尚未支持。');
                     const original = !!i.file && fs.existsSync(i.file) && i.baseRevision === b.head && (i.contextPolicyHash || policyHash(null)) === policyHash(b.contextPolicy) && parsed.cwd === i.cwd;
                     const forkSource = nativeClaudeFork && lineage[0].parent && lineage[0].source.claudeCheckpoint ? { raw: this.store.availableRaw(lineage[0].parent), upToMessageId: lineage[0].source.claudeCheckpoint } : null;
-                    let output = original && i.file && fs.existsSync(i.file) ? this.read(i.file) : renderNative(raw, b.agent, i.nativeId, i.cwd, this.title(b, i), b.contextPolicy, forkSource);
+                    let output = original && i.file && fs.existsSync(i.file) ? this.read(i.file) : renderNative(raw, b.agent, i.nativeId, i.cwd, this.title(b, i), b.contextPolicy, forkSource, !!lineage[0]?.source.nodeBoundary);
                     if (original && i.groveTitle && b.agent === 'claude' && claudeTitle(parsed.records).title !== this.title(b, i)) output = output.replace(/\n?$/, '\n') + JSON.stringify({type:'custom-title',customTitle:this.title(b, i),sessionId:i.nativeId}) + '\n';
                     const dest = safePath(root, op.file);
                     assert(!fs.existsSync(dest) || dest === i.file, '目标记录已存在，拒绝覆盖');
@@ -410,7 +414,7 @@ export class Native {
                     i.baseline = i.adopted ? null : output;
                     i.observedHash = hash(output);
                     i.missing = false;
-                    i.title = this.title(b, i); i.contextPolicyHash = policyHash(b.contextPolicy);
+                    i.title = this.title(b, i); i.observedTitle = i.title; i.contextPolicyHash = policyHash(b.contextPolicy);
                     if (i.agent === 'codex')
                         this.updateCodexDb(dbs.get(root), i, b, parsed);
                 }

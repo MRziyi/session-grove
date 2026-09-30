@@ -158,7 +158,7 @@ export class Store {
         const rev = this.revision(raw ?? blank(agent, source.cwd || ''), null, { agent, ...source });
         return this.put('branch', { id: id(), projectId: projectId || null, name: branchName, agent, head: rev.id, nodeHead: null, parentId: null, forkRevision: null, forkEnd: 0, archived: false, group: '', createdAt: now(), updatedAt: now(), contentUpdatedAt: now(), logicalVersion: 1, metaVersion: id(), metaAncestors: [] });
     }
-    fork(branchId, { name, end, revisionId, nodeId, graphVersion }) {
+    fork(branchId, { name, end, revisionId, nodeId, graphVersion, nodeBoundary = false }) {
         const parent = this.get('branch', branchId), rev = this.get('revision', revisionId || parent.head);
         assert(!isTrashed(this,parent.id) && !parent.excluded && !parent.archived && !(parent.projectId && this.get('project', parent.projectId).archived), 'Restore this session before organizing.');
         assert(this.ancestor(rev.id, parent.head), '检查点不属于该分支历史');
@@ -166,9 +166,10 @@ export class Store {
         end = Number(end);
         if(nodeId){const graph=this.treeGraph(branchId,'in-use'),route=graph.paths.find(p=>p.branchId===branchId),node=graph.nodes.find(n=>n.id===nodeId);assert(graph.version===graphVersion,'Conversation changed. Refresh before organizing.',409);assert(route&&node&&route.nodeIds.indexOf(nodeId)>0,'Cannot fork before the root node.');const first=route.messages.find(m=>node.chatIds.includes(m.id));const previous=first?route.messages[route.messages.indexOf(first)-1]:route.messages.at(-1);const checkpoint=route.checkpoints.findLast(c=>c.end>=previous?.line&&(!first||c.end<first.line));assert(checkpoint&&checkpoint.end===end,'Fork requires a complete turn before the selected node.');}
 
-        assert(parsed.checkpoints.some(c => c.end === end), '只能从已完成的轮次创建分支');
+        const prefixParsed = nodeBoundary ? parse(this.raw(rev.id, end), parent.agent) : null;
+        assert(parsed.checkpoints.some(c => c.end === end) || nodeBoundary && Number.isInteger(end) && end > 0 && end <= rev.refs.length && !prefixParsed.errors.length && !prefixParsed.pendingToolCalls, '只能从已完成的轮次或有效节点边界创建分支');
         const contextPolicy = parent.contextPolicy ? { disabled: parent.contextPolicy.disabled.filter(id => parsed.context.compactions.some(e => e.id === id && e.line <= end)) } : undefined;
-        const revision = this.revision(this.raw(rev.id, end), rev.id, { agent: parent.agent, operation: 'fork', ...(parent.agent === 'claude' ? { claudeCheckpoint: parsed.checkpoints.find(c => c.end === end).turnId } : {}) });
+        const revision = this.revision(this.raw(rev.id, end), rev.id, { agent: parent.agent, operation: 'fork', ...(nodeBoundary ? { nodeBoundary: true } : {}), ...(parent.agent === 'claude' && parsed.checkpoints.some(c=>c.end===end) ? { claudeCheckpoint: parsed.checkpoints.find(c => c.end === end).turnId } : {}) });
         return this.put('branch', { ...parent, contextPolicy, id: id(), name: text(name), head: revision.id, nodeHead: null, layoutHead: null, endpointName: null, chatIdentity: null, parentId: parent.id, forkRevision: rev.id, forkEnd: end, forkParentEnd: end, archived: false, synthetic: false, inferred: false, nativeLinked: false, prefixUnavailable: false, createdViaGroveFork: true, contentUpdatedAt: now(), createdAt: now(), updatedAt: now(), metaVersion: id(), metaAncestors: [] });
     }
     edit(branchId, patch) {

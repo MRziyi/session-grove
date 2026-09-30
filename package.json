@@ -1,6 +1,6 @@
 {
   "name": "session-grove",
-  "version": "0.15.0",
+  "version": "0.15.1",
   "private": true,
   "description": "A project-centered workspace for branching and managing agent sessions.",
   "type": "module",

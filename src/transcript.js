@@ -88,13 +88,13 @@ export function parse(raw, agent, immutableRecords = null) {
     const media = records.some(({ raw, value }) => value && /"(?:image_url|file_id|audio_url)"\s*:\s*"(?!data:)|"(?:local_images|local_audio)"\s*:\s*\[\s*"/.test(raw));
     if (media)
         warnings.push('包含外部附件引用；当前版本需在目标环境保留这些资源');
-    return { context: contextInfo(records, agent), records, nativeMessages, nativeId, cwd, messages, checkpoints, warnings, errors, hasUser, complete: !turnOpen && !pendingTools.size, meta };
+    return { context: contextInfo(records, agent), records, nativeMessages, nativeId, cwd, messages, checkpoints, warnings, errors, hasUser, pendingToolCalls: pendingTools.size, complete: !turnOpen && !pendingTools.size, meta };
 }
-export function renderNative(raw, agent, nativeId, cwd, title, contextPolicy = null, nativeFork = null) {
+export function renderNative(raw, agent, nativeId, cwd, title, contextPolicy = null, nativeFork = null, nodeBoundary = false) {
     const parsed = parse(raw, agent);
     assert(!parsed.errors.length, '损坏或尚未写完的记录不能激活');
     assert(!raw || parsed.nativeId, '未知会话格式，不能写回');
-    assert(parsed.complete, '请等待原生轮次结束，或从已完成检查点创建分支');
+    assert(parsed.complete || nodeBoundary && !parsed.pendingToolCalls, '请等待原生轮次结束，或从已完成检查点创建分支');
     assert(supportedHistory(parsed), parsed.warnings.join('；') || 'Unsupported native history format.');
     const old = parsed.nativeId;
     const relocate = value => {

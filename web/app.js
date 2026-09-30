@@ -106,6 +106,10 @@ function modal(title, html, action, label = 'Save') {
     if (!$('#dialog').open) $('#dialog').showModal();
 }
 const field = (label, name, value = '', type = 'text') => `<label class="field">${t(label)}<input name="${name}" type="${type}" value="${esc(value)}" ${type === 'text' ? 'maxlength="200"' : ''}></label>`;
+let outsideDialog = null;
+const outside = (dialog, event) => { const r = dialog.getBoundingClientRect(); return event.clientX < r.left || event.clientX > r.right || event.clientY < r.top || event.clientY > r.bottom; };
+document.addEventListener('pointerdown', event => { outsideDialog = event.target instanceof HTMLDialogElement && outside(event.target,event) ? event.target : null; });
+document.addEventListener('click', event => { if (outsideDialog?.open && event.target === outsideDialog && outside(outsideDialog,event)) outsideDialog.close(); outsideDialog = null; });
 $('#dialog-close').onclick = $('#dialog-cancel').onclick = () => $('#dialog').close();
 $('#dialog-form').onsubmit = async e => {
     e.preventDefault(); if (!submitAction || working) return;
@@ -134,7 +138,7 @@ function translateBanner() {
 }
 function renderNavigation() {
     const d = state.data, directoryScroll = $('.project-directory-scroll')?.scrollTop || 0;
-    const selectedScope = state.scope === PROJECTS ? state.projectFocus : state.scope;
+    const selectedScope = state.tree ? state.tree.projectId || INBOX : state.scope === PROJECTS ? state.projectFocus : state.scope;
     const entry = (scope, name, count, css = '') => `<button class="nav-entry ${css} ${selectedScope === scope ? 'selected' : ''}" data-scope="${esc(scope)}" ${selectedScope === scope ? 'aria-current="page"' : ''}><span class="nav-name">${esc(name)}</span><span class="count">${count}</span></button>`;
     const projectTimes = new Map(projectGroups(d.items.filter(i=>!i.archived).map(i=>({...i,updatedAt:i.sessions.filter(s=>!s.archived).map(s=>s.updatedAt).sort().at(-1)||i.updatedAt})), d.projects).map(g=>[g.id,g.updatedAt]));
     const projects = d.projects.filter(p => !p.archived && (d.items.some(i => i.projectId === p.id && !i.archived) || p.count > 0));
@@ -241,8 +245,21 @@ function sourceTags(item) {
 
 function isInactive(updatedAt) { return inactiveProject(updatedAt, state.data.preferences?.inactiveProjectDays || 30); }
 function olderToggle(count) { return `<button type="button" class="older-projects-toggle" data-older-projects aria-expanded="${!!state.olderProjects}">${state.olderProjects?'▾':'▸'} ${t('Older projects')} <span>${count}</span></button>`; }
-function bindOlderProjects() { $$('[data-older-projects]').forEach(el=>el.onclick=()=>{state.olderProjects=!state.olderProjects;renderNavigation();renderList();}); }
-let projectObserver;
+function bindOlderProjects() { $$('[data-older-projects]').forEach(el=>el.onclick=()=>{state.olderProjects=!state.olderProjects;renderNavigation();renderList();if(state.tree)renderRail();}); }
+let projectObserver, listView = null, viewAnimation;
+function animateView(element) {
+    viewAnimation?.cancel();
+    if (matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+    viewAnimation=element.animate([{opacity:.55},{opacity:1}],{duration:160,easing:'ease-out'});
+}
+function projectRows(g) {
+    const initial=foldedItems(g.items,state.data.preferences),limited=state.scope===PROJECTS&&!state.query&&initial.length<g.items.length;
+    const expanded=state.expandedProjects.has(g.id)||g.items.some(i=>state.selected.has(i.id));
+    return {limited,expanded,shown:limited&&!expanded?initial:g.items};
+}
+function foldButton(g,limited,expanded) {return limited?`<button class="show-project" data-expand-project="${esc(g.id)}">${t(expanded?'Show fewer':'Show all {count}',{count:g.items.length})}</button>`:'';}
+function bindProjectFolds() {$$('[data-expand-project]').forEach(el=>el.onclick=()=>{const id=el.dataset.expandProject;state.expandedProjects.has(id)?state.expandedProjects.delete(id):state.expandedProjects.add(id);renderList();if(state.tree)renderRail();});}
+
 function focusProject(id, scroll = true) {
     state.projectFocus = id;
     $$('[data-scope]').forEach(el=>{const on=el.dataset.scope===id;el.classList.toggle('selected',on);if(on)el.setAttribute('aria-current','location');else el.removeAttribute('aria-current');});
@@ -253,7 +270,7 @@ async function navigate(scope) {
     const project = !scope.startsWith('active:') && scope !== 'archived' && scope !== 'trash';
     const focus = project ? (scope === PROJECTS ? state.projectFocus : scope) : null;
     if(project && state.scope===PROJECTS && !state.tree && !state.query){focusProject(focus);return;}
-    ++requestId; opening=false;state.scope=project?PROJECTS:scope;state.projectFocus=focus;state.tree=null;state.list={items:[],sessionCount:0};state.query='';state.selected.clear();clearRange();$('#search').value='';
+    ++requestId; opening=false;listView=null;$('#main').removeAttribute('aria-busy');state.scope=project?PROJECTS:scope;state.projectFocus=focus;state.tree=null;state.list={items:[],sessionCount:0};state.query='';state.selected.clear();clearRange();$('#search').value='';
     render();if(scope !== 'trash')$('#session-list').innerHTML=`<p class="empty">${t('Loading project index…')}</p>`;
     try {await refresh();if(project&&focus)focusProject(focus);}catch(e){toast(e.message);}
 }
@@ -295,37 +312,45 @@ function renderList() {
     button('#restore-items','Restore',()=>restore({itemIds:[...state.selected]}));
     button('#deactivate-items','Deactivate',()=>run(()=>api('/manage','POST',{action:'deactivate',itemIds:[...state.selected],agent:state.scope.slice(7)})));
     const row=i=>`<article class="session-row ${state.selected.has(i.id)?'checked':''}" data-item="${esc(i.id)}"><button class="row-open" data-open="${esc(i.id)}">${icon(i.kind)}<span class="row-text"><span class="row-title">${esc(i.name)} ${cloudMark(i)}</span><span class="row-meta">${itemMeta(i)} ${sourceTags(i)}</span></span><time class="row-date">${date(i.updatedAt)}</time></button>${`<input type="checkbox" data-select="${esc(i.id)}" aria-label="${esc(t('Select {name}',{name:i.name}))}" ${state.selected.has(i.id)?'checked':''}>`}</article>`;
-    const groupHtml = g=>{const initial=foldedItems(g.items,state.data.preferences),limited=state.scope===PROJECTS&&!state.query&&initial.length<g.items.length,expanded=state.expandedProjects.has(g.id)||g.items.some(i=>state.selected.has(i.id));const shown=limited&&!expanded?initial:g.items;return `<section class="list-group project-group" data-project-group="${esc(g.id||INBOX)}"><h2>${esc(g.name==='Scheduled & background'?t(g.name):g.name)}<span>${g.items.length}</span></h2>${shown.map(row).join('')}${limited?`<button class="show-project" data-expand-project="${esc(g.id)}">${t(expanded?'Show fewer':'Show all {count}',{count:g.items.length})}</button>`:''}</section>`;};
+    const groupHtml = g=>{const {limited,expanded,shown}=projectRows(g);return `<section class="list-group project-group" data-project-group="${esc(g.id||INBOX)}"><h2>${esc(g.name==='Scheduled & background'?t(g.name):g.name)}<span>${g.items.length}</span></h2>${shown.map(row).join('')}${foldButton(g,limited,expanded)}</section>`;};
     const allGroups = groups(), older = state.scope===PROJECTS&&!state.query ? allGroups.filter(g=>isInactive(g.updatedAt)) : [], olderIds = new Set(older.map(g=>g.id));
     $('#session-list').innerHTML = allGroups.filter(g=>!olderIds.has(g.id)).map(groupHtml).join('') + (older.length ? `<section class="older-projects">${olderToggle(older.length)}${state.olderProjects?older.map(groupHtml).join(''):''}</section>` : '') || `<p class="empty">${t(state.query?'No matching sessions':'No sessions here.')}</p>`;
     bindOlderProjects();
     $$('[data-open]').forEach(el=>el.onclick=()=>openTree(el.dataset.open));
     $$('[data-select]').forEach(el=>el.onchange=()=>{el.checked?state.selected.add(el.dataset.select):state.selected.delete(el.dataset.select);renderList();});
-    $$('[data-expand-project]').forEach(el=>el.onclick=()=>{const id=el.dataset.expandProject;state.expandedProjects.has(id)?state.expandedProjects.delete(id):state.expandedProjects.add(id);renderList();});
+    bindProjectFolds();
     projectObserver?.disconnect();
     if(state.scope===PROJECTS&&!state.tree){projectObserver=new IntersectionObserver(entries=>{const visible=entries.filter(e=>e.isIntersecting).sort((a,b)=>a.boundingClientRect.top-b.boundingClientRect.top);if(visible[0])focusProject(visible[0].target.dataset.projectGroup,false);},{root:$('#session-list'),rootMargin:'0px 0px -65% 0px',threshold:0});$$('[data-project-group]').forEach(el=>projectObserver.observe(el));}
 }
 
 function renderRail() {
-    $('#rail-content').innerHTML = groups().map(g => `<h2 class="rail-heading">${esc(g.name)}</h2>${g.items.map(i => `<button class="rail-row ${state.tree?.id === i.id ? 'selected' : ''}" data-rail="${esc(i.id)}" ${state.tree?.id === i.id ? 'aria-current="true"' : ''}>${icon(i.kind)}<span class="row-text"><span class="row-title">${esc(i.name)} ${cloudMark(i)}</span><span class="row-meta">${itemMeta(i)} ${sourceTags(i)}</span></span></button>`).join('')}`).join('');
-    $$('[data-rail]').forEach(el => el.onclick = () => openTree(el.dataset.rail));
+    const top=$('#session-rail').scrollTop;
+    const group=g=>{const {limited,expanded,shown}=projectRows(g);return `<section data-rail-project="${esc(g.id)}"><h2 class="rail-heading">${esc(g.name)}</h2>${shown.map(i=>`<button class="rail-row ${state.tree?.id===i.id?'selected':''}" data-rail="${esc(i.id)}" ${state.tree?.id===i.id?'aria-current="true"':''}>${icon(i.kind)}<span class="row-text"><span class="row-title">${esc(i.name)} ${cloudMark(i)}</span><span class="row-meta">${itemMeta(i)} ${sourceTags(i)}</span></span></button>`).join('')}${foldButton(g,limited,expanded)}</section>`;};
+    const all=groups(),older=state.scope===PROJECTS&&!state.query?all.filter(g=>isInactive(g.updatedAt)):[],ids=new Set(older.map(g=>g.id));
+    $('#rail-content').innerHTML=all.filter(g=>!ids.has(g.id)).map(group).join('')+(older.length?olderToggle(older.length)+(state.olderProjects?older.map(group).join(''):''):'');
+    $('#session-rail').scrollTop=top;
+    $$('[data-rail]').forEach(el=>el.onclick=()=>openTree(el.dataset.rail));bindProjectFolds();bindOlderProjects();
 }
 async function openTree(id) {
+    if (state.tree?.id === id && !opening) return;
     const ticket = ++requestId, scope = state.scope, view = scope === 'archived' ? 'archived' : 'in-use';
     const item = state.list.items.find(i => i.id === id);
-    opening = true; state.tree = null; render(); $('#main').setAttribute('aria-busy', 'true');
-    const label = $(`[data-item="${id}"] .row-meta`); if (label) label.textContent = t('Loading context…');
+    if (!state.tree && !listView) { listView={scroll:$('#session-list').scrollTop,projectFocus:state.projectFocus};$('#session-list').scrollTo({top:listView.scroll,behavior:'instant'}); }
+    opening = true; $('#main').setAttribute('aria-busy', 'true');
+    $$('[data-loading]').forEach(el=>el.removeAttribute('data-loading'));
+    ($(`[data-rail="${id}"]`) || $(`[data-open="${id}"]`))?.setAttribute('data-loading','true');
     try {
         const tree = await api('/trees/' + encodeURIComponent(id) + '?view=' + view);
         if (ticket !== requestId || state.scope !== scope) return;
         if (tree.view !== view || tree.paths.some(p => view === 'archived' ? !p.archived && !tree.projectArchived : p.archived || tree.projectArchived)) throw new Error(t('The view changed. Please open the session again.'));
         if (!tree.paths.length) { state.tree = null; render(); return; }
-        state.tree = tree;
+        state.tree = tree;state.projectFocus=tree.projectId || INBOX;
         state.branchId = (state.query ? tree.paths.find(p => item?.matchedSessionIds?.includes(p.branchId)) : null)?.branchId || tree.paths.find(p=>p.branchId===tree.id)?.branchId || [...tree.paths].sort((a,b)=>b.nodeIds.length-a.nodeIds.length)[0].branchId;
         for (const list of [state.list.items,state.data.items]) { const cached=list.find(i=>i.id===id); if(cached)cached.cloudState='cached'; }
-        state.nodeId = null; state.compactionId = null; clearRange(); state.expanded.clear(); camera.x = 0; camera.y = 0; camera.zoom = 1; camera.newView = true; render();
-    } catch (e) { if (ticket === requestId) { toast(e.message); state.tree = null; render(); } }
-    finally { if (ticket === requestId) { opening = false; $('#main').removeAttribute('aria-busy'); } }
+        state.nodeId = null; state.compactionId = null; clearRange(); state.expanded.clear(); camera.x = 0; camera.y = 0; camera.zoom = 1; camera.newView = true; render();animateView($('#detail-page'));
+        const tab=$$('[data-scope]').find(el=>el.dataset.scope===state.projectFocus);tab?.scrollIntoView({block:'nearest',behavior:matchMedia('(prefers-reduced-motion: reduce)').matches?'instant':'smooth'});
+    } catch (e) { if (ticket === requestId) { if (!state.tree) listView=null;toast(e.message); } }
+    finally { if (ticket === requestId) { opening = false; $('#main').removeAttribute('aria-busy');$$('[data-loading]').forEach(el=>el.removeAttribute('data-loading')); } }
 }
 
 function render() {
@@ -341,7 +366,7 @@ function renderDetail() {
     const tokens = p.nodeIds.reduce((sum, id) => sum + (tree.nodes.find(n => n.id === id)?.tokens?.recordedEstimate || 0), 0);
     $('#session-meta').textContent = `${p.agent === 'codex' ? 'Codex' : 'Claude'} · ≈ ${compactNumber(tokens)} tokens${p.context?.compactions.length ? ' · ' + t('{count} compactions', { count: p.context.compactions.length }) : ''}`;
     $('#detail-count').textContent = `${t('{count} branches', { count: tree.paths.length })} · ${t('{count} chats', { count: tree.chatCount })} · ${t('{count} pending', { count: tree.pendingCount })}`;
-    $('#branch-picker').innerHTML = tree.paths.map(v => `<option value="${esc(v.branchId)}" ${v.branchId === p.branchId ? 'selected' : ''}>${esc(v.name)}</option>`).join('');
+    $('#branch-picker').innerHTML = tree.paths.map(v => `<option value="${esc(v.branchId)}" ${v.branchId === p.branchId ? 'selected' : ''}>${esc(v.originalTitle || v.name)}</option>`).join('');
     enhanceSelect($('#branch-picker'));
     renderDetailActions(); renderTranscript(); renderGraph(); scheduleRibbons();
 }
@@ -526,12 +551,12 @@ function drawRibbons() {
     $('#ribbons').innerHTML = route().nodeIds.map(id => {
         const segment = $(`[data-segment="${id}"]`), node = $(`[data-node="${id}"]`); if (!segment || !node) return '';
         const a = segment.getBoundingClientRect(), b = node.getBoundingClientRect();
-        if (a.bottom < view.top || a.top > view.bottom || b.bottom < graphView.top || b.top > graphView.bottom || b.left < graphView.left || b.right > graphView.right || b.top < graphView.top || b.bottom > graphView.bottom) return '';
+        if (a.bottom < view.top || a.top > view.bottom || b.bottom < graphView.top || b.top > graphView.bottom || b.left < graphView.left || b.left > graphView.right) return '';
         const top = Math.max(a.top, view.top) - lane.top, bottom = Math.min(a.bottom, view.bottom) - lane.top;
         const nt = Math.max(b.top, graphView.top) - lane.top, nb = Math.min(b.bottom, graphView.bottom) - lane.top;
         const left = view.right - lane.left, right = Math.max(left, b.left - lane.left), mid = (left + right) / 2;
         const n = state.tree.nodes.find(n => n.id === id);
-        return `<path d="M${left} ${top} C${mid} ${top},${mid} ${nt},${right} ${nt} L${right} ${nb} C${mid} ${nb},${mid} ${bottom},${left} ${bottom} Z" fill="${mutedNode(n, route()) ? '#aeb8c1' : palette[n.color][0]}" opacity=".19"/>`;
+        return `<path data-ribbon="${esc(id)}" d="M${left} ${top} C${mid} ${top},${mid} ${nt},${right} ${nt} L${right} ${nb} C${mid} ${nb},${mid} ${bottom},${left} ${bottom} Z" fill="${mutedNode(n, route()) ? '#aeb8c1' : palette[n.color][0]}" opacity=".19"/>`;
     }).join('');
 }
 function applyCamera() {
@@ -730,7 +755,7 @@ async function settings(options = {}) {
           ${edit ? `<button type="button" id="verify-connection" class="primary">${t('Connect repository')}</button>` : ''}
 </section>
           <section class="settings-card"><h3>${t('Trash')}</h3><label class="field">${t('Local recovery days')}<input type="number" name="trashRetentionDays" min="1" max="365" value="${p.trashRetentionDays}"></label></section><section class="settings-card"><h3>${t('Project contents')}</h3><label class="field">${t('Collapse older sessions')}<select name="projectFoldMode">${[['time','By age'],['count','By count'],['none','Show all']].map(([v,l])=>`<option value="${v}" ${p.projectFoldMode===v?'selected':''}>${t(l)}</option>`).join('')}</select></label>${p.projectFoldMode==='time'?`<label class="field">${t('Keep recent days')}<input type="number" name="projectFoldDays" min="1" max="365" value="${p.projectFoldDays}"></label>`:p.projectFoldMode==='count'?`<label class="field">${t('Visible sessions per project')}<input type="number" name="projectFoldCount" min="1" max="365" value="${p.projectFoldCount}"></label>`:''}</section><section class="settings-card"><h3>${t('Automatic updates')}</h3><div class="timer-row"><label><input type="checkbox" name="showScheduledSessions" ${p.showScheduledSessions?'checked':''}>${t('Show scheduled and background sessions')}</label></div>
-            <label class="field">${t('Collapse inactive projects after')}<select name="inactiveProjectDays" aria-label="${t('Collapse inactive projects after')}">${[[7,'One week'],[15,'Half a month'],[30,'One month'],[60,'Two months']].map(([days,label])=>`<option value="${days}" ${days===p.inactiveProjectDays?'selected':''}>${t(label)}</option>`).join('')}</select></label>
+            <label class="timer-row collapse-setting"><span>${t('Collapse projects after')}</span><select name="inactiveProjectDays" aria-label="${t('Collapse projects after')}">${[[7,'One week'],[15,'Half a month'],[30,'One month'],[60,'Two months']].map(([days,label])=>`<option value="${days}" ${days===p.inactiveProjectDays?'selected':''}>${t(label)}</option>`).join('')}</select></label>
             ${[['localUpdate', 'Read local sessions', p.localUpdateEnabled, p.localUpdateMinutes], ['autoUpload', 'Automatically upload local changes', p.autoUploadEnabled, p.autoUploadMinutes]].map(([key,label,on,minutes]) => `<div class="timer-row"><label><input type="checkbox" name="${key}Enabled" ${on ? 'checked' : ''}>${t(label)}</label><label class="timer-interval"><input type="number" name="${key}Minutes" value="${minutes}" min="1" max="1440" ${!on ? 'disabled' : ''}><span>${t('minutes')}</span></label></div>`).join('')}
             <button type="button" id="save-timers" hidden>${t('Save preferences')}</button>
           </section>`, null);
@@ -794,7 +819,7 @@ divider.onkeydown=e=>{if(!['ArrowLeft','ArrowRight'].includes(e.key))return;e.pr
 applyPanePreferences();
 $('#collect').onclick = () => run(async () => { const r = await api('/collect', 'POST', {}); if (r.errors?.length) toast(r.errors.map(e => errorText(e.message)).join('\n')); else toast(t('Refresh complete · {updates} updated · {discovered} discovered', { updates: r.updates.length, discovered: r.discovered })); }, 'update');
 $('#search').oninput = e => { state.query = e.target.value; state.selected.clear(); clearTimeout(searchTimer); searchTimer = setTimeout(() => refresh().catch(e => toast(e.message)), 180); };
-$('#back').onclick = () => { state.tree = null; clearRange(); render(); };
+$('#back').onclick = () => { ++requestId;opening=false;$('#main').removeAttribute('aria-busy');state.tree=null;clearRange();if(listView)state.projectFocus=listView.projectFocus;render();if(listView)$('#session-list').scrollTo({top:listView.scroll,behavior:'instant'});listView=null;animateView($('#list-page')); };
 $('#source').onclick = showSource;
 $('#branch-picker').onchange = e => { state.branchId = e.target.value; clearRange(); state.nodeId = null; state.compactionId = null; renderDetail(); };
 $('#transcripts').onscroll = () => scheduleRibbons();

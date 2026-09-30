@@ -267,3 +267,22 @@ test('Grove rename preserves native IDs and Claude message links through continu
     assert.deepEqual(store.detail(b.id).messages.map(m=>m.text),['Question','Answer','Continue after rename','Still linked']);
     assert.equal(store.all('branch').length,1);
 });
+
+test('Update tracks native titles by thread ID without replacing Grove aliases or transcript records', t => {
+    const {store,native,roots,cwd}=setup(t),db=new DatabaseSync(path.join(roots.codex,'state_5.sqlite'));
+    db.exec('CREATE TABLE threads(id TEXT PRIMARY KEY,rollout_path TEXT,cwd TEXT,title TEXT,name TEXT,archived INTEGER DEFAULT 0)');
+    const sources=[];
+    for(const prompt of ['First source','Second source']){
+        const raw=codexSample(cwd,[[prompt,'Answer']]),nativeId=parse(raw,'codex').nativeId,file=path.join(roots.codex,'sessions',nativeId+'.jsonl');
+        fs.mkdirSync(path.dirname(file),{recursive:true});fs.writeFileSync(file,raw);
+        db.prepare('INSERT INTO threads VALUES(?,?,?,?,?,0)').run(nativeId,file,cwd,'Same native title','Same native title');sources.push({nativeId,file,raw});
+    }
+    native.refreshLocal();const first=store.instances().find(i=>i.nativeId===sources[0].nativeId),second=store.instances().find(i=>i.nativeId===sources[1].nativeId);
+    store.edit(first.branchId,{name:'My Grove alias'});const head=store.get('branch',first.branchId).head;
+    db.prepare('UPDATE threads SET name=?,title=? WHERE id=?').run('Renamed in client','Renamed in client',sources[0].nativeId);
+    native.refreshLocal();
+    assert.equal(store.get('branch',first.branchId).name,'My Grove alias');assert.equal(store.get('branch',first.branchId).head,head);
+    assert.equal(store.treeGraph(first.branchId).paths.find(p=>p.branchId===first.branchId).originalTitle,'Renamed in client');
+    assert.equal(store.treeGraph(second.branchId).paths.find(p=>p.branchId===second.branchId).originalTitle,'Same native title');
+    assert.equal(fs.readFileSync(sources[0].file,'utf8'),sources[0].raw);db.close();
+});

@@ -25,6 +25,7 @@ try{
  const fits=async selector=>assert.ok(await evaluate(`(()=>{const r=document.querySelector('${selector}').getBoundingClientRect();return r.width>0&&r.top>=0&&r.left>=0&&r.right<=innerWidth+1&&r.bottom<=innerHeight+1&&document.documentElement.scrollWidth<=innerWidth})()`),'inspector must fit viewport: '+selector);
  await call('Runtime.enable');await call('Emulation.setDeviceMetricsOverride',{width:1512,height:982,deviceScaleFactor:1,mobile:false});await wait('document.querySelector("[data-open]")');
  assert.equal(await evaluate('!!document.querySelector("#upload .button-countdown")'),false);
+ assert.ok(await evaluate('(()=>{const a=document.querySelector("#sync").getBoundingClientRect(),b=document.querySelector("#collect").getBoundingClientRect(),s=document.querySelector("#sync-details").getBoundingClientRect();return Math.abs(a.y+a.height/2-b.y-b.height/2)<2&&s.right<=a.left})()'));
  assert.ok(await evaluate('!!document.querySelector(".session-state.active-state")&&!!document.querySelector(".session-state.modified-state")'));
  assert.ok(await evaluate('(()=>{const a=document.querySelector("#sync").getBoundingClientRect(),b=document.querySelector("#upload").getBoundingClientRect();return Math.abs(a.right-b.left)<=2&&Math.abs(a.height-b.height)<1})()'));
  await hover('#push-zone');await wait('document.querySelector("#pending-uploads").textContent.includes("Waiting upload")');await fits('#pending-uploads');

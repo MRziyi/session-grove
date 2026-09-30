@@ -106,6 +106,7 @@ export function forest(store, scope) {
 }
 // Compare complete semantic event sequences, never a bag of matching messages.
 // Volatile native identifiers are excluded, tool arguments/results remain included.
+const canonicalPayload = v => Array.isArray(v) ? v.map(canonicalPayload) : v && typeof v === 'object' ? Object.fromEntries(Object.keys(v).sort().map(k => [k, canonicalPayload(v[k])])) : v;
 function signatures(raw, agent) {
     const p = typeof raw === 'string' ? parse(raw, agent) : raw, boundaries = [];
     const ends = new Set(p.checkpoints.map(c => c.end));
@@ -115,7 +116,8 @@ function signatures(raw, agent) {
         if (agent === 'codex' && v?.type === 'response_item') {
             const payload = structuredClone(v.payload);
             delete payload.id;
-            prefix = hash(prefix + hash(JSON.stringify(payload)));
+            if (payload.type === 'reasoning' && payload.content == null) delete payload.content;
+            prefix = hash(prefix + hash(JSON.stringify(canonicalPayload(payload))));
         }
         else if (agent === 'claude' && ['user', 'assistant'].includes(v?.type) && v.message) {
             prefix = hash(prefix + hash(JSON.stringify({ role: v.message.role, content: v.message.content })));
@@ -136,6 +138,10 @@ function commonBoundary(x, y, minimum) {
         if (b) return { a, b };
     }
 }
+export function nativePrefixBoundary(store, branch) {
+    if (!branch.nativeLinked || !branch.parentId || !branch.forkRevision || branch.forkEnd) return null;
+    return store.memo('native-prefix:' + branch.id, () => commonBoundary(signatures(store.parsed(branch.head, branch.agent), branch.agent), signatures(store.parsed(branch.forkRevision, branch.agent), branch.agent), 2) || null);
+}
 export function detectFamilies(store) {
     let grouped = 0, trustedLinks = 0;
     const parsed = b => store.parsed(b.head, b.agent);
@@ -144,6 +150,13 @@ export function detectFamilies(store) {
     const branches = store.all('branch').filter(b => !isTrashed(store,b.id) && !b.synthetic && !b.excluded && !b.background), byId = new Map(branches.map(b => [b.id,b])), nativeParents = new Map();
     for (const i of store.instances()) if (byId.has(i.branchId)) nativeParents.set(i.nativeId, byId.get(i.branchId));
     for (const b of branches) { const p = store.summary(b.head,b.agent); if (p.nativeId && !nativeParents.has(p.nativeId)) nativeParents.set(p.nativeId,b); }
+    // Repair older native links rejected only because the native writer
+    // normalized optional fields/key order. Never compare titles or rewrite logs.
+    for (const b of branches.filter(b => b.nativeLinked && b.parentId && b.forkRevision && !b.forkEnd)) {
+        const parent = byId.get(b.parentId); if (!parent || parent.agent !== b.agent) continue;
+        const common = commonBoundary(get(b), signatures(store.parsed(b.forkRevision, b.agent), b.agent), 2);
+        if (common) { store.put('branch', metadata(b, { forkEnd:common.a.end, forkParentEnd:common.b.end, prefixUnavailable:false })); grouped++; }
+    }
     // Native pointers already identify the parent and exact prefix. Pin those
     // existing immutable object references; do not hash/compare the conversation.
     for (const b of branches.filter(b => !b.parentId && !b.projectId && !b.layoutHead && !b.nodeHead)) {

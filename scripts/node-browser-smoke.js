@@ -31,6 +31,11 @@ try{
   const result=await evaluate(`(()=>{const el=document.querySelector('[data-node="${target}"]'),r=el.getBoundingClientRect(),pane=document.querySelector('#transcripts'),segment=document.querySelector('[data-segment="${target}"]').getBoundingClientRect(),view=pane.getBoundingClientRect();return {selected:el.getAttribute('aria-pressed'),x:r.x,y:r.y,scroll:pane.scrollTop,offset:segment.top-view.top,visible:segment.top<view.bottom&&segment.bottom>view.top}})()`);
   assert.equal(result.selected,'true');assert.ok(Math.abs(result.x-before.x)<=4&&Math.abs(result.y-before.y)<=4,'graph camera must stay on clicked branch: '+JSON.stringify({before,result}));assert.ok(result.scroll>100&&result.visible,'one click must align the new transcript after rendering');assert.ok(Math.abs(result.offset)<4,'deep node must align on the FIRST click: '+JSON.stringify(result));
  }
+ const clipped=targets.at(-1);
+ const clip=await evaluate(`(()=>{const n=document.querySelector('[data-node="${clipped}"]').getBoundingClientRect(),v=document.querySelector('#graph-scroll').getBoundingClientRect();return{x:v.x+v.width/2,y:v.y+v.height/2,deltaX:n.left-(v.right-n.width/2),deltaY:0}})()`);
+ await call('Input.dispatchMouseEvent',{type:'mouseWheel',...clip});await evaluate('new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)))');
+ assert.ok(await evaluate(`(()=>{const n=document.querySelector('[data-node="${clipped}"]').getBoundingClientRect(),v=document.querySelector('#graph-scroll').getBoundingClientRect();return n.right>v.right&&n.left<v.right&&!!document.querySelector('[data-ribbon="${clipped}"]')})()`),'ribbon remains when only the right edge is clipped');
+ await positionNode(clipped);
  if(!process.argv.includes('--navigation-only')){
   const internal=graph.paths.find(p=>p.branchId===parent.id).nodeIds[5];await clickNode(internal);
   assert.equal(await evaluate('!!document.querySelector("#archive-path")'),false);assert.equal(await evaluate('!!document.querySelector("#rename-node")&&!!document.querySelector("#activate-node")'),true);
@@ -47,6 +52,7 @@ try{
   await evaluate('document.querySelector("#dialog-close").click();document.querySelector("#activate-node").click()');await wait('!!document.querySelector("#activation-title")&&!document.querySelector("#dialog-submit").disabled');
   await evaluate('document.querySelector("#dialog-form").requestSubmit()');await wait('!document.querySelector("#dialog").open');assert.equal(store.all('branch').length,3);assert.ok(store.instances().some(i=>i.applied&&i.title===title));
   await wait('document.querySelectorAll(".active-node-dot").length>=2');
+  assert.ok(await evaluate('(()=>{const d=document.querySelector(".active-node-dot"),a=d.getBoundingClientRect(),b=d.closest(".graph-node").getBoundingClientRect();return a.y+a.height/2>b.y+b.height/2&&a.x+a.width/2>b.x+b.width/2})()'));
   const active=store.instances().find(i=>i.applied&&i.title===title),fresh=store.treeGraph(parent.id),endpoint=fresh.paths.find(p=>p.branchId===active.branchId).nodeIds.at(-1);
   await clickNode(endpoint);assert.equal(await evaluate('document.querySelector("#activate-node").textContent'),'Deactivate');
   await evaluate('document.querySelector("#activate-node").click()');await wait('document.querySelector("#activate-node")?.textContent==="Activate"');
@@ -57,5 +63,35 @@ try{
   await evaluate('window.__requests=[];const originalFetch=window.fetch;window.fetch=(url,...args)=>{window.__requests.push(String(url));return originalFetch(url,...args)};document.querySelector("[data-scope=trash]").click()');await wait('document.querySelector("#list-title").textContent==="Trash"&&window.__requests.includes("/api/trash")');
   const paths=await evaluate('window.__requests');assert.ok(!paths.some(p=>p==='/api/state'||p.startsWith('/api/list')),'Trash must use its lightweight endpoint');
  }
+ for(const selector of ['#about','#settings','#information']){
+  await evaluate(`document.querySelector('${selector}').click()`);await wait('document.querySelector("#dialog").open');
+  if(selector==='#settings')assert.ok(await evaluate('(()=>{const row=document.querySelector(".collapse-setting"),s=row.querySelector(".select-control").getBoundingClientRect(),l=row.querySelector("span").getBoundingClientRect();return l.right<=s.left&&Math.abs(l.y+l.height/2-s.y-s.height/2)<2})()'));
+  await call('Input.dispatchMouseEvent',{type:'mousePressed',x:5,y:150,button:'left',clickCount:1});await call('Input.dispatchMouseEvent',{type:'mouseReleased',x:5,y:150,button:'left',clickCount:1});await wait('!document.querySelector("#dialog").open');
+ }
+ const {savePreferences}=await import(pathToFileURL(path.join(source,'src/preferences.js')));
+ savePreferences(store,{projectFoldMode:'count',projectFoldCount:2,localUpdateEnabled:false});
+ const projectA=store.project('Navigation A'),projectB=store.project('Navigation B');
+ const navA=Array.from({length:8},(_,i)=>store.branch(projectA.id,'Nav A '+i,'codex',codexSample(root,[['A '+i,'Done']])));
+ const navB=Array.from({length:4},(_,i)=>store.branch(projectB.id,'Nav B '+i,'codex',codexSample(root,[['B '+i,'Done']])));
+ await call('Page.reload');await wait(`document.querySelector('[data-scope="${projectA.id}"]')`);
+ await evaluate(`document.querySelector('[data-scope="${projectA.id}"]').click()`);await wait(`document.querySelector('[data-expand-project="${projectA.id}"]')`);
+ await evaluate(`document.querySelector('[data-expand-project="${projectA.id}"]').click();document.querySelector('#session-list').scrollTo({top:150,behavior:'instant'})`);
+ const listTop=await evaluate('document.querySelector("#session-list").scrollTop');
+ await evaluate('window.__fetch=window.fetch;window.fetch=async(url,...args)=>{if(String(url).includes("/api/trees/"))await new Promise(r=>setTimeout(r,150));return window.__fetch(url,...args)}');
+ await evaluate(`document.querySelector('[data-open="${navA[7].id}"]').click()`);
+ assert.equal(await evaluate('document.querySelector("#list-page").hidden'),false,'keep list until the session is ready');
+ await wait('document.querySelector("#session-title").textContent==="Nav A 7"');
+ assert.equal(await evaluate(`document.querySelectorAll('[data-rail-project="${projectA.id}"] [data-rail]').length`),8);
+ assert.equal(await evaluate(`document.querySelectorAll('[data-rail-project="${projectB.id}"] [data-rail]').length`),2);
+ const next=await evaluate(`document.querySelector('[data-rail-project="${projectB.id}"] [data-rail]').dataset.rail`);
+ await evaluate(`document.querySelector('[data-rail="${next}"]').click()`);
+ assert.equal(await evaluate('document.querySelector("#detail-page").hidden'),false);
+ assert.equal(await evaluate('document.querySelector("#session-title").textContent'),'Nav A 7','keep old detail while loading');
+ await wait('document.querySelector("#session-title").textContent.startsWith("Nav B")');
+ assert.equal(await evaluate(`document.querySelector('[data-scope="${projectB.id}"]').classList.contains('selected')`),true);
+ await evaluate('document.querySelector("#back").click()');
+ assert.equal(await evaluate(`document.querySelectorAll('[data-project-group="${projectA.id}"] [data-open]').length`),8);
+ assert.equal(await evaluate(`document.querySelectorAll('[data-project-group="${projectB.id}"] [data-open]').length`),2);
+ assert.ok(Math.abs((await evaluate('document.querySelector("#session-list").scrollTop'))-listTop)<2,'Back restores list position');
  assert.deepEqual(errors,[]);console.log('Browser passed: one-click cross-tool branch positioning, stable graph camera, unified activation preview/title, conversion panel, prefix continuation, lightweight Trash.');
 }finally{ws?.close();chrome.kill();await once(chrome,'exit');await new Promise(r=>app.close(r));fs.rmSync(root,{recursive:true,force:true});}

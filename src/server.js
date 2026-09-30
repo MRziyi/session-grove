@@ -166,12 +166,12 @@ export function createApp({ root, roots, guard, demo = false }) {
                 assert(typeof body.cwd === 'string' && path.isAbsolute(body.cwd) && fs.existsSync(body.cwd) && fs.statSync(body.cwd).isDirectory(), 'Choose an existing working directory.');
                 native.guard([selected.branch.agent]);
                 let branch = selected.branch;
-                if (!selected.terminal) { branch = store.fork(branch.id, { name: branch.name.slice(0, 200), end: selected.end, revisionId: branch.head }); branch = store.put('branch', { ...branch, activationNodeName: check.nodeName }); }
+                if (check.createsContinuation) { branch = store.fork(branch.id, { name: branch.name.slice(0, 200), end: selected.end, revisionId: branch.head, nodeBoundary: selected.nodeBoundary }); branch = store.put('branch', { ...branch, activationNodeName: check.nodeName }); }
                 const before = store.instances();
                 try { native.setActive(branch.id, body.cwd, true, { nodeName: check.nodeName }); native.apply([branch.id]); }
-                catch (e) { store.local('instances', before); if (!selected.terminal) e.message = 'Continuation saved, but activation failed: ' + e.message; throw e; }
+                catch (e) { store.local('instances', before); if (check.createsContinuation) e.message = 'Continuation saved, but activation failed: ' + e.message; throw e; }
                 autoSync.schedule([branch.id]);
-                return send(201, { branch, title: check.title, nodeId: selected.terminal ? selected.node.id : 'empty-' + branch.id });
+                return send(201, { branch, title: check.title, nodeId: check.createsContinuation ? 'empty-' + branch.id : selected.node.id });
             }
             if (req.method === 'POST' && ['/api/conversion-check', '/api/convert'].includes(route)) {
                 const selected = body.nodeId ? nodeActivation(store, native, body) : null;

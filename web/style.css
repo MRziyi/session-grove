@@ -1322,7 +1322,7 @@ dialog::backdrop {
 /* Position against measured content when switching to a distant transcript node. */
 #transcripts.positioning-node .transcript-segment{content-visibility:visible}
 #upload.has-pending::after{content:'';position:absolute;width:7px;height:7px;border-radius:50%;background:#b87619;right:6px;top:6px;box-shadow:0 0 0 2px #fff}
-.active-node-dot{position:absolute;right:8px;top:9px;width:9px;height:9px;border-radius:50%;background:#299361;box-shadow:0 0 0 2px #fff}
+.active-node-dot{position:absolute;right:8px;bottom:8px;width:9px;height:9px;border-radius:50%;background:#299361;box-shadow:0 0 0 2px #fff}
 #pending-uploads .pending-changes{display:block;margin:3px 0;padding-left:15px;list-style:disc}
 #pending-uploads .pending-changes li{display:list-item;padding:1px 0;border:0;font-size:12px;color:#526477}
 #activation-title{overflow-wrap:anywhere;white-space:normal}
@@ -1360,3 +1360,16 @@ body{height:100dvh;display:flex;flex-direction:column;overflow:hidden}
 #sync-control .sync-buttons{margin:0;flex-wrap:nowrap}
 .dialog-actions:has(#activate-as){gap:6px}
 .dialog-actions:has(#activate-as) button{font-size:12px;padding:7px 9px}
+
+/* Keep the status to the left; every toolbar action shares one baseline. */
+#sync-control{flex-direction:row;align-items:center;max-width:440px;gap:10px}
+#sync-details{flex-direction:column;align-items:flex-end;flex-wrap:nowrap;max-width:240px;gap:2px}
+.settings-card{padding:12px}
+.settings-card>:first-child{margin-top:0}
+.settings-card>:last-child{margin-bottom:0}
+.settings-card .settings-section-heading h3{margin:0}
+.settings-card .collapse-setting{font:inherit;font-size:14px;display:flex;align-items:center;justify-content:space-between;gap:12px}
+.collapse-setting>span{white-space:nowrap}.collapse-setting .select-control{width:140px;flex:0 0 140px}
+@media(max-width:700px){#sync-control{max-width:220px;min-width:0;gap:5px}#sync-details{max-width:100px}#sync-details #cloud-status,#sync-substatus,#sync-error{max-width:100px}.settings-card .collapse-setting{font-size:14px;gap:8px}.collapse-setting .select-control{width:110px;flex-basis:110px}.collapse-setting>span{white-space:nowrap}}
+[data-loading=true]{box-shadow:inset 3px 0 #5b91b1;background:#e9f2f7}
+#rail-content .show-project{margin:6px auto 12px;font-size:11px;padding:5px 8px}

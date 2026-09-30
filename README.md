@@ -33,7 +33,7 @@ Grove manages the session library. **Codex and Claude Code remain where you actu
 2. Keep everyday conversations in **Ungrouped**, or **Move** a whole tree into a named Project. Both synchronize; filing is optional.
 3. Open a tree. Click a start chat and an end chat to select a continuous range, then **Combine** it under a useful title. **Dissolve** returns a range to Pending.
 4. Select any graph Node to **Rename** it, including an empty continuation. Naming Pending saves its title.
-5. **Activate** a selected completed node: preview its prefix, token cost and `[Grove] session · node` native title, or switch tools in that panel. Existing suffixes remain intact. Only path endpoints offer Trash.
+5. **Activate** any selected node: preview its prefix, token cost and `[Grove] session · node` native title, or switch tools in that panel. Existing suffixes remain intact. Only path endpoints offer Trash.
 6. Continue chatting in the agent. New records attach to the continuation. Changes appear in the upload queue. **Pull** refreshes cloud updates; **Push** downloads first, then publishes local changes, including Pending.
 
 Internal-node activation adds a continuation containing the selected node and its preceding context, including its compaction choices.
@@ -131,3 +131,7 @@ Node selection now scrolls to its transcript segment without rebuilding the same
 ### Discarded work belongs in Trash
 
 Trash removes cloud conversation bodies on Sync and keeps a **local-only recovery copy for 30 days**, configurable in Settings. Shared context required by kept paths is preserved. Expired recovery copies are cleared while Grove runs or on its next startup. Existing archives remain under Previous archives until you explicitly move them to Trash. **Update every device to 0.13+ before the first Trash sync.** See the [Trash lifecycle and cleanup guarantees](docs/trash-design.md).
+
+### 0.15.1
+
+Native titles refresh by session ID in the transcript selector; Grove aliases stay independent. Every activation creates a separate continuation through the selected node. Shared-prefix detection handles native serialization defaults. See [native fork comparison and boundaries](docs/0.15.1-node-context.md).

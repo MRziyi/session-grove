@@ -47,24 +47,25 @@ test('activate an internal node includes it, preserves suffixes, labels native t
     assert.equal(graph.nodes.find(n => n.id === route.nodeIds.at(-1)).name, 'Next work');
     assert.equal((await api('trash', { branchIds: [b.id], nodeId: node.id, version: graph.version })).status, 409);
 });
-test('terminal activation reuses the path and Claude receives the exact title', async t => {
+test('terminal activation forks without changing the source and Claude receives the exact title', async t => {
     const { app, root, api } = await setup(t), b = app.store.branch(null, 'Claude session', 'claude', claudeSample(root, [['Question', 'Answer']]));
     let graph = app.store.treeGraph(b.id);
     app.store.organize(b.id, { version: graph.version, pathId: b.id, nodeId: graph.nodes[0].id, action: 'rename', name: 'Final node' });
     graph = app.store.treeGraph(b.id); const target = { branchId: b.id, nodeId: graph.nodes[0].id, version: graph.version, cwd: root };
     const preview = (await api('node-activation/check', target)).value;
     const response = await api('node-activation/activate', { ...target, contextAcknowledgement: preview.fingerprint }); assert.equal(response.status, 201);
-    assert.equal(response.value.branch.id, b.id); assert.equal(app.store.all('branch').length, 1);
-    const instance = app.store.instances().find(i => i.branchId === b.id && i.applied);
+    assert.notEqual(response.value.branch.id, b.id); assert.equal(app.store.all('branch').length, 2);
+    const instance = app.store.instances().find(i => i.branchId === response.value.branch.id && i.applied);
     assert.equal(claudeTitle(parse(fs.readFileSync(instance.file, 'utf8'), 'claude').records).title, '[Grove] Claude session · Final node');
 });
-test('node previews reject stale selections and unfinished logical boundaries', async t => {
+test('node previews reject stale selections and accept intermediate message boundaries', async t => {
     const { app, root } = await setup(t), store = app.store, b = store.branch(null, 'Boundary', 'codex', codexSample(root, [['Question', 'Answer']]));
     let graph = store.treeGraph(b.id);
     store.organize(b.id, { version: graph.version, pathId: b.id, chatIds: [graph.paths[0].messages[0].id], action: 'combine', name: 'User message only' });
     graph = store.treeGraph(b.id);
     const target = { branchId: b.id, nodeId: graph.nodes[0].id, version: graph.version, cwd: root };
-    assert.equal(nodeActivation(store, app.native, target).preview.readiness, 'node-boundary');
+    assert.equal(nodeActivation(store, app.native, target).preview.readiness, 'ready');
+    assert.equal(nodeActivation(store, app.native, target).preview.complete, true);
     store.edit(b.id, { name: 'Renamed' }); assert.throws(() => nodeActivation(store, app.native, target), /changed/);
 });
 test('Trash listing does not compute the library graph or cloud directory', async t => {
@@ -86,4 +87,34 @@ test('switching tools from an internal node converts only its prefix and preview
     const child = response.value.branch, raw = store.raw(child.head);
     assert.ok(raw.includes('Keep this prefix')); assert.ok(!raw.includes('EXCLUDED_SUFFIX'));
     assert.equal(store.instances().find(i => i.branchId === child.id && i.applied).title, preview.title);
+});
+
+test('root and internal commentary nodes activate only their own prefix before a turn ends', async t => {
+    const {app,root,api}=await setup(t),store=app.store;
+    const rows=codexSample(root,[['Question','Final response']]).trim().split('\n').map(JSON.parse);
+    const final=rows.findIndex(r=>r.type==='response_item'&&r.payload.role==='assistant');
+    rows.splice(final,0,{type:'response_item',payload:{type:'message',role:'assistant',phase:'commentary',content:[{type:'output_text',text:'Intermediate thought'}]}},{type:'event_msg',payload:{type:'agent_message',message:'Final response',phase:'final_answer'}});
+    const branch=store.branch(null,'Mid-turn','codex',rows.map(r=>JSON.stringify(r)+'\n').join(''));
+    let graph=store.treeGraph(branch.id);store.organize(branch.id,{version:graph.version,pathId:branch.id,chatIds:graph.paths[0].messages.slice(0,2).map(m=>m.id),action:'combine',name:'Root prefix'});
+    graph=store.treeGraph(branch.id);const node=graph.nodes.find(n=>n.name==='Root prefix'),selection={branchId:branch.id,nodeId:node.id,version:graph.version,cwd:root};
+    const check=await api('node-activation/check',selection);assert.equal(check.value.complete,true);assert.equal(check.value.createsContinuation,true);
+    const result=await api('node-activation/activate',{...selection,contextAcknowledgement:check.value.fingerprint});assert.equal(result.status,201,JSON.stringify(result.value));
+    const fork=result.value.branch;assert.notEqual(fork.id,branch.id);
+    assert.deepEqual(store.detail(fork.id).messages.map(m=>m.text),['Question','Intermediate thought']);
+    const instance=store.instances().find(i=>i.branchId===fork.id);
+    assert.doesNotMatch(fs.readFileSync(instance.file,'utf8'),/Final response/);
+    assert.match(store.raw(branch.head),/Final response/);
+});
+
+test('Claude intermediate nodes materialize their prefix without the later reply', async t => {
+    const {app,root,api}=await setup(t),store=app.store;
+    const rows=claudeSample(root,[['Question','Intermediate'],['Later question','Later reply']]).trim().split('\n').map(JSON.parse);
+    rows[1].message.stop_reason=null;
+    const branch=store.branch(null,'Claude prefix','claude',rows.map(r=>JSON.stringify(r)+'\n').join(''));
+    let graph=store.treeGraph(branch.id);store.organize(branch.id,{version:graph.version,pathId:branch.id,chatIds:graph.paths[0].messages.slice(0,2).map(m=>m.id),action:'combine',name:'First node'});
+    graph=store.treeGraph(branch.id);const selection={branchId:branch.id,nodeId:graph.nodes[0].id,version:graph.version,cwd:root};
+    const check=(await api('node-activation/check',selection)).value;assert.equal(check.complete,true);
+    const result=await api('node-activation/activate',{...selection,contextAcknowledgement:check.fingerprint});assert.equal(result.status,201,JSON.stringify(result.value));
+    const instance=store.instances().find(i=>i.branchId===result.value.branch.id);
+    const raw=fs.readFileSync(instance.file,'utf8');assert.match(raw,/Intermediate/);assert.doesNotMatch(raw,/Later question|Later reply/);
 });
