@@ -10,6 +10,7 @@ import { GitRemote, gitRemote } from '../src/git-remote.js';
 import { AutoSync } from '../src/auto-sync.js';
 import { codexSample, codexTurn } from '../src/demo.js';
 import { bodyRefs } from '../src/retention.js';
+import {hash} from '../src/util.js';
 import { stageTrash,cleanupLocal,restoreTrash } from '../src/trash.js';
 
 function fixture(t) {
@@ -260,6 +261,17 @@ test('discard recovers an older verified baseline from local Git after the worki
  const {discardChanges}=await import('../src/discard-changes.js'),e=fixture(t),a=e.device('undo-local-history'),b=branch(a);await push(a);
  a.store.local(a.cloud.undoKey(b.id),null);a.store.edit(b.id,{name:'Unpublished mistake'});
  a.cloud.write(a.cloud.folder(b.id)+'/graph.json',{schema:3,branches:[],projects:[],revisions:[],nodes:[],layouts:[]});
- const remote=a.cloud.connection.remote,run=remote.run.bind(remote);remote.run=(args,options)=>{assert.ok(!['fetch','push','ls-remote'].includes(args[0]),'discard must stay offline');return run(args,options);};
- await discardChanges(a.store,a.cloud,{collect:()=>({errors:[]})},a.cloud.pendingItems());assert.equal(a.store.get('branch',b.id).name,'Sample');assert.equal(a.cloud.pendingItems().length,0);
+ const remote=a.cloud.connection.remote,run=remote.run.bind(remote),lookups=[];remote.run=async(args,options)=>{
+  assert.ok(!['fetch','push','ls-remote'].includes(args[0]),'discard must stay offline');
+  const result=await run(args,options);let parsed=false,verified=false;
+  if(args[0]==='show')try{const graph=JSON.parse(result.stdout);parsed=true;verified=hash(JSON.stringify(graph))===a.cloud.cache().ack[b.id];}catch{}
+  lookups.push({command:args[0],code:result.code,bytes:result.stdout.length,parsed,verified});return result;
+ };
+ try{await discardChanges(a.store,a.cloud,{collect:()=>({errors:[]})},a.cloud.pendingItems());assert.equal(a.store.get('branch',b.id).name,'Sample');assert.equal(a.cloud.pendingItems().length,0);}
+ catch(error){
+  // Public CI diagnostics contain only control-flow facts, never graph bodies,
+  // titles, paths, credentials, command output or user-provided error strings.
+  if(process.env.CI)console.error('::error file=test/git-cloud.test.js,title=Offline Discard diagnostic::'+JSON.stringify({kind:error.name,status:error.status,code:error.code,gitExitCode:error.gitExitCode,missingBaseline:error.message.includes('No verified local sync snapshot'),offlineGuard:error.message.includes('discard must stay offline'),lookups}));
+  throw error;
+ }
 });
