@@ -8,14 +8,16 @@ function acl(file,script){
 export function privateFile(file){
     const stat=fs.statSync(file);
     if(process.platform!=='win32')return !(stat.mode&0o077);
-    return acl(file,"$acl=Get-Acl -LiteralPath $env:GROVE_PRIVATE_FILE; $allowed=@($sid.Value,'S-1-5-18','S-1-5-32-544'); $unsafe=@($acl.GetAccessRules($true,$true,[Security.Principal.SecurityIdentifier]) | Where-Object { $_.AccessControlType -eq 'Allow' -and $_.IdentityReference.Value -notin $allowed }); if($unsafe.Count -eq 0){'private'}") === 'private';
+    return acl(file,"$acl=[IO.File]::GetAccessControl($env:GROVE_PRIVATE_FILE); $allowed=@($sid.Value,'S-1-5-18','S-1-5-32-544'); $unsafe=$false; foreach($rule in $acl.GetAccessRules($true,$true,[Security.Principal.SecurityIdentifier])){if($rule.AccessControlType -eq 'Allow' -and $rule.IdentityReference.Value -notin $allowed){$unsafe=$true}}; if(-not $unsafe){'private'}") === 'private';
 }
 export function writePrivateFile(file,content){
     if(process.platform!=='win32')return atomic(file,content);
     const staging=file+'.'+id()+'.private';
     try{
         atomic(staging,content);
-        acl(staging,"$acl=New-Object Security.AccessControl.FileSecurity; $acl.SetAccessRuleProtection($true,$false); $rule=New-Object Security.AccessControl.FileSystemAccessRule($sid,'FullControl','Allow'); $acl.AddAccessRule($rule); Set-Acl -LiteralPath $env:GROVE_PRIVATE_FILE -AclObject $acl");
+        // Use the framework directly: PowerShell 7 hosts may pass module paths
+        // that cannot be imported by Windows PowerShell's Get/Set-Acl cmdlets.
+        acl(staging,"$acl=[Security.AccessControl.FileSecurity]::new(); $acl.SetAccessRuleProtection($true,$false); $rule=[Security.AccessControl.FileSystemAccessRule]::new($sid,[Security.AccessControl.FileSystemRights]::FullControl,[Security.AccessControl.AccessControlType]::Allow); $acl.AddAccessRule($rule); [IO.File]::SetAccessControl($env:GROVE_PRIVATE_FILE,$acl)");
         fs.renameSync(staging,file);
     }finally{fs.rmSync(staging,{force:true});}
 }

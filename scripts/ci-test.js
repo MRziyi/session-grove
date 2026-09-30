@@ -25,6 +25,7 @@ function run(file){return new Promise(resolve=>{
         const lines=tail.replace(/\x1b\[[0-9;]*m/g,'').split(/\r?\n/);
         const failed=tests.filter(test=>test.file===file&&lines.some(line=>line.trim().startsWith('✖ '+test.name+' (')));
         for(const test of failed)console.error(`::error file=${test.file},line=${test.line},title=Regression test failure::${test.name.replaceAll('%','%25')}`);
+        for(const [label,pattern] of [['Windows ACL helper',/private-file\.js/],['PowerShell module mismatch',/Could not load file or assembly|requires PowerShell/],['Access denied',/Access is denied|UnauthorizedAccessException/],['Command unavailable',/is not recognized/],['Assertion failed',/ERR_ASSERTION/],['PowerShell type unavailable',/Cannot find type|Method invocation failed/]])if(pattern.test(tail))console.error(`::error file=${file},title=Failure category::${label}`);
         if(!failed.length&&!timedOut)console.error(`::error file=${file},title=Regression test failure::${file} failed. See the runner logs.`);
     }
     else console.log(`::notice file=${file},title=Test file passed::${file}`);
