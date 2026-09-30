@@ -22,6 +22,10 @@ try{
  await call('Runtime.enable');await call('Emulation.setDeviceMetricsOverride',{width:1512,height:982,deviceScaleFactor:1,mobile:false});await wait('document.querySelector("[data-open]")');await evaluate('document.querySelector("[data-open]").click()');await wait('document.querySelectorAll("[data-node]").length>10');
  assert.equal(await evaluate(`document.querySelector('[data-scope="active:codex"]').classList.contains('selected')`),true);
  assert.ok(await evaluate('(()=>{const a=document.querySelector(".transcript-panel").getBoundingClientRect(),b=document.querySelector(".graph-panel").getBoundingClientRect(),p=parseFloat(getComputedStyle(document.querySelector("#editor")).paddingLeft);return Math.abs(b.left-a.right-p)<1})()'));
+ const dividerStart=await evaluate('(()=>{const r=document.querySelector("#ribbon-lane").getBoundingClientRect();return{x:r.x+r.width/2,y:r.y+r.height/2}})()');
+ await call('Input.dispatchMouseEvent',{type:'mousePressed',button:'left',clickCount:1,...dividerStart});await call('Input.dispatchMouseEvent',{type:'mouseMoved',x:dividerStart.x+75,y:dividerStart.y,button:'left',buttons:1});
+ assert.ok(await evaluate(`(()=>{const lane=document.querySelector('#ribbon-lane').getBoundingClientRect(),grip=document.querySelector('.divider-grip').getBoundingClientRect();return lane.x>${dividerStart.x}+50&&Math.abs(grip.x+grip.width/2-lane.x-lane.width/2)<1})()`),'the visible grip follows the divider during drag');
+ await call('Input.dispatchMouseEvent',{type:'mouseReleased',button:'left',clickCount:1,x:dividerStart.x+75,y:dividerStart.y});
  await evaluate('document.querySelector("#graph-reset").click()');
  const graph=store.treeGraph(parent.id),targets=[parent,child].map(b=>graph.paths.find(p=>p.branchId===b.id).nodeIds.at(-4));
  async function positionNode(node){const v=await evaluate(`(()=>{const a=document.querySelector('[data-node="${node}"]').getBoundingClientRect(),b=document.querySelector('#graph-scroll').getBoundingClientRect();return {x:b.x+b.width/2,y:b.y+b.height/2,deltaX:a.x+a.width/2-b.x-b.width/2,deltaY:a.y+a.height/2-b.y-b.height/2}})()`);await call('Input.dispatchMouseEvent',{type:'mouseWheel',...v});await evaluate('new Promise(resolve=>requestAnimationFrame(resolve))');}
@@ -54,6 +58,8 @@ try{
   await evaluate('document.querySelector("#dialog-close").click();document.querySelector("#activate-node").click()');await wait('!!document.querySelector("#activation-title")&&!document.querySelector("#dialog-submit").disabled');
   await evaluate('document.querySelector("#dialog-form").requestSubmit()');await wait('!document.querySelector("#dialog").open');assert.equal(store.all('branch').length,3);assert.ok(store.instances().some(i=>i.applied&&i.title===title));
   await wait('document.querySelectorAll(".active-node-dot").length>=2');
+  await evaluate('document.querySelector("#back").click()');await evaluate(`document.querySelector('[data-select="${parent.id}"]').click()`);assert.equal(await evaluate('document.querySelector("#archive-items").textContent'),'Deactivate (2)');
+  await evaluate(`document.querySelector('[data-open="${parent.id}"]').click()`);await wait('document.querySelector("#detail-page").hidden===false');
   assert.ok(await evaluate('(()=>{const d=document.querySelector(".active-node-dot"),a=d.getBoundingClientRect(),b=d.closest(".graph-node").getBoundingClientRect();return a.y+a.height/2>b.y+b.height/2&&a.x+a.width/2>b.x+b.width/2})()'));
   const active=store.instances().find(i=>i.applied&&i.title===title),fresh=store.treeGraph(parent.id),endpoint=fresh.paths.find(p=>p.branchId===active.branchId).nodeIds.at(-1);
   await clickNode(endpoint);assert.equal(await evaluate('document.querySelector("#activate-node").textContent'),'Deactivate');

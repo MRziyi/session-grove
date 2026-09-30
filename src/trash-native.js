@@ -138,6 +138,6 @@ export function removeTrashNativeCopies(store, native, branchIds, options = {}) 
         removed.push(i.id);
     }
     store.local('instances', instances);
-    cleanupLocal(store);
+    if(!options.deferCleanup)cleanupLocal(store);
     return { removed: removed.length, blocked };
 }

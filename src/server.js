@@ -1,4 +1,4 @@
-import {stageTrash,restoreTrash,expireTrash,cleanupLocal,isTrashed} from './trash.js';
+import {stageTrash,stageTrashAsync,restoreTrash,expireTrash,cleanupLocal,isTrashed} from './trash.js';
 import {nativeTrashCandidates,moveNativeToRecovery,deleteRecoveryCopies,restoreRecoveryCopies} from './trash-actions.js';
 import os from 'node:os';
 import { recordPreview } from './record-preview.js';
@@ -44,12 +44,12 @@ export function createApp({ root, roots, guard, demo = false }) {
         i.projectId ? store.get('project', i.projectId) : inboxProject(), i.sessionIds.map(id => { const b = store.get('branch', id); return [b.id, b.name, b.projectId, b.archived, b.parentId, b.forkEnd, b.nodeHead, b.layoutHead, b.contextPolicy, b.endpointName]; }),
         store.get('branch', i.id).layoutHead
     ]))]));
-    const streams = new Set(); let updateOperation = null;
+    const streams = new Set(); let updateOperation = null, trashOperation = null, trashPromise = null;
     let stopping = false;
     const instance = id();
     const operation = (kind, value) => { for (const res of streams) res.write('event: operation\ndata: ' + JSON.stringify({kind, ...value}) + '\n\n'); };
     autoSync.onOperation = value => operation('sync', {...value, status:autoSync.status()});
-    const timing = () => ({ appVersion: VERSION, serverNow: Date.now(), stateVersion: diagnostics.startedAt + ':' + store.version + ':' + store.cloudVersion, update: { nextRunAt: nextCaptureAt, lastRunAt: lastCaptureAt, started: !!store.local('localUpdateStarted'), operation: updateOperation } });
+    const timing = () => ({ trashOperation, appVersion: VERSION, serverNow: Date.now(), stateVersion: diagnostics.startedAt + ':' + store.version + ':' + store.cloudVersion, update: { nextRunAt: nextCaptureAt, lastRunAt: lastCaptureAt, started: !!store.local('localUpdateStarted'), operation: updateOperation } });
     let expiryTimer;const configureExpiry=()=>{clearTimeout(expiryTimer);const entries=expireTrash(store),next=entries.filter(e=>!e.expired).map(e=>Date.parse(e.expiresAt)).sort((a,b)=>a-b)[0];if(next){expiryTimer=setTimeout(configureExpiry,Math.max(1000,Math.min(2147483647,next-Date.now())));expiryTimer.unref();}};configureExpiry();
     const trashSnapshot = () => ({ trashEntries:(store.local('trashEntries')||[]).filter(e=>!e.expired&&!e.restoredAt), trashNative:nativeTrashCandidates(store) });
     const snapshot = () => ({ ...autoSync.decorate(store.snapshot()), preferences: preferences(store), ...trashSnapshot() });
@@ -94,6 +94,7 @@ export function createApp({ root, roots, guard, demo = false }) {
                 catch {
                     throw Object.assign(new Error('JSON 格式错误'), { status: 400 });
                 }
+                assert(!trashPromise, 'A Trash operation is in progress.', 409);
                 assert(!capturePromise || route==='/api/collect', 'Local update in progress.', 409);
                 assert(settings.job?.state !== 'running' || !/^\/api\/(sync|synchronize|settings|webdav)/.test(route), 'Settings migration in progress.', 409);
             }
@@ -136,21 +137,24 @@ export function createApp({ root, roots, guard, demo = false }) {
                 const requestedTrees=body.itemIds||[];for(const id of requestedTrees)await autoSync.openTree(id);
                 const archived=b=>b.archived||b.projectId&&store.get('project',b.projectId).archived;
                 const activeAgent = /^active:(codex|claude)$/.exec(body.view || '')?.[1];
-                const ids=requestedTrees.length?[...new Set(requestedTrees.flatMap(id=>treeMembers(store,id).filter(b=>!b.synthetic&&!isTrashed(store,b.id)&&(body.view==='archived'?archived(b):!archived(b))&&(!activeAgent||b.agent===activeAgent&&store.instances().some(i=>i.branchId===b.id&&isActive(i)))).map(b=>b.id)))]:body.branchIds||[];
+                const ids=requestedTrees.length?[...new Set(requestedTrees.flatMap(id=>treeMembers(store,id).filter(b=>!b.synthetic&&!isTrashed(store,b.id)&&(body.view==='archived'?archived(b):!archived(b))&&(!activeAgent||b.agent===activeAgent)).map(b=>b.id)))]:body.branchIds||[];
                 assert(ids.length,'Select sessions first.');
                 const treeIds=requestedTrees.filter(id=>treeMembers(store,id).filter(b=>!b.synthetic&&!isTrashed(store,b.id)).every(b=>ids.includes(b.id)));
                 if(!requestedTrees.length){assert(ids.length===1,'Select one complete path.');const graph=store.treeGraph(ids[0],'all');assert(graph.version===body.version&&graph.nodes.some(n=>n.id===body.nodeId&&n.endBranchIds.includes(ids[0])),'Select a complete session endpoint.',409);}
-                native.collect();
-                // The explicit Trash action may deactivate local copies through
-                // the established native archive path. Busy/changed copies stay
-                // intact and remain visible in Trash's native-cleanup section.
-                try{if(!demo&&!guard)await archiveNative(store,native,ids);else{for(const id of ids)native.setActive(id,null,false);native.apply(ids);}}catch(e){diagnostics.record('trash-native-pending',{code:'NATIVE_COPY_RETAINED',count:ids.length});}
-                const entry=stageTrash(store,ids,treeIds);cleanupLocal(store);configureExpiry();autoSync.reconcileTimer();return send(202,entry);
+                const selectedIds=new Set(requestedTrees.length?requestedTrees.flatMap(id=>treeMembers(store,id).filter(b=>!b.synthetic&&!isTrashed(store,b.id)).map(b=>b.id)):ids);
+                assert(!store.instances().some(i=>selectedIds.has(i.branchId)&&isActive(i)),'Deactivate all active sessions in the selection before moving it to Trash.',409);
+                const entry=await runTrash('trash',async report=>{
+                    await report({phase:'Reading local changes',completed:0,total:null});native.collect();
+                    assert(!store.instances().some(i=>selectedIds.has(i.branchId)&&isActive(i)),'Deactivate all active sessions in the selection before moving it to Trash.',409);
+                    const entry=await stageTrashAsync(store,ids,treeIds,{onProgress:report});
+                    await report({phase:'Removing unused local records',completed:0,total:null});cleanupLocal(store);
+                    configureExpiry();autoSync.reconcileTimer();return entry;
+                });return send(202,entry);
             }
             if(req.method==='POST'&&route==='/api/trash/restore'){const result=restoreTrash(store,body.id);autoSync.schedule();return send(201,result);}
             if(req.method==='POST'&&route==='/api/trash/native'){
                 const ids=body.instanceIds || nativeTrashCandidates(store).filter(i=>(body.branchIds||[]).includes(i.branchId)).map(i=>i.id);
-                const result=await moveNativeToRecovery(store,native,ids);configureExpiry();autoSync.schedule();return send(200,result);
+                const result=await runTrash('recovery',report=>moveNativeToRecovery(store,native,ids,{onProgress:report}));configureExpiry();autoSync.schedule();return send(200,result);
             }
             if(req.method==='POST'&&route==='/api/trash/recovery'){
                 assert(Array.isArray(body.ids)&&body.ids.length&&body.ids.every(id=>typeof id==='string'),'Select recovery copies.');
@@ -237,7 +241,7 @@ export function createApp({ root, roots, guard, demo = false }) {
                 // Metadata changes follow successful native changes. A busy client leaves
                 // both membership and Archive state untouched; the user can retry safely.
                 const before = store.instances();
-                if (body.action === 'archive' && !demo && !guard) await archiveNative(store,native,members.filter(b=>!b.synthetic).map(b=>b.id));
+                if (['archive','deactivate'].includes(body.action) && !demo && !guard) await archiveNative(store,native,members.filter(b=>!b.synthetic).map(b=>b.id),{archiveBranches:body.action==='archive'});
                 else if (body.action !== 'restore') {
                     try {
                         for (const b of members.filter(b => !b.synthetic)) native.setActive(b.id, body.cwd, body.action === 'activate');
@@ -366,7 +370,20 @@ export function createApp({ root, roots, guard, demo = false }) {
             send(e.status || 400, { error: e.message, requestId });
         }
     });
+    async function runTrash(action, task) {
+        assert(!trashPromise,'A Trash operation is in progress.',409);
+        trashOperation={id:id(),action,state:'running',startedAt:Date.now()};
+        let emittedAt=0,phaseStartedAt=Date.now();
+        const report=async progress=>{const at=Date.now(),changed=trashOperation.progress?.phase!==progress.phase;if(changed&&trashOperation.progress)diagnostics.record('trash-phase',{phase:trashOperation.progress.phase,durationMs:at-phaseStartedAt});if(changed)phaseStartedAt=at;trashOperation={...trashOperation,progress};if(changed||progress.completed===progress.total||at-emittedAt>=100){operation('trash',trashOperation);emittedAt=at;}await new Promise(resolve=>setImmediate(resolve));};
+        trashPromise=(async()=>{
+            try {const result=await task(report);trashOperation={...trashOperation,state:result?.blocked?.length?'error':'success',error:result?.blocked?.map(e=>e.reason).join('\n')||null,finishedAt:Date.now()};return result;}
+            catch(error){trashOperation={...trashOperation,state:'error',error:error.message,finishedAt:Date.now()};throw error;}
+            finally{if(trashOperation.progress)diagnostics.record('trash-phase',{phase:trashOperation.progress.phase,durationMs:Date.now()-phaseStartedAt});operation('trash',trashOperation);}
+        })();
+        try{return await trashPromise;}finally{trashPromise=null;}
+    }
     function captureLocal() {
+        if(trashPromise)return trashPromise.catch(()=>{}).then(()=>captureLocal());
         if(capturePromise) return capturePromise;
         capturePromise = performCapture().finally(()=>{capturePromise=null;}); return capturePromise;
     }
@@ -401,7 +418,7 @@ export function createApp({ root, roots, guard, demo = false }) {
     }, close(callback) {
         app.quiesce();
         for(const res of streams)res.end(); streams.clear();
-        if(capturePromise)capturePromise.catch(()=>{}).finally(()=>server.close(callback)); else server.close(callback);
+        if(capturePromise||trashPromise)Promise.allSettled([capturePromise,trashPromise]).finally(()=>server.close(callback)); else server.close(callback);
     } };
     return app;
 }

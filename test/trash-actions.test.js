@@ -62,3 +62,10 @@ test('a damaged old recovery file is replaced by a verified new snapshot before 
  const result=await moveNativeToRecovery(store,native,[instance.id],options);assert.deepEqual(result.blocked,[]);assert.notEqual(result.recoveryIds[0],old.id);
  const restored=restoreTrash(store,result.recoveryIds[0]);assert.match(store.raw(store.get('branch',restored.branchIds[0]).head),/Original/);
 });
+
+test('asynchronous recovery staging is never visible or eligible for cloud upload',async t=>{
+ const {store,native,b,instance}=setup(t);stageTrash(store,[b.id],[b.id]);fs.appendFileSync(instance.file,codexTurn('New recovery content','Done').map(r=>JSON.stringify(r)+'\n').join(''));
+ let checked=false;
+ const result=await moveNativeToRecovery(store,native,[instance.id],{...options,onProgress:async p=>{if(p.phase==='Copying recovery records'){checked=true;const helpers=store.all('branch').filter(b=>b.excluded==='recovery-staging').map(b=>b.id);assert.ok(helpers.length);assert.ok(store.exportGraph().branches.every(b=>!helpers.includes(b.id)));}}});
+ assert.equal(checked,true);assert.deepEqual(result.blocked,[]);const restored=restoreTrash(store,result.recoveryIds[0]);assert.ok(store.syncCollections().items.some(i=>i.sessionIds.includes(restored.branchIds[0])));
+});

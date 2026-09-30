@@ -5,7 +5,7 @@ import {gunzipSync} from 'node:zlib';
 import {bodyRefs} from './retention.js';
 import {DatabaseSync} from 'node:sqlite';
 import {assert,hash,inside,now,safePath} from './util.js';
-import {stageTrash,isTrashed,cleanupLocal,restoreTrash} from './trash.js';
+import {stageTrashAsync,isTrashed,cleanupLocal,restoreTrash} from './trash.js';
 import {removeTrashNativeCopies} from './trash-native.js';
 import {connect} from './codex-rpc.js';
 import {codexBinary} from './native-archive.js';
@@ -40,33 +40,39 @@ function verifiedRecovery(store, entry) {
         return Array.isArray(backup.graph?.branches) && backup.graph.branches.length>0 && bodyRefs(backup.graph).every(h=>typeof backup.objects[h]==='string'&&hash(backup.objects[h])===h);
     } catch { return false; }
 }
-export async function moveNativeToRecovery(store,native,instanceIds,{checkFile=checkFileIdle,archive=archiveCodex}={}) {
+export async function moveNativeToRecovery(store,native,instanceIds,{checkFile=checkFileIdle,archive=archiveCodex,onProgress=async()=>{}}={}) {
     const candidates=new Set(nativeTrashCandidates(store).map(i=>i.id)),result={moved:[],blocked:[],recoveryIds:[]};
     for(const instanceId of [...new Set(instanceIds)]) {
-        let temporary;
+        let temporary;const target=store.instances().find(i=>i.id===instanceId),detail=target&&(store.find('branch',target.branchId)?.name||target.title);
+        const report=progress=>onProgress({...progress,detail});
         try {
             assert(candidates.has(instanceId),'Select an available client copy.');
+            await report({phase:'Checking client copy',completed:result.moved.length+result.blocked.length,total:instanceIds.length});
             let i=store.instances().find(i=>i.id===instanceId);
             assert(inside(native.roots[i.agent],i.file)||inside(path.join(store.root,'parked'),i.file),'Native copy is outside managed storage.');
             safePath(inside(store.root,i.file)?store.root:native.roots[i.agent],i.file);
             if(i.agent==='claude') { try { native.guard(['claude']); } catch { throw new Error('Claude is running. Close Claude before moving this copy.'); } }
             checkFile(i.file);
-            if(i.agent==='codex') { await archive(native,i);store.local('instances',store.instances().map(v=>v.id===i.id?i:v)); }
+            if(i.agent==='codex') { await report({phase:'Archiving client copy',completed:result.moved.length,total:instanceIds.length});await archive(native,i);store.local('instances',store.instances().map(v=>v.id===i.id?i:v)); }
             safePath(inside(store.root,i.file)?store.root:native.roots[i.agent],i.file);
             checkFile(i.file);
+            await report({phase:'Reading client history',completed:result.moved.length,total:instanceIds.length});
             const physical=fs.readFileSync(i.file,'utf8'),stamp=hash(physical),companion=path.join(path.dirname(i.file),i.nativeId);
             const auxiliary=i.agent==='claude'?auxiliarySnapshot(companion):[],companionStamp=i.agent==='claude'?auxiliaryStamp(companion):null;
             const existing=(store.local('trashEntries')||[]).find(e=>!e.expired&&!e.restoredAt&&e.branchIds.includes(i.branchId)&&fs.existsSync(path.join(store.root,'trash',e.id+'.json.gz')));
+            if(existing)await report({phase:'Verifying recovery backup',completed:result.moved.length,total:instanceIds.length});
             let entry=stamp===i.observedHash&&!auxiliary.length&&verifiedRecovery(store,existing)?existing:null;
             if(!entry) {
                 const original=store.find('branch',i.branchId),raw=native.history(i.file,i.agent);
                 const snapshot=temporary=store.branch(original?.projectId,original?.name||i.title||'Session',i.agent,raw,{operation:'import',nativeId:i.nativeId,cwd:i.cwd,...(auxiliary.length?{auxiliary}:{})});
-                entry=stageTrash(store,[snapshot.id],[snapshot.id]);
+                store.put('branch',{...snapshot,excluded:'recovery-staging'});
+                entry=await stageTrashAsync(store,[snapshot.id],[snapshot.id],{onProgress:report,transient:true});
                 if(!isTrashed(store,i.branchId) && !store.instances().some(other=>other.id!==i.id&&other.branchId===i.branchId&&other.applied&&!other.nativeArchived&&!other.missing)) {
                     const add=e=>e.id===entry.id?{...e,branchIds:[...e.branchIds,i.branchId],heads:{...e.heads,[i.branchId]:original.head}}:e;
                     store.local('trashPending',(store.local('trashPending')||[]).map(add));store.local('trashEntries',(store.local('trashEntries')||[]).map(add));store.invalidate();
                 }
             }
+            await report({phase:'Verifying recovery backup',completed:result.moved.length,total:instanceIds.length});
             assert(verifiedRecovery(store,entry),'Recovery verification failed. The client copy was kept.');
             result.recoveryIds.push(entry.id);
             const expiresAt=new Date(Date.now()+preferences(store).trashRetentionDays*86400000).toISOString();
@@ -74,13 +80,16 @@ export async function moveNativeToRecovery(store,native,instanceIds,{checkFile=c
             assert(hash(fs.readFileSync(i.file))===stamp,'Native history changed. Retry to save its latest version.');
             if(i.agent==='claude')assert(auxiliaryStamp(companion)===companionStamp,'Companion files changed. Retry to save their latest version.');
             i={...i,observedHash:stamp};store.local('instances',store.instances().map(v=>v.id===i.id?i:v));
-            const removed=removeTrashNativeCopies(store,native,[i.branchId],{archivedByClient:true,recoverySaved:true,instanceIds:[i.id],checkFile,companionsCaptured:true});
+            await report({phase:'Removing client copy',completed:result.moved.length,total:instanceIds.length});
+            const removed=removeTrashNativeCopies(store,native,[i.branchId],{archivedByClient:true,recoverySaved:true,deferCleanup:true,instanceIds:[i.id],checkFile,companionsCaptured:true});
             result.blocked.push(...removed.blocked);if(removed.removed)result.moved.push(i.id);
         } catch(error) {
             if(temporary&&!isTrashed(store,temporary.id)){store.db.prepare('DELETE FROM entities WHERE id IN (?,?)').run(temporary.id,temporary.head);store.invalidate();}
             result.blocked.push({instanceId,reason:error.message});
         }
     }
+    await onProgress({phase:'Removing unused local records',completed:0,total:null});cleanupLocal(store);
+    await onProgress({phase:'Recovery move finished',completed:instanceIds.length,total:instanceIds.length});
     return result;
 }
 export function deleteRecoveryCopies(store,entryIds) {

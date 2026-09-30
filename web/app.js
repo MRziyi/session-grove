@@ -43,7 +43,7 @@ const operations = {}, operationTimers = {}, seenOperations={};
 let activityGroups=[];
 function showOperation(kind, value) {
     const signature=value.id+':'+value.state+':'+JSON.stringify(value.progress||null); if(seenOperations[kind]===signature)return;seenOperations[kind]=signature;
-    if (value.finishedAt && Date.now() - value.finishedAt > 3500) return;
+    if (value.finishedAt && Date.now() - value.finishedAt > 3500) { if(kind==='trash'){delete operations.trash;if(state.data)state.data.trashOperation=value;renderCloudStatus();} return; }
     operations[kind] = value;
     if(value.status && state.data){ if(kind==='sync')state.data.cloud=value.status;else state.data.update={...state.data.update,...value.status}; }
     clearTimeout(operationTimers[kind]);
@@ -180,7 +180,7 @@ function renderCloudStatus(){
     const updating=operations.update?.state==='running'||state.uiBusy==='update';$('#collect').dataset.operation=updating?'running':'';$('#collect').disabled=offline||working||updating;
     $('#collect .button-label').textContent=t(updating?'Updating…':'Update');
     $$('.actions button,button[data-compaction],[data-trash-restore],[data-trash-native]').forEach(el=>el.disabled=actionDisabled(el));
-    renderTransfer();renderCountdowns();
+    renderTransfer();renderCountdowns();renderTrashProgress();
     const ticking=!document.hidden&&!offline&&(d.update?.nextRunAt||d.cloud?.nextRunAt||busy);
     if(ticking&&!clockTimer)clockTimer=setInterval(()=>{renderCountdowns();renderTransfer();},1000);if(!ticking&&clockTimer){clearInterval(clockTimer);clockTimer=null;}
 }
@@ -225,6 +225,19 @@ function renderTransfer() {
         toast(t(done.state==='error'?'Sync failed':done.direction==='pull'?(done.summary?.unchanged?'Already up to date':'Pull complete'):'Push complete'));
         if(!$('#dialog').open&&!working)queueMicrotask(()=>refresh().catch(e=>toast(e.message)));
     }
+}
+function renderTrashProgress() {
+    const op=operations.trash||state.data?.trashOperation,box=$('#trash-progress');
+    box.hidden=!op||op.state!=='running'&&Date.now()-(op.finishedAt||0)>3500;
+    if(box.hidden){box.hidePopover?.();return;}
+    if(box.showPopover&&!box.matches(':popover-open'))box.showPopover();
+    const p=op.progress||{},total=p.total,count=p.completed||0;
+    box.innerHTML=`<strong>${t(op.action==='recovery'?'Move to recovery':'Move to Trash')}</strong><div>${esc(t(op.state==='error'?op.error:op.state==='success'?'Complete':p.phase||'Checking selection'))}</div>${p.detail?`<small class="task-detail">${esc(p.detail)}</small>`:''}${op.state==='running'?`<progress ${total>0?`max="${total}" value="${count}"`:''}></progress>${total>0?`<small>${count} / ${total}</small>`:''}`:''}`;
+}
+async function trashRequest(path,body,action) {
+    showOperation('trash',{id:'pending-'+Date.now(),action,state:'running',startedAt:Date.now(),progress:{phase:'Checking selection'}});
+    try {const result=await api(path,'POST',body);if(operations.trash?.state==='running')showOperation('trash',{...operations.trash,state:result.blocked?.length?'error':'success',error:result.blocked?.map(e=>e.reason).join('\n'),finishedAt:Date.now()});return result;}
+    catch(error){showOperation('trash',{...operations.trash,state:'error',error:error.message,finishedAt:Date.now()});throw error;}
 }
 async function showPendingUploads(){
     clearTimeout(pendingTimer); const box=$('#pending-uploads'),ticket=++pendingTicket;
@@ -291,12 +304,13 @@ function renderList() {
     if(pending.length)$('#deactivate-archived').onclick=()=>run(()=>api('/manage','POST',{action:'deactivate',branchIds:pending.map(s=>s.id)}));
     $('#list-count').textContent = t('{count} sessions', { count: state.list.sessionCount || 0 });
     const selected = state.list.items.filter(i => state.selected.has(i.id));
+    const activeIds=[...new Set(selected.flatMap(i=>(state.data.items.find(v=>v.id===i.id)||i).sessions.filter(s=>s.active).map(s=>s.id)))];
     const organizing = !state.scope.startsWith('active:') && state.scope !== 'archived';
-    $('#list-actions').innerHTML = '<button id="select-all"></button>' + (selected.length ? `<span class="selection-count">${t('{count} selected',{count:selected.length})}</span>${selected.length===1?'<button id="rename-items"></button>':''}${state.scope==='archived'?'<button id="restore-items"></button>':organizing?'<button id="move-items"></button>':'<button id="deactivate-items"></button>'}<button id="archive-items"></button>`:'');
+    $('#list-actions').innerHTML = '<button id="select-all"></button>' + (selected.length ? `<span class="selection-count">${t('{count} selected',{count:selected.length})}</span>${selected.length===1?'<button id="rename-items"></button>':''}${state.scope==='archived'?'<button id="restore-items"></button>':organizing?'<button id="move-items"></button>':''}<button id="archive-items"></button>`:'');
     button('#rename-items', 'Rename', () => renameSession(selected[0]));
     button('#select-all',state.selected.size?'Deselect':'Select all',()=>{state.selected=state.selected.size?new Set():new Set(state.list.items.map(i=>i.id));renderList();});
     button('#move-items','Move to project',()=>moveDialog([...state.selected]));
-    button('#archive-items','Move to Trash',()=>trashDialog({itemIds:[...state.selected],view:state.scope.startsWith('active:')?state.scope:state.scope==='archived'?'archived':'in-use'},selected.length));
+    button('#archive-items',activeIds.length?t('Deactivate ({count})',{count:activeIds.length}):'Move to Trash',()=>activeIds.length?run(async()=>{await api('/manage','POST',{action:'deactivate',branchIds:activeIds});if(state.scope.startsWith('active:')){state.scope=PROJECTS;state.projectFocus=selected[0]?.projectId||INBOX;}}):trashDialog({itemIds:[...state.selected],view:state.scope==='archived'?'archived':'in-use'},selected.length));
     button('#restore-items','Restore',()=>restore({itemIds:[...state.selected]}));
     button('#deactivate-items','Deactivate',()=>run(()=>api('/manage','POST',{action:'deactivate',itemIds:[...state.selected],agent:state.scope.slice(7)})));
     const row=i=>`<article class="session-row ${state.selected.has(i.id)?'checked':''}" data-item="${esc(i.id)}"><button class="row-open" data-open="${esc(i.id)}">${icon(i.kind)}<span class="row-text"><span class="row-title">${esc(i.name)} ${cloudMark(i)}</span><span class="row-meta">${itemMeta(i)} ${sourceTags(i)}</span></span><time class="row-date">${date(i.updatedAt)}</time></button>${`<input type="checkbox" data-select="${esc(i.id)}" aria-label="${esc(t('Select {name}',{name:i.name}))}" ${state.selected.has(i.id)?'checked':''}>`}</article>`;
@@ -373,7 +387,7 @@ function renderDetailActions() {
     const archived = p.archived || state.data.projects.find(v => v.id === state.tree.projectId)?.archived;
     const editable = !archived && state.scope !== 'archived';
     const dissolve = state.tree.nodes.some(n => !n.pending && n.chatIds.some(id => state.chats.has(id)));
-    $('#detail-actions').innerHTML = state.chats.size ? `<span>${t('{count} selected', { count: state.chats.size })}</span>${editable && state.rangeEnd !== null && canCombine() ? '<button id="combine"></button>' : ''}${editable && state.rangeEnd !== null && dissolve ? '<button id="dissolve"></button>' : ''}<button id="clear-selection"></button>` : node ? `<button id="rename-node"></button>${editable ? '<button id="activate-node"></button>' : ''}${terminal ? `${archived ? '<button id="restore-session"></button>' : ''}<button id="archive-path"></button>` : ''}` : '';
+    $('#detail-actions').innerHTML = state.chats.size ? `<span>${t('{count} selected', { count: state.chats.size })}</span>${editable && state.rangeEnd !== null && canCombine() ? '<button id="combine"></button>' : ''}${editable && state.rangeEnd !== null && dissolve ? '<button id="dissolve"></button>' : ''}<button id="clear-selection"></button>` : node ? `<button id="rename-node"></button>${editable ? '<button id="activate-node"></button>' : ''}${terminal && !p.active ? `${archived ? '<button id="restore-session"></button>' : ''}<button id="archive-path"></button>` : ''}` : '';
     button('#activate-node', terminal && p.active ? 'Deactivate' : 'Activate', () => terminal && p.active ? run(()=>api('/manage','POST',{action:'deactivate',branchIds:[p.branchId]})) : activateDialog(p));
     button('#combine', 'Combine', combineDialog);
     button('#dissolve', 'Dissolve', () => run(async () => { await saveOrganization('dissolve'); clearRange(); }));
@@ -628,7 +642,7 @@ function renameNode() {
 }
 function trashDialog(target,count=1){
     const days=state.data.preferences?.trashRetentionDays||30;
-    modal('Move to Trash',`<p>${t('Discard {count} complete paths or trees?',{count})}</p><p class="dialog-copy">${t('Recoverable on this device for {days} days.',{days})}</p>`,async()=>{await api('/trash','POST',target);state.tree=null;state.selected.clear();clearRange();},'Move to Trash');
+    modal('Move to Trash',`<p>${t('Discard {count} complete paths or trees?',{count})}</p><p class="dialog-copy">${t('Recoverable on this device for {days} days.',{days})}</p>`,async()=>{await trashRequest('/trash',target,'trash');state.tree=null;state.selected.clear();clearRange();},'Move to Trash');
 }
 function archivePath(){const p=route(),node=selectedNode();if(!node?.endBranchIds.includes(p.branchId))return;trashDialog({branchIds:[p.branchId],nodeId:node.id,version:state.tree.version});}
 function renderTrash(){
@@ -641,7 +655,7 @@ function renderTrash(){
     $('#list-actions').innerHTML='<button id="trash-select-all"></button>'+(native.length?'<button id="trash-move-selected"></button>':'')+(recovery.length?'<button id="trash-restore-selected"></button><button id="trash-delete-selected"></button>':'');
     button('#trash-select-all',state.selected.size?'Deselect':'Select all',()=>{state.selected=state.selected.size?new Set():new Set(rows.map(r=>r.key));renderTrash();});
     button('#trash-move-selected',t('Move to recovery ({count})',{count:native.length}),()=>run(async()=>{
-        const result=await api('/trash/native','POST',{instanceIds:native.map(r=>r.id)});
+        const result=await trashRequest('/trash/native',{instanceIds:native.map(r=>r.id)},'recovery');
         state.trashFeedback=result.blocked.map(b=>`${native.find(r=>r.id===b.instanceId)?.name||''}: ${t(b.reason)}`).join('\n');
         for(const id of result.moved)state.selected.delete('native:'+id);
         if(result.moved.length)toast(t('Moved {count} copies to recovery.',{count:result.moved.length}));
@@ -817,7 +831,7 @@ function applyPanePreferences(){
 for(const [button,key]of [['toggle-navigation','nav'],['toggle-rail','rail']])$('#'+button).onclick=()=>{const name='grove-'+key+'-collapsed';localStorage.setItem(name,String(localStorage.getItem(name)!=='true'));applyPanePreferences();};
 const divider=$('#ribbon-lane');
 divider.onpointerdown=e=>{if(e.button!==0)return;divider.setPointerCapture(e.pointerId);divider.dataset.dragging='true';e.preventDefault();};
-divider.onpointermove=e=>{if(!divider.dataset.dragging)return;const rect=$('#editor').getBoundingClientRect(),ratio=Math.max(.2,Math.min(.8,(e.clientX-rect.left)/rect.width));localStorage.setItem('grove-pane-ratio',String(ratio));applyPanePreferences();};
+divider.onpointermove=e=>{if(!divider.dataset.dragging)return;const rect=$('#editor').getBoundingClientRect(),style=getComputedStyle($('#editor')),left=parseFloat(style.paddingLeft),right=parseFloat(style.paddingRight),width=divider.getBoundingClientRect().width,ratio=Math.max(.2,Math.min(.8,(e.clientX-rect.left-left-width/2)/(rect.width-left-right-width)));localStorage.setItem('grove-pane-ratio',String(ratio));applyPanePreferences();};
 divider.onpointerup=divider.onpointercancel=()=>{delete divider.dataset.dragging;};
 divider.onkeydown=e=>{if(!['ArrowLeft','ArrowRight'].includes(e.key))return;e.preventDefault();localStorage.setItem('grove-pane-ratio',String((Number(localStorage.getItem('grove-pane-ratio'))||.5)+(e.key==='ArrowRight'?.05:-.05)));applyPanePreferences();};
 applyPanePreferences();
@@ -854,10 +868,11 @@ try {
         try {
             const next = await api('/status');
             if(next.cloud.operation)showOperation('sync',next.cloud.operation);
+            if(next.trashOperation)showOperation('trash',next.trashOperation);
             if(next.update.operation)showOperation('update',next.update.operation);
             const canRefresh = !working && !opening && !$('#dialog').open && !state.chats.size;
             if (next.stateVersion !== state.data.stateVersion && canRefresh) await refresh();
-            else { state.data.cloud = next.cloud; state.data.update = next.update; renderCloudStatus(); }
+            else { state.data.cloud = next.cloud; state.data.update = next.update; state.data.trashOperation = next.trashOperation; renderCloudStatus(); }
         } catch { /* Explicit Update reports connection errors. */ }
     }, 5000);
 } catch (e) { toast(e.message); }

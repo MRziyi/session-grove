@@ -40,12 +40,14 @@ try{
  assert.ok(await evaluate('Number(document.querySelector("#sync").style.getPropertyValue("--transfer-fill"))>0'));
  fs.mkdirSync('test-results',{recursive:true});const pulling=await call('Page.captureScreenshot',{format:'png'});fs.writeFileSync('test-results/sync-pull.png',Buffer.from(pulling.data,'base64'));
  await evaluate('document.querySelector("[data-open]").click()');await wait('document.querySelector("[data-node]")');await evaluate('document.querySelector("[data-node]").click()');
- assert.equal(await evaluate('document.querySelector("#activate-node").disabled'),false);assert.equal(await evaluate('document.querySelector("#archive-path").disabled'),false);
+ assert.equal(await evaluate('document.querySelector("#activate-node").disabled'),false);assert.equal(await evaluate('!!document.querySelector("#archive-path")'),false);
  assert.equal(await evaluate('document.querySelector("#activate-node").textContent'),'Deactivate');
  await evaluate('document.querySelector("#activate-node").click()');await wait('document.querySelector("#activate-node")?.textContent==="Activate"');
- await evaluate('document.querySelector("#activate-node").click()');await wait('document.querySelector("#activation-title")?.textContent.length&&!document.querySelector("#dialog-submit").disabled');await evaluate('document.querySelector("#dialog-form").requestSubmit()');await wait('!document.querySelector("#dialog").open&&!document.querySelector("#archive-path").disabled');
+ await evaluate('document.querySelector("#activate-node").click()');await wait('document.querySelector("#activation-title")?.textContent.length&&!document.querySelector("#dialog-submit").disabled');await evaluate('document.querySelector("#dialog-form").requestSubmit()');await wait('!document.querySelector("#dialog").open&&document.querySelector("#activate-node")?.textContent==="Deactivate"');
  assert.ok(app.store.instances().some(i=>i.applied&&i.groveTitle));
- await evaluate('document.querySelector("#archive-path").click();document.querySelector("#dialog-form").requestSubmit()');await wait('!document.querySelector("#dialog").open&&document.querySelector("#detail-page").hidden');assert.equal(app.store.local('trashPending').length,1);
+ await evaluate('document.querySelector("#activate-node").click()');await wait('!!document.querySelector("#archive-path")');
+ await evaluate('window.__trashFetch=window.fetch;window.fetch=async(url,...args)=>{if(String(url).endsWith("/api/trash")&&args[0]?.method==="POST")await new Promise(r=>setTimeout(r,180));return window.__trashFetch(url,...args)};document.querySelector("#archive-path").click();document.querySelector("#dialog-form").requestSubmit()');
+ assert.equal(await evaluate('document.querySelector("#trash-progress").hidden'),false);assert.ok(await evaluate('!!document.querySelector("#trash-progress progress")'));await fits('#trash-progress');await wait('!document.querySelector("#dialog").open&&document.querySelector("#detail-page").hidden');assert.equal(app.store.local('trashPending').length,1);
  // The backend read/write guards are exercised by tests; avoid mock cloud cleanup here.
  app.autoSync.syncTrash=async()=>{};pull.resolve();await wait('document.querySelector("#upload").dataset.operation==="running"');assert.notEqual(await evaluate('document.querySelector("#sync").dataset.operation'),'running');
  await evaluate('document.querySelector("#sync-details").dispatchEvent(new MouseEvent("mouseenter"))');

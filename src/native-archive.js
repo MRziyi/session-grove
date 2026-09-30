@@ -14,7 +14,7 @@ export function codexBinary() {
     }
     throw new Error('Set GROVE_CODEX_BINARY to the Codex app-server used by your client.');
 }
-export async function archiveNative(store, native, branchIds, { executable, beforeCommit } = {}) {
+export async function archiveNative(store, native, branchIds, { executable, beforeCommit, archiveBranches = true } = {}) {
     const branches=branchIds.map(id=>store.get('branch',id)), selected=new Set(branchIds);
     const collected=native.collect();assert(!collected.errors.some(e=>store.instances().some(i=>i.id===e.instanceId&&selected.has(i.branchId))),'A selected native session could not be captured.');
     const instances=store.instances().filter(i=>selected.has(i.branchId)&&i.applied&&!i.missing);
@@ -36,7 +36,7 @@ export async function archiveNative(store, native, branchIds, { executable, befo
             assert(row.archived,'Codex did not archive the selected thread.');assert(hash(fs.readFileSync(row.rollout_path))===i.observedHash,'Native archive changed transcript bytes.');updates.set(i.id,row.rollout_path);
         }
         for(const b of claude)native.setActive(b.id,null,false);if(claude.length)native.apply(claude.map(b=>b.id));
-        store.transaction(()=>{const current=store.instances();for(const i of current)if(updates.has(i.id)){i.file=updates.get(i.id);i.applied=false;i.desired=false;i.missing=false;const s=fs.statSync(i.file);i.observedStamp=`${s.ino}:${s.size}:${s.mtimeMs}:${s.ctimeMs}`;}store.local('instances',current);for(const b of branches)store.edit(b.id,{archived:true});});
+        store.transaction(()=>{const current=store.instances();for(const i of current)if(updates.has(i.id)){i.file=updates.get(i.id);i.applied=false;i.desired=false;i.missing=false;const s=fs.statSync(i.file);i.observedStamp=`${s.ino}:${s.size}:${s.mtimeMs}:${s.ctimeMs}`;}store.local('instances',current);if(archiveBranches)for(const b of branches)store.edit(b.id,{archived:true});});
         journal.status='complete';atomic(file,JSON.stringify(journal));return{changed:branches.length,journalId:journal.id};
     }catch(e){
         const failed=[];for(const nativeId of journal.completed.reverse()){try{await client.request('thread/unarchive',{threadId:nativeId});}catch{failed.push(nativeId);}}

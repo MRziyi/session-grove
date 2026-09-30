@@ -1,9 +1,11 @@
 import { claudeFork } from './claude.js';
 import fs from 'node:fs';
 import path from 'node:path';
-import { gzipSync, gunzipSync } from 'node:zlib';
+import { gzipSync, gunzipSync, gzip } from 'node:zlib';
 import { assert, atomic, id, now, hash } from './util.js';
 import { retainedGraph, bodyRefs, withForkMetadata } from './retention.js';
+import { promisify } from 'node:util';
+import { setImmediate as yieldTask } from 'node:timers/promises';
 import { preferences } from './preferences.js';
 export const trashState = (store) => store.local('trashState') || { schema: 1, events: [] };
 export function deletedIds(store, graph = { branches: store.all('branch') }) {
@@ -54,7 +56,8 @@ export function nativeSuppressed(store, agent, nativeId) {
     );
     return keys.has(agent + ':' + nativeId);
 }
-export function stageTrash(store, branchIds, treeIds = [], { rescueFor = null } = {}) {
+function* trashSteps(store, branchIds, treeIds = [], { rescueFor = null, transient = false } = {}) {
+    yield {phase: 'Preparing recovery paths', completed:0, total:null};
     assert(branchIds.length, 'Select sessions to discard.');
     const selected = new Set(branchIds),
         branches = branchIds.map((id) => store.get('branch', id));
@@ -104,7 +107,7 @@ export function stageTrash(store, branchIds, treeIds = [], { rescueFor = null } 
             c = store.get('branch', c.parentId);
         }
     }
-    graph.branches = graph.branches.filter((b) => wanted.has(b.id));
+    graph.branches = graph.branches.filter((b) => wanted.has(b.id)).map(b => transient && b.excluded === 'recovery-staging' ? { ...b, excluded: null } : b);
     graph.nodes = graph.nodes.filter((n) => wanted.has(n.branchId));
     graph.layouts = graph.layouts.filter((l) => wanted.has(l.rootId));
     const used = new Map();
@@ -133,9 +136,12 @@ export function stageTrash(store, branchIds, treeIds = [], { rescueFor = null } 
         dependencies,
     );
     const objects = {};
-    for (const h of bodyRefs(graph)) {
+    const refs=bodyRefs(graph);let copied=0;
+    yield {phase:'Copying recovery records',completed:0,total:refs.length};
+    for (const h of refs) {
         const row = store.objectStatement.get(h);
         if (row) objects[h] = row.body;
+        if (++copied % 128 === 0 || copied === refs.length) yield {phase:'Copying recovery records',completed:copied,total:refs.length};
     }
     const roots = new Map(),
         mainLayouts = [];
@@ -190,10 +196,8 @@ export function stageTrash(store, branchIds, treeIds = [], { rescueFor = null } 
             state: rescueFor ? 'removed' : 'pending',
             ...(rescueFor ? { rescueFor } : {}),
         };
-    atomic(
-        path.join(store.root, 'trash', event.id + '.json.gz'),
-        gzipSync(JSON.stringify({ entry, graph, objects }), { level: 6 }),
-    );
+    yield {phase:'Saving recovery backup',completed:0,total:null,file:path.join(store.root,'trash',event.id+'.json.gz'),backup:{entry,graph,objects}};
+    yield {phase:'Updating Trash',completed:0,total:null};
     store.transaction(() => {
         if (!rescueFor)
             for (const layout of mainLayouts) {
@@ -207,6 +211,25 @@ export function stageTrash(store, branchIds, treeIds = [], { rescueFor = null } 
         store.invalidate();
     });
     return entry;
+}
+export function stageTrash(...args) {
+    const steps=trashSteps(...args);for(let step=steps.next();;step=steps.next()) {
+        if(step.done)return step.value;
+        if(step.value.backup)atomic(step.value.file,gzipSync(JSON.stringify(step.value.backup),{level:6}));
+    }
+}
+const compressRecovery=promisify(gzip);
+export async function stageTrashAsync(store,branchIds,treeIds=[],options={}) {
+    store.transferReaders=(store.transferReaders||0)+1;
+    try {
+        const steps=trashSteps(store,branchIds,treeIds,options);
+        for(let step=steps.next();;step=steps.next()) {
+            if(step.done)return step.value;
+            const {file,backup,...progress}=step.value;
+            await options.onProgress?.(progress);await yieldTask();
+            if(backup)atomic(file,await compressRecovery(JSON.stringify(backup),{level:6}));
+        }
+    } finally {store.transferReaders--;}
 }
 export function applyTrashState(store, state) {
     assert(state?.schema === 1 && Array.isArray(state.events), 'Invalid Trash state.');
@@ -286,6 +309,7 @@ function pruneCompletedJournals(store) {
 }
 export function cleanupLocal(store) {
     if (store.transferReaders) { store.cleanupDeferred = true; return { records: 0, deferred: true }; }
+    store.cleanupDeferred = false;
     const removed = deletedIds(store);
     if (!removed.size) return { records: 0 };
     const graph = {
@@ -342,7 +366,7 @@ export function cleanupLocal(store) {
     });
     pruneCompletedJournals(store);
     if (store.local('lastTrashCleanup').records)
-        store.db.exec('PRAGMA wal_checkpoint(TRUNCATE); VACUUM');
+        store.db.exec('PRAGMA wal_checkpoint(PASSIVE)');
     return store.local('lastTrashCleanup');
 }
 export function expireTrash(store, at = Date.now()) {

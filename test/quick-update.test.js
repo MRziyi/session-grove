@@ -2,7 +2,7 @@ import test from 'node:test';import assert from 'node:assert/strict';import fs f
 import {Store} from '../src/store.js';import {Native} from '../src/native.js';import {createApp} from '../src/server.js';import {codexSample,codexTurn} from '../src/demo.js';import {savePreferences} from '../src/preferences.js';import {parse,renderNative} from '../src/transcript.js';import {recordPreview} from '../src/record-preview.js';
 const lines=rows=>rows.map(r=>JSON.stringify(r)+'\n').join('');
 function fixture(t){const root=fs.mkdtempSync(path.join(os.tmpdir(),'grove-quick-')),store=new Store(path.join(root,'library')),roots={codex:path.join(root,'codex'),claude:path.join(root,'claude')};fs.mkdirSync(path.join(roots.codex,'sessions'),{recursive:true});t.after(()=>{store.close();fs.rmSync(root,{recursive:true,force:true});});return{root,store,roots};}
-test('local renames work during sync and Active Trash only removes active sessions', async t => {
+test('local renames work during sync and Trash rejects active paths', async t => {
  const f=fixture(t),app=createApp({root:path.join(f.root,'app'),roots:f.roots,guard:()=>{}});
  app.server.listen(0,'127.0.0.1');await once(app.server,'listening');t.after(async()=>{await new Promise(resolve=>app.close(resolve));});
  const base='http://127.0.0.1:'+app.server.address().port,headers={'X-Grove-Token':app.token,'Content-Type':'application/json'};
@@ -20,7 +20,10 @@ test('local renames work during sync and Active Trash only removes active sessio
   const activated=await request('node-activation/activate','POST',{...target,contextAcknowledgement:preview.fingerprint});assert.equal(activated.status,201);const continuation=(await activated.json()).branch;
   assert.notEqual(continuation.id,child.id);assert.ok(app.store.instances().some(i=>i.branchId===continuation.id&&i.applied));
   assert.equal((await request('manage','POST',{action:'deactivate',branchIds:[continuation.id]})).status,200);
-  assert.equal((await request('trash','POST',{itemIds:[parent.id],view:'active:codex'})).status,202);
+  assert.equal((await request('trash','POST',{itemIds:[parent.id],view:'active:codex'})).status,409);
+  assert.equal((await request('manage','POST',{action:'deactivate',branchIds:[parent.id]})).status,200);
+  const ready=app.store.treeGraph(parent.id);
+  assert.equal((await request('trash','POST',{branchIds:[parent.id],nodeId:ready.nodes.find(n=>n.endBranchIds.includes(parent.id)).id,version:ready.version})).status,202);
   assert.equal(app.store.cleanupDeferred,true);
  } finally {release();await pending;}
  assert.equal(app.store.listing('active:codex').items.length,0);
