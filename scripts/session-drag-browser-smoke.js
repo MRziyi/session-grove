@@ -1,4 +1,4 @@
-import {browserBinary,closeBrowser} from './browser-runtime.js';
+import {browserBinary,closeBrowser,browserPort} from './browser-runtime.js';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -15,7 +15,7 @@ const empty=store.project('Empty destination');
 app.server.listen(0,'127.0.0.1');await once(app.server,'listening');
 const chrome=spawn(browserBinary(),['--headless=new','--no-first-run','--no-default-browser-check','--remote-debugging-port=0','--user-data-dir='+path.join(root,'chrome'),'about:blank'],{stdio:'ignore'});let ws;
 try{
- let port;for(let i=0;i<100;i++){try{port=fs.readFileSync(path.join(root,'chrome','DevToolsActivePort'),'utf8').split('\n')[0];break;}catch{}await new Promise(r=>setTimeout(r,100));}assert.ok(port);
+ const port=await browserPort(chrome,path.join(root,'chrome'));
  const page=await(await fetch('http://127.0.0.1:'+port+'/json/new?http://127.0.0.1:'+app.server.address().port,{method:'PUT'})).json();ws=new WebSocket(page.webSocketDebuggerUrl);await once(ws,'open');let id=0;const pending=new Map(),errors=[];
  ws.onmessage=e=>{const m=JSON.parse(e.data);if(m.id){const p=pending.get(m.id);pending.delete(m.id);m.error?p.reject(m.error):p.resolve(m.result);}if(m.method==='Runtime.exceptionThrown')errors.push(m.params.exceptionDetails.text);};
  const call=(method,params={})=>new Promise((resolve,reject)=>{const n=++id;pending.set(n,{resolve,reject});ws.send(JSON.stringify({id:n,method,params}));});

@@ -185,3 +185,42 @@ test('deactivation removes only the empty activation placeholder and preserves e
         assert.ok(store.treeGraph(b.id).nodes.some(n=>n.id==='empty-'+fork.id));
     }
 });
+
+test('unused mid-turn continuation with a settings-only append deactivates through the native archive API',async t=>{
+ const {app,root}=await setup(t),store=app.store;
+ const {archiveNative}=await import('../src/native-archive.js'),{DatabaseSync}=await import('node:sqlite');
+ const raw=codexSample(root,[['Question','Boundary answer']]).trim().split('\n').slice(0,-1).join('\n')+'\n';
+ const source=store.branch(null,'Internal boundary','codex',raw),child=store.fork(source.id,{name:'Unused',end:store.parsed(source.head,'codex').records.length,nodeBoundary:true});store.put('branch',{...child,activationNodeName:'Boundary'});
+ app.native.setActive(child.id,root,true,{nodeName:'Boundary'});app.native.apply([child.id]);const instance=store.instances().find(i=>i.branchId===child.id);
+ fs.appendFileSync(instance.file,JSON.stringify({type:'event_msg',payload:{type:'thread_settings_applied'}})+'\n');app.native.collect();
+ assert.ok(store.instances().find(i=>i.id===instance.id).pending);assert.equal(store.treeGraph(source.id).nodes.find(n=>n.id==='empty-'+child.id).count,0);
+ const db=new DatabaseSync(path.join(app.native.roots.codex,'state_5.sqlite'));db.exec('CREATE TABLE IF NOT EXISTS threads(id TEXT PRIMARY KEY,archived INTEGER,rollout_path TEXT)');db.prepare('INSERT OR REPLACE INTO threads(id,archived,rollout_path) VALUES(?,0,?)').run(instance.nativeId,instance.file);db.close();
+ await archiveNative(store,app.native,[child.id],{archiveBranches:false,executable:'fixture',clientFactory:()=>({init:async()=>{},close:async()=>{},request:async(method)=>{assert.equal(method,'thread/archive');const d=new DatabaseSync(path.join(app.native.roots.codex,'state_5.sqlite'));d.prepare('UPDATE threads SET archived=1 WHERE id=?').run(instance.nativeId);d.close();}})});
+ assert.equal(store.instances().find(i=>i.id===instance.id).applied,false);assert.ok(!store.treeGraph(source.id).nodes.some(n=>n.id==='empty-'+child.id));assert.equal((store.local('trashEntries')||[]).length,0);
+});
+test('discard previews native deactivation and the confirmed request completes all remaining work',async t=>{
+ const {app,root,api}=await setup(t),store=app.store,{treeSnapshot}=await import('../src/cloud.js'),{hash}=await import('../src/util.js');
+ const source=store.branch(null,'Keep source','codex',codexSample(root,[['Keep','Original']]));app.native.setActive(source.id,root,true);app.native.apply([source.id]);
+ const baseline=treeSnapshot(store,source.id),cloud=app.autoSync.cloud;cloud.useSavedCache();const c=cloud.cache();c.ack[source.id]=hash(JSON.stringify(baseline));cloud.save(c);cloud.rememberBaseline(source.id,baseline);
+ const graph=store.treeGraph(source.id),target={branchId:source.id,nodeId:graph.nodes[0].id,version:graph.version,cwd:root},check=(await api('node-activation/check',target)).value;
+ const child=(await api('node-activation/activate',{...target,contextAcknowledgement:check.fingerprint})).value.branch;
+ const selections=cloud.pendingItems(),preview=await api('synchronize/discard',{selections});assert.equal(preview.status,200);assert.equal(preview.value.confirmationRequired,true);assert.deepEqual(preview.value.sessions.map(s=>s.branchId),[child.id]);assert.ok(store.find('branch',child.id));
+ const result=await api('synchronize/discard',{selections,confirmation:preview.value.confirmation});assert.equal(result.status,200,JSON.stringify(result.value));assert.equal(result.value.discarded,1);assert.ok(!store.find('branch',child.id));assert.ok(store.instances().some(i=>i.branchId===source.id&&i.applied));assert.equal(cloud.pendingItems().length,0);
+});
+test('unused continuation exception never permits a newly started turn or unfinished tool',async t=>{
+ const {app,root}=await setup(t),store=app.store,{readyToDeactivate}=await import('../src/native-readiness.js');
+ const source=store.branch(null,'Source','codex',codexSample(root,[['Original','Answer']]));
+ const child=store.fork(source.id,{name:'Child',end:store.parsed(source.head,'codex').records.length});store.put('branch',{...child,activationNodeName:'Pending'});
+ const base=store.raw(child.head),instance={branchId:child.id};assert.equal(readyToDeactivate(store,instance),true);
+ store.ingest(child.id,base+JSON.stringify({type:'event_msg',payload:{type:'task_started',turn_id:'new'}})+'\n',child.head,{});assert.equal(readyToDeactivate(store,instance),false);
+});
+test('discard waits for an existing operation instead of requiring the user to retry',async t=>{
+ const {app,root,api}=await setup(t),b=app.store.branch(null,'Queued discard','codex',codexSample(root,[['Draft','Answer']]));
+ const selections=app.autoSync.cloud.pendingItems();let release;const transfer=app.autoSync.exclusive(()=>new Promise(r=>release=r));await new Promise(r=>setImmediate(r));
+ try{
+  const request=api('synchronize/discard',{selections});
+  let state;for(let i=0;i<50;i++){state=(await api('status',null,'GET')).value.discardOperation;if(state?.phase==='Waiting for current operation')break;await new Promise(r=>setTimeout(r,20));}
+  assert.equal(state?.phase,'Waiting for current operation');assert.ok(app.store.find('branch',b.id));release();await transfer;
+  const result=await request;assert.equal(result.status,200,JSON.stringify(result.value));assert.equal(result.value.discarded,1);assert.ok(!app.store.find('branch',b.id));
+ }finally{release?.();await transfer;}
+});

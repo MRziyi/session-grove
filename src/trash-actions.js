@@ -16,7 +16,7 @@ export function nativeTrashCandidates(store) {
     return store.instances().filter(i => {
         const b=store.find('branch',i.branchId);
         return b && (isTrashed(store,b.id) || b.archived || i.nativeArchived) && i.file && fs.existsSync(i.file);
-    }).map(i=>({id:i.id,branchId:i.branchId,title:store.find('branch',i.branchId)?.name || i.title,agent:i.agent,active:i.applied,discarded:isTrashed(store,i.branchId),background:store.find('branch',i.branchId)?.background||null,updatedAt:fs.statSync(i.file).mtime.toISOString(),archived:!!i.nativeArchived || i.file.includes(path.sep+'archived_sessions'+path.sep)}));
+    }).map(i=>({id:i.id,branchId:i.branchId,title:store.find('branch',i.branchId)?.name || i.title,agent:i.agent,active:i.applied,discarded:isTrashed(store,i.branchId),background:store.find('branch',i.branchId)?.background||null,clientArchived:!isTrashed(store,i.branchId)&&!i.deactivatedByGrove&&(!!i.nativeArchived||!!store.find('branch',i.branchId)?.archived),updatedAt:fs.statSync(i.file).mtime.toISOString(),archived:!!i.nativeArchived || i.file.includes(path.sep+'archived_sessions'+path.sep)}));
 }
 export function checkFileIdle(file) {
     if(process.platform==='win32'){

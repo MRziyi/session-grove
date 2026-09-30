@@ -16,3 +16,12 @@ export function browserBinary() {
     if(!binary)throw new Error('Install Chrome/Edge or set CHROME to the browser executable.');
     return binary;
 }
+export async function browserPort(child,profile,{timeout=45000}={}) {
+    const started=Date.now();
+    while(Date.now()-started<timeout){
+        if(child.exitCode!==null||child.signalCode!==null)throw Error('Headless browser exited before the debugging endpoint became ready.');
+        try{const port=fs.readFileSync(path.join(profile,'DevToolsActivePort'),'utf8').split('\n')[0];if(/^\d+$/.test(port))return port;}catch{}
+        await new Promise(resolve=>setTimeout(resolve,100));
+    }
+    throw Error('Headless browser startup timed out before its debugging endpoint became ready.');
+}

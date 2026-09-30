@@ -420,3 +420,13 @@ flowchart LR
 其余按第 2 节建议作为讨论基础，不视为用户已经批准的最终决定。
 
 本设计基于参考源码和官方文档。实现阶段只读检查了本机 Codex schema，并用独立临时目录完成原生读取、恢复与 Active 往返验证；用户个人会话未被改写。真实 Claude 客户端及各 IDE 面板的验证边界见实现 README。
+
+## Compact controls and stateful feedback (1.0.2)
+
+- Keep permanent explanatory prose out of high-density panels. Put necessary general guidance in Information; reserve panel space for items, available actions, errors, progress and confirmations that describe the current operation.
+- Pending uploads uses the same visible action row as session lists: Select all initially; Deselect and Discard after selection. No selection-count label, ellipsis menu or static help paragraph.
+- Discard shows its actual phases inline. Only if it must deactivate active sessions, list the affected names and clients and wait for confirmation. All other recoverable prerequisite work is automatic, with no extra confirmation or selection requirements. That confirmation runs the remaining work; do not send users away to perform prerequisite steps manually.
+- Navigation has fixed Current Active and Trash groups with Projects scrolling between them. The outer vertical gaps and group gaps use one spacing unit. Give the scrolling project container a subtle rounded border.
+- Use Client archive above Trash in the bottom group; hide Client archive when empty. Client archive contains client-archived histories, never restored recovery copies or leftover files of trashed sessions. Trash contains expiring Grove recovery copies. Restore returns to Projects under new identities, without native activation.
+
+The pending menu remains hover-driven: no close icon or selection-pinned panel. Attach it directly below the banner without a floating gap. Its heading and controls form a compact continuous menu. Show only the current progress phase. A required confirmation is one row: action/target on the left and Confirm on the right, with no filesystem paths or repeated explanatory heading.

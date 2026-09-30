@@ -50,12 +50,12 @@ export function createApp({ root, roots, guard, demo = false }) {
         store.get('branch', i.id).layoutHead
     ]))]));
     const streams = new Set(); let updateOperation = null, trashOperation = null, trashPromise = null;
-    let stopping = false, discardPromise = null;
+    let stopping = false, discardPromise = null, discardOperation = null, discardRequest = null;
     const instance = id();
     const operation = (kind, value) => { for (const res of streams) res.write('event: operation\ndata: ' + JSON.stringify({kind, ...value}) + '\n\n'); };
     autoSync.onOperation = value => operation('sync', {...value, status:autoSync.status()});
     const intelligence = new Intelligence(store, { onChange: id => autoSync.schedule([id]), onStatus: value => operation('intelligence', value), canApply: () => !capturePromise && !trashPromise && !discardPromise && !stopping });
-    const timing = () => ({ intelligence: intelligence.status(), trashOperation, appVersion: VERSION, serverNow: Date.now(), stateVersion: diagnostics.startedAt + ':' + store.version + ':' + store.cloudVersion, update: { nextRunAt: nextCaptureAt, lastRunAt: lastCaptureAt, started: !!store.local('localUpdateStarted'), operation: updateOperation } });
+    const timing = () => ({ discardOperation, intelligence: intelligence.status(), trashOperation, appVersion: VERSION, serverNow: Date.now(), stateVersion: diagnostics.startedAt + ':' + store.version + ':' + store.cloudVersion, update: { nextRunAt: nextCaptureAt, lastRunAt: lastCaptureAt, started: !!store.local('localUpdateStarted'), operation: updateOperation } });
     let expiryTimer;const configureExpiry=()=>{clearTimeout(expiryTimer);const entries=expireTrash(store),next=entries.filter(e=>!e.expired).map(e=>Date.parse(e.expiresAt)).sort((a,b)=>a-b)[0];if(next){expiryTimer=setTimeout(configureExpiry,Math.max(1000,Math.min(2147483647,next-Date.now())));expiryTimer.unref();}};configureExpiry();
     const trashSnapshot = () => ({ trashEntries:(store.local('trashEntries')||[]).filter(e=>!e.expired&&!e.restoredAt), trashNative:nativeTrashCandidates(store) });
     const snapshot = () => ({ ...autoSync.decorate(store.snapshot()), preferences: preferences(store), ...trashSnapshot() });
@@ -119,11 +119,33 @@ export function createApp({ root, roots, guard, demo = false }) {
             if (req.method === 'GET' && route === '/api/status') return send(200, { ...timing(), cloud: autoSync.status() });
             if (req.method === 'GET' && route === '/api/synchronize/pending') return send(200, { items: autoSync.pendingItems() });
             if(req.method==='POST'&&route==='/api/synchronize/discard'){
-                assert(!autoSync.running&&!autoSync.pending&&!autoSync.migrating&&!capturePromise&&!trashPromise,'Wait for the current operation before discarding changes.',409);
-                autoSync.migrating=true;store.transferReaders=(store.transferReaders||0)+1;
-                discardPromise=discardChanges(store,autoSync.cloud,native,body.selections);
-                try{const result=await discardPromise;const dirty=new Set(autoSync.cloud.dirtyIds());autoSync.queue=new Set([...autoSync.queue].filter(id=>dirty.has(id)));store.local('uploadQueue',[...autoSync.queue]);return send(200,result);}
-                finally{discardPromise=null;autoSync.migrating=false;store.transferReaders--;if(!store.transferReaders&&store.cleanupDeferred)cleanupLocal(store);autoSync.configureTimer();configureExpiry();intelligence.kick();}
+                if(discardRequest)return send(200,await discardRequest);
+                const repository=autoSync.readConfig()?.url;
+                discardOperation={id:id(),state:'running',phase:'Reading current changes',startedAt:Date.now()};
+                const report=async progress=>{discardOperation={...discardOperation,...progress};operation('discard',discardOperation);await new Promise(r=>setImmediate(r));};
+                discardRequest=(async()=>{
+                    let acquired=false;
+                    try{
+                        if(autoSync.running||autoSync.pending||autoSync.migrating||capturePromise||trashPromise||settings.job?.state==='running')await report({phase:'Waiting for current operation'});
+                        while(autoSync.running||autoSync.pending||autoSync.migrating||capturePromise||trashPromise||settings.job?.state==='running'){
+                            assert(!stopping,'Server is stopping.',503);
+                            const waiting=[autoSync.pending,capturePromise,trashPromise,settings.pending].filter(Boolean);
+                            if(waiting.length)await Promise.allSettled(waiting);else await new Promise(r=>setTimeout(r,50));
+                        }
+                        assert(!stopping,'Server is stopping.',503);
+                        assert(repository===autoSync.readConfig()?.url,'The sync repository changed while waiting. Current data was kept.',409);
+                        autoSync.migrating=true;store.transferReaders=(store.transferReaders||0)+1;acquired=true;
+                        discardPromise=discardChanges(store,autoSync.cloud,native,body.selections,{confirmation:body.confirmation,onProgress:report,deactivate:async branchIds=>{
+                            const before=store.instances();
+                            if(!demo&&!guard)await archiveNative(store,native,branchIds,{archiveBranches:false});
+                            else{try{for(const id of branchIds)native.setActive(id,null,false);native.apply(branchIds);}catch(error){const current=store.instances();for(const i of current){const old=before.find(v=>v.id===i.id);i.desired=old?.desired||false;}store.local('instances',current);throw error;}}
+                            await refreshNativeClients(native,before);
+                        }});
+                        const result=await discardPromise;const dirty=new Set(autoSync.cloud.dirtyIds());autoSync.queue=new Set([...autoSync.queue].filter(id=>dirty.has(id)));store.local('uploadQueue',[...autoSync.queue]);return result;
+                    }catch(error){await report({state:'error',phase:error.message});throw error;}
+                    finally{if(acquired){discardPromise=null;autoSync.migrating=false;store.transferReaders--;if(!store.transferReaders&&store.cleanupDeferred)cleanupLocal(store);autoSync.configureTimer();configureExpiry();intelligence.kick();}}
+                })();
+                try{return send(200,await discardRequest);}finally{discardRequest=null;}
             }
 
             if (req.method === 'POST' && route === '/api/synchronize/transfer') return send(202, autoSync.startTransfer(body.direction));
@@ -165,8 +187,10 @@ export function createApp({ root, roots, guard, demo = false }) {
                     await report({phase:'Reading local changes',completed:0,total:null});native.collect();
                     assert(!store.instances().some(i=>selectedIds.has(i.branchId)&&isActive(i)),'Deactivate all active sessions in the selection before moving it to Trash.',409);
                     const entry=await stageTrashAsync(store,ids,treeIds,{onProgress:report});
+                    const copies=store.instances().filter(i=>ids.includes(i.branchId)&&i.file&&fs.existsSync(i.file));
+                    const cleanup=copies.length?await moveNativeToRecovery(store,native,copies.map(i=>i.id),{onProgress:report}):{blocked:[]};
                     await report({phase:'Removing unused local records',completed:0,total:null});cleanupLocal(store);
-                    configureExpiry();autoSync.reconcileTimer();return entry;
+                    configureExpiry();autoSync.reconcileTimer();return {...entry,blocked:cleanup.blocked};
                 });return send(202,entry);
             }
             if(req.method==='POST'&&route==='/api/trash/restore'){const result=restoreTrash(store,body.id);autoSync.schedule();return send(201,result);}
@@ -440,7 +464,7 @@ export function createApp({ root, roots, guard, demo = false }) {
     }, close(callback) {
         app.quiesce();
         for(const res of streams)res.end(); streams.clear();
-        if(capturePromise||trashPromise||intelligence.pending||discardPromise)Promise.allSettled([capturePromise,trashPromise,intelligence.pending,discardPromise]).finally(()=>server.close(callback)); else server.close(callback);
+        if(capturePromise||trashPromise||intelligence.pending||discardRequest)Promise.allSettled([capturePromise,trashPromise,intelligence.pending,discardRequest]).finally(()=>server.close(callback)); else server.close(callback);
     } };
     return app;
 }

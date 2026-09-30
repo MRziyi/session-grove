@@ -1421,3 +1421,25 @@ body{height:100dvh;display:flex;flex-direction:column;overflow:hidden}
 /* Keep the footer flush with the sidebar in both pane layouts. */
 .layout.detail.nav-collapsed .navigation,.layout.detail .navigation,.layout .navigation{padding-bottom:0}.nav-footer{margin-bottom:0;min-height:0;padding-top:6px;padding-bottom:6px}
 .pending-heading{display:flex;align-items:center;gap:8px;position:sticky;top:-16px;background:white;z-index:1;padding:4px 0}.pending-heading strong{margin-right:auto}.pending-heading>button,.pending-heading summary{padding:3px 7px;border:0;background:transparent;cursor:pointer}.pending-heading details{position:relative}.pending-heading details>button{position:absolute;right:0;top:100%;white-space:nowrap;background:white;box-shadow:0 4px 14px #142c4025;z-index:2}.pending-row{display:flex;align-items:flex-start;gap:10px}.pending-row>div{flex:1;min-width:0}.pending-row>input{width:16px;height:16px;flex-shrink:0;margin:2px 0;accent-color:#477f9b}.pending-help{font-size:11px;color:#6b7d89;line-height:1.5}#pending-error{color:#a54b34}#pending-error:empty{display:none}
+/* One spacing unit governs the fixed navigation groups and their outer gutters. */
+:root{--nav-gap:18px;--banner-height:48px}
+.banner{height:var(--banner-height);min-height:var(--banner-height);padding:0 16px}.layout{height:calc(100dvh - var(--banner-height))}
+.layout .navigation{padding:0 10px;min-height:0}.layout.detail .navigation{padding-bottom:0}
+#navigation{padding:var(--nav-gap) 0;gap:var(--nav-gap)}#navigation>.nav-group{margin:0;min-height:0}
+#navigation>.project-directory{flex:1;min-height:0}.project-directory-scroll{border:1px solid #cbd7e080;border-radius:9px;padding:5px 3px;flex:1;min-height:0}
+.nav-footer{margin:0 -10px;padding:5px 6px;min-height:0;flex-shrink:0}
+#list-page>h1{font-size:20px;margin:0;padding:12px 18px}.detail-heading{min-height:46px;padding:9px 18px}.detail-heading h1{font-size:18px}
+.pending-heading{gap:8px;align-items:center}.pending-heading strong{font-size:12px;flex:1;min-width:0;margin:0}.pending-heading .actions{display:flex;flex-shrink:0;gap:5px}.pending-heading .actions button{font-size:12px;padding:5px 7px;white-space:nowrap}#pending-progress:empty{display:none}
+.discard-steps{margin:8px 0 0;padding-left:18px;line-height:1.6;color:#526477}.sync-panel .discard-steps li{padding:0;border:0}.discard-confirmation{margin-top:8px;border-top:1px solid #dce3e9;padding-top:8px}.discard-confirmation p{margin:4px 0;overflow-wrap:anywhere}.discard-confirmation small{color:#6b7d89}
+@media(max-width:600px){:root{--banner-height:48px}.banner{padding-inline:10px}.detail-heading{padding:8px 10px}#list-page>h1{padding:10px 12px}.pending-heading{flex-wrap:wrap}.pending-heading .actions{margin-left:auto}}
+.sync-panel .actions button,.sync-panel .discard-confirmation button{background:#fff;border:1px solid var(--border);border-radius:6px;color:#35485b;box-shadow:none}.sync-panel .actions button:hover,.sync-panel .discard-confirmation button:hover{background:#edf3f8;border-color:#aabecb}.sync-panel .actions button:disabled{background:#f3f5f7;color:#71808e}
+
+#sync-control #pending-uploads button{min-width:0}#sync-control #pending-uploads #close-pending{width:24px;padding:4px;border-color:transparent}
+#pending-uploads{padding:0;gap:0;border-top:0;border-radius:0 0 8px 8px}
+#pending-uploads .pending-heading{top:0;margin:0;padding:8px 12px;background:#f5f7fa;border-bottom:1px solid var(--border)}
+#pending-uploads>ul{margin:0;padding:0 12px}#pending-uploads>p{margin:0;padding:10px 12px}
+#pending-uploads .discard-confirmation{display:flex;align-items:center;gap:10px;margin:0;padding:8px 12px;border-top:1px solid var(--border)}
+.discard-confirmation>span{flex:1;min-width:0;line-height:1.5}.discard-confirmation>button{flex-shrink:0;white-space:nowrap;padding:5px 9px}
+.pending-status{margin:0;padding:8px 12px;border-top:1px solid var(--border);line-height:1.5;color:#526477}.pending-status.warning{color:#a54b34}
+#sync-error{position:relative;max-width:100%}#sync-error summary{display:block;max-height:16px;line-height:16px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#sync-error[open]>div{position:absolute;top:100%;right:0;width:min(360px,calc(100vw - 24px));max-height:30vh;margin-top:4px;padding:10px;background:#fff;color:#a54b34;border:1px solid #decac5;border-radius:6px;box-shadow:0 4px 18px #183b4b22;z-index:160}

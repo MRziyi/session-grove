@@ -1,4 +1,4 @@
-import {browserBinary,closeBrowser} from './browser-runtime.js';
+import {browserBinary,closeBrowser,browserPort} from './browser-runtime.js';
 // Isolated Chrome/CDP regression for cross-branch selection and node activation.
 import fs from 'node:fs';import os from 'node:os';import path from 'node:path';import {spawn} from 'node:child_process';import {once} from 'node:events';import {pathToFileURL,fileURLToPath} from 'node:url';import assert from 'node:assert/strict';
 const source=path.resolve(process.argv[2]||fileURLToPath(new URL('..',import.meta.url)));
@@ -14,14 +14,16 @@ app.native.setActive(parent.id,root,true);app.native.apply([parent.id]);
 app.server.listen(0,'127.0.0.1');await once(app.server,'listening');
 const chrome=spawn(browserBinary(),['--headless=new','--no-first-run','--no-default-browser-check','--remote-debugging-port=0','--user-data-dir='+path.join(root,'chrome'),'about:blank'],{stdio:'ignore',windowsHide:true});let ws;
 try{
- let port;for(let i=0;i<100;i++){try{port=fs.readFileSync(path.join(root,'chrome','DevToolsActivePort'),'utf8').split('\n')[0];break;}catch{}await new Promise(r=>setTimeout(r,100));}assert.ok(port,'Chrome debugging port');
+ const port=await browserPort(chrome,path.join(root,'chrome'));
  const page=await(await fetch('http://127.0.0.1:'+port+'/json/new?http://127.0.0.1:'+app.server.address().port,{method:'PUT'})).json();ws=new WebSocket(page.webSocketDebuggerUrl);await once(ws,'open');let id=0;const requests=new Map(),errors=[];
  ws.onmessage=e=>{const m=JSON.parse(e.data);if(m.id){const p=requests.get(m.id);requests.delete(m.id);m.error?p.reject(m.error):p.resolve(m.result);}if(m.method==='Runtime.exceptionThrown')errors.push(m.params.exceptionDetails.text);};
  const call=(method,params={})=>new Promise((resolve,reject)=>{const n=++id;requests.set(n,{resolve,reject});ws.send(JSON.stringify({id:n,method,params}));});
  const evaluate=async expression=>{const r=await call('Runtime.evaluate',{expression,awaitPromise:true,returnByValue:true});if(r.exceptionDetails)throw Error(JSON.stringify(r.exceptionDetails));return r.result.value;};
- const wait=async expression=>{for(let i=0;i<100;i++){if(await evaluate(expression))return;await new Promise(r=>setTimeout(r,100));}throw Error('Timeout '+expression+' '+JSON.stringify(await evaluate('({hidden:document.hidden,dialog:document.querySelector("#dialog")?.open,toast:document.querySelector("#toast")?.textContent,rows:document.querySelectorAll("[data-trash-select]").length})'))) ;};
+ const wait=async expression=>{for(let i=0;i<100;i++){if(await evaluate(expression))return;await new Promise(r=>setTimeout(r,100));}throw Error('Timeout '+expression+' '+JSON.stringify(await evaluate('({hidden:document.hidden,dialog:document.querySelector("#dialog")?.open,toast:document.querySelector("#toast")?.textContent,rows:document.querySelectorAll("[data-trash-select]").length,list:(()=>{const l=document.querySelector("#session-list");return {top:l.scrollTop,height:l.clientHeight,total:l.scrollHeight,view:l.getBoundingClientRect().top,groups:[...l.querySelectorAll("[data-project-group]")].map(g=>({name:g.querySelector("h2").textContent,top:g.getBoundingClientRect().top}))}})()})'))) ;};
  await call('Emulation.setFocusEmulationEnabled',{enabled:true});await call('Page.bringToFront');await call('Runtime.enable');await call('Emulation.setDeviceMetricsOverride',{width:1512,height:982,deviceScaleFactor:1,mobile:false});await wait('document.querySelector("[data-open]")');await evaluate('document.querySelector("[data-open]").click()');await wait('document.querySelectorAll("[data-node]").length>10');
  assert.equal(await evaluate(`document.querySelector('[data-scope="active:codex"]').classList.contains('selected')`),true);
+ assert.ok(await evaluate('(()=>{const nav=document.querySelector("#navigation"),n=nav.getBoundingClientRect(),g=[...nav.children].map(e=>e.getBoundingClientRect()),gap=parseFloat(getComputedStyle(nav).gap),box=document.querySelector(".project-directory-scroll");return Math.abs(g[0].top-n.top-gap)<1&&Math.abs(n.bottom-g[2].bottom-gap)<1&&Math.abs(g[1].top-g[0].bottom-gap)<1&&Math.abs(g[2].top-g[1].bottom-gap)<1&&getComputedStyle(box).borderTopStyle==="solid"})()'),'fixed outer and inter-group navigation gaps');
+
  for(const toggle of ['#toggle-rail','#toggle-rail','#toggle-navigation','#toggle-navigation']){
   await evaluate(`document.querySelector('${toggle}').click()`);
   assert.ok(await evaluate('(()=>{const nav=document.querySelector(".navigation"),footer=document.querySelector(".nav-footer");return getComputedStyle(footer).display==="none"?parseFloat(getComputedStyle(nav).paddingBottom)===0:Math.abs(nav.getBoundingClientRect().bottom-footer.getBoundingClientRect().bottom)<1})()'),'sidebar footer has no bottom gap in either pane layout');
@@ -157,7 +159,7 @@ try{
  await evaluate('document.querySelector("#back").click()');
  assert.equal(await evaluate(`document.querySelectorAll('[data-project-group="${projectA.id}"] [data-open]').length`),8);
  assert.equal(await evaluate(`document.querySelectorAll('[data-project-group="${projectB.id}"] [data-open]').length`),2);
- await wait(`(()=>{const g=document.querySelector('[data-project-group="${projectB.id}"]').getBoundingClientRect(),v=document.querySelector('#session-list').getBoundingClientRect();return Math.abs(g.top-v.top)<24})()`);
+ await wait(`(()=>{const g=document.querySelector('[data-project-group="${projectB.id}"]').getBoundingClientRect(),v=document.querySelector('#session-list').getBoundingClientRect();const list=document.querySelector('#session-list');return Math.abs(g.top-v.top)<24||(list.scrollTop>=list.scrollHeight-list.clientHeight-1&&g.top<v.bottom&&g.bottom>v.top)})()`);
  assert.ok(await evaluate(`document.querySelector('[data-scope="${projectB.id}"]').classList.contains('selected')`),'Back follows the last browsed project');
  await evaluate(`document.querySelector('[data-group-select="${projectA.id}"]').click()`);
  assert.equal(await evaluate(`document.querySelectorAll('[data-project-group="${projectA.id}"] [data-select]:checked').length`),8);
@@ -167,11 +169,13 @@ try{
  const rb=store.branch(null,'Restore selected','codex',codexSample(root,[['Recovery','Keep']])),re=stageTrash(store,[rb.id],[rb.id]);
  await evaluate('document.querySelector("[data-scope=trash]").click()');await wait(`document.querySelector('[data-trash-select="recovery:${re.id}"]')`);
  await evaluate(`document.querySelector('[data-trash-select="recovery:${re.id}"]').click()`);assert.equal(await evaluate('document.querySelector("#trash-select-all").textContent'),'Deselect');
- await evaluate('document.querySelector("#trash-restore-selected").click()');await wait(`!document.querySelector('[data-trash-select="recovery:${re.id}"]')`);
+ await evaluate('document.querySelector("#trash-restore-selected").click()');await wait('document.querySelector("#list-title").textContent==="Projects"');
+ assert.ok(await evaluate('[...document.querySelectorAll(".row-title")].some(e=>e.textContent.includes("Restore selected"))'));
  assert.ok(store.syncCollections().items.some(i=>i.name==='Restore selected'));
+ await evaluate('document.querySelector("[data-scope=trash]").click()');
  const db=store.branch(null,'Delete selected','codex',codexSample(root,[['Delete','Discard']])),de=stageTrash(store,[db.id],[db.id]);
  await wait(`document.querySelector('[data-trash-select="recovery:${de.id}"]')`);await evaluate(`document.querySelector('[data-trash-select="recovery:${de.id}"]').click();document.querySelector('#trash-delete-selected').click()`);await wait('document.querySelector("#dialog").open');await evaluate('document.querySelector("#dialog-form").requestSubmit()');await wait('!document.querySelector("#dialog").open');assert.equal(fs.existsSync(path.join(store.root,'trash',de.id+'.json.gz')),false);
  const nb=store.branch(null,'Move client copy','codex',codexSample(root,[['Client copy','Preserve']]));app.native.setActive(nb.id,root,true);app.native.apply([nb.id]);const ni=store.instances().find(i=>i.branchId===nb.id);store.edit(nb.id,{archived:true});
- await wait(`document.querySelector('[data-trash-select="native:${ni.id}"]')`);await evaluate(`document.querySelector('[data-trash-select="native:${ni.id}"]').click();document.querySelector('#trash-move-selected').click()`);await wait(`!document.querySelector('[data-trash-select="native:${ni.id}"]')`);assert.equal(fs.existsSync(ni.file),false);assert.ok(store.local('trashEntries').some(e=>e.nativeInstanceId===ni.id));
+ await wait('document.querySelector("[data-scope=archived]")');await evaluate('document.querySelector("[data-scope=archived]").click()');await wait(`document.querySelector('[data-client-select="client:${ni.id}"]')`);await evaluate(`document.querySelector('[data-client-select="client:${ni.id}"]').click();document.querySelector('#archive-move-trash').click()`);await wait('document.querySelector("#list-title").textContent==="Trash"');assert.equal(fs.existsSync(ni.file),false);assert.ok(store.local('trashEntries').some(e=>e.nativeInstanceId===ni.id));
  assert.deepEqual(errors,[]);console.log('Browser passed: one-click cross-tool branch positioning, stable graph camera, unified activation preview/title, conversion panel, prefix continuation, lightweight Trash.');
 }finally{await closeBrowser(chrome,ws);await new Promise(r=>app.close(r));fs.rmSync(root,{recursive:true,force:true,maxRetries:10,retryDelay:100});}

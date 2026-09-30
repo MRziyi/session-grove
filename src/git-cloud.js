@@ -181,14 +181,24 @@ export class GitCloud extends Cloud {
     }
     undoKey(id) { return 'git-undo:'+hash(this.readConfig().url||'')+':'+id; }
     rememberBaseline(id,graph) { this.store.local(this.undoKey(id),{ack:digest(graph),graph}); }
-    undoBaseline(id) {
+    async undoBaseline(id) {
         this.useSavedCache();const ack=this.cache().ack[id];
         if(!ack)return null;
         const saved=this.store.local(this.undoKey(id));if(saved?.ack===ack&&digest(saved.graph)===ack)return saved.graph;
         // Older libraries can reuse a verified local checkout. Never fetch just to undo.
         let graph;try{graph=this.read(this.folder(id)+'/graph.json');}catch{}
-        assert(graph&&digest(graph)===ack,'The last synced snapshot is unavailable locally. Sync before making further changes.');
-        return graph;
+        if(graph&&digest(graph)===ack)return graph;
+        // A failed Push may have rewritten the working cache. Read committed local objects,
+        // never fetch/push to make Discard work and never trust an unmatched snapshot.
+        await this.connect();const remote=this.connection.remote,file=this.folder(id)+'/graph.json';
+        const env={GIT_NO_LAZY_FETCH:'1'},head=this.cache().gitHead;
+        const history=await remote.run(['log','--all','--max-count=64','--format=%H','--',file],{accepted:[0,128],env});
+        for(const commit of new Set([head,...history.stdout.split(/\s+/)].filter(v=>/^[a-f0-9]{40,64}$/.test(v||'')))){
+            const result=await remote.run(['show',commit+':'+file],{accepted:[0,128],env});
+            if(result.code)continue;
+            try{const candidate=JSON.parse(result.stdout);if(digest(candidate)===ack){this.rememberBaseline(id,candidate);return candidate;}}catch{}
+        }
+        assert(false,'No verified local sync snapshot is available for this session. Its current data was kept.',409);
     }
     pendingItems() {
         this.useSavedCache();

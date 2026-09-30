@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.0.2
+
+- Allow unused mid-turn activation continuations to deactivate after settings-only records; keep checks for new turns, tool calls, parse errors and changed file bytes. Empty placeholders disappear without entering Trash.
+- Make Discard an observable workflow with inline progress and confirmation only for required native deactivation; updated selections and shared-project metadata are handled automatically. Confirm performs the prerequisite work and rollback together. Recover verified undo snapshots from local Git history when a working cache has been rewritten.
+- Match Pending uploads to list controls: Select all / Deselect and Discard, no close icon, no static help or selected count, and a compact target/Confirm row without filesystem paths. The hover menu attaches directly to the banner.
+- Separate Client archive from Trash; recovery Restore returns to Projects. Hide empty archive navigation and prevent native leftovers of trashed sessions from appearing as client archives. Back up then safely remove inactive native copies on Move to Trash.
+- Compact the page headings and banner, keep fixed navigation groups with equal gaps, outline the scrollable project container, and preserve the selected project at scroll boundaries.
+- Increase browser-startup readiness waits for slow CI hosts and validate both main and release-tag workflows when publishing.
+
 ## 1.0.1
 
 - Verify Git using shallow, filtered metadata inspection instead of downloading history and session bodies; never fall back to an unfiltered verification fetch.

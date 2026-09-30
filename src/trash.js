@@ -433,6 +433,9 @@ export function restoreTrash(store, entryId) {
                 projectId:
                     b.projectId && store.get('project', b.projectId).archived ? null : b.projectId,
                 archived: false,
+                excluded: selected.has(b.id)?null:b.excluded,
+                background: selected.has(b.id)?null:b.background,
+                scheduled: selected.has(b.id)?false:b.scheduled,
                 nodeHead: null,
                 layoutHead: null,
                 metaVersion: id(),

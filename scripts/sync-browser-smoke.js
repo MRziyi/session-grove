@@ -1,4 +1,4 @@
-import {browserBinary,closeBrowser} from './browser-runtime.js';
+import {browserBinary,closeBrowser,browserPort} from './browser-runtime.js';
 // Synthetic white-box sync UI regression. No real cloud or native sessions are touched.
 import fs from 'node:fs';import os from 'node:os';import path from 'node:path';import {spawn} from 'node:child_process';import {once} from 'node:events';import assert from 'node:assert/strict';
 import {createApp} from '../src/server.js';import {codexSample} from '../src/demo.js';import {treeSnapshot} from '../src/cloud.js';import {hash} from '../src/util.js';
@@ -6,6 +6,7 @@ const root=fs.mkdtempSync(path.join(os.tmpdir(),'grove-sync-browser-')),app=crea
 const b=app.store.branch(null,'Active local session','codex',codexSample(root,[['Context','Ready']])),queued=app.store.branch(null,'Waiting upload','codex',codexSample(root,[['Other context','Other answer']]));app.native.setActive(b.id,root,true);app.native.apply([b.id]);
 app.autoSync.readConfig=()=>({url:'https://example.invalid/isolated-test'});app.autoSync.unlock('isolated-browser-key');
 const mistake=app.store.branch(null,'Discard this accidental session','codex',codexSample(root,[['Accidental','Draft']]));
+const activeMistake=app.store.branch(null,'Active accidental session','codex',codexSample(root,[['Test activation','Draft']]));app.native.setActive(activeMistake.id,root,true);app.native.apply([activeMistake.id]);
 const pull=Promise.withResolvers(),push=Promise.withResolvers();let failPull=false,unchangedPull=false;
 app.autoSync.run=async(store,config,key,direction,ids)=>{
  const metrics=app.autoSync.cloud.metrics;metrics.requests+=3;metrics.bytesReceived+=4096;
@@ -17,7 +18,7 @@ app.autoSync.run=async(store,config,key,direction,ids)=>{
 app.server.listen(0,'127.0.0.1');await once(app.server,'listening');
 const chrome=spawn(browserBinary(),['--headless=new','--no-first-run','--no-default-browser-check','--remote-debugging-port=0','--user-data-dir='+path.join(root,'chrome'),'about:blank'],{stdio:'ignore',windowsHide:true});let ws;
 try{
- let port;for(let i=0;i<100;i++){try{port=fs.readFileSync(path.join(root,'chrome','DevToolsActivePort'),'utf8').split('\n')[0];break;}catch{}await new Promise(r=>setTimeout(r,100));}assert.ok(port);
+ const port=await browserPort(chrome,path.join(root,'chrome'));
  const page=await(await fetch('http://127.0.0.1:'+port+'/json/new?http://127.0.0.1:'+app.server.address().port,{method:'PUT'})).json();ws=new WebSocket(page.webSocketDebuggerUrl);await once(ws,'open');let next=0;const pending=new Map(),errors=[];
  ws.onmessage=e=>{const m=JSON.parse(e.data);if(m.id){const p=pending.get(m.id);pending.delete(m.id);m.error?p.reject(m.error):p.resolve(m.result);}if(m.method==='Runtime.exceptionThrown')errors.push(m.params.exceptionDetails.text);};
  const call=(method,params={})=>new Promise((resolve,reject)=>{const id=++next;pending.set(id,{resolve,reject});ws.send(JSON.stringify({id,method,params}));});
@@ -32,12 +33,25 @@ try{
  assert.ok(await evaluate('(()=>{const a=document.querySelector("#sync").getBoundingClientRect(),b=document.querySelector("#upload").getBoundingClientRect();return Math.abs(a.right-b.left)<=2&&Math.abs(a.height-b.height)<1})()'));
  await hover('#push-zone');await wait('document.querySelector("#pending-uploads").textContent.includes("Waiting upload")');await fits('#pending-uploads');
  await evaluate(`document.querySelector('[data-pending-select="${mistake.id}"]').click()`);
- assert.equal(await evaluate('document.querySelector("#pending-actions").hidden'),false);
+ assert.equal(await evaluate('document.querySelector("#discard-pending").hidden'),false);
+ assert.equal(await evaluate('!!document.querySelector(".pending-help,#pending-selection-count,#pending-actions")'),false);
+ assert.equal(await evaluate('document.querySelector("#pending-select-all").textContent'),'Deselect');
  await call('Input.dispatchMouseEvent',{type:'mouseMoved',x:15,y:400});await new Promise(r=>setTimeout(r,250));
- assert.equal(await evaluate('document.querySelector("#pending-uploads").hidden'),false,'selection keeps the pending panel open');
- await evaluate('document.querySelector("#pending-actions summary").click();document.querySelector("#discard-pending").click()');
+ assert.equal(await evaluate('document.querySelector("#pending-uploads").hidden'),true,'hover panel closes on pointer leave');
+ await hover('#push-zone');await wait('document.querySelector("#discard-pending")&&!document.querySelector("#pending-uploads").hidden');
+ assert.equal(await evaluate('!!document.querySelector("#close-pending")'),false);
+ await evaluate('document.querySelector("#discard-pending").click()');
  await wait(`!document.querySelector('[data-pending-select="${mistake.id}"]')&&document.querySelector('#pending-uploads').textContent.includes('Waiting upload')`);
  assert.ok(!app.store.find('branch',mistake.id));assert.ok((app.store.local('trashEntries')||[]).some(e=>e.rescueFor==='discard-pending'));
+ await evaluate(`document.querySelector('[data-pending-select="${activeMistake.id}"]').click();document.querySelector('#discard-pending').click()`);
+ await wait('document.querySelector("#confirm-discard")');
+ assert.ok(app.store.instances().some(i=>i.branchId===activeMistake.id&&i.applied),'preview does not deactivate');
+ assert.ok(await evaluate('document.querySelector("#pending-progress").textContent.includes("Active accidental session")&&document.querySelector("#confirm-discard").textContent==="Confirm"'));
+ fs.mkdirSync('test-results',{recursive:true});fs.writeFileSync('test-results/pending-discard-confirmation.png',Buffer.from((await call('Page.captureScreenshot',{format:'png'})).data,'base64'));
+ await evaluate('document.querySelector("#confirm-discard").click()');await wait('document.querySelector("#pending-progress").textContent.includes("Changes discarded")&&!document.querySelector("#confirm-discard")');
+ assert.ok(!app.store.find('branch',activeMistake.id));assert.ok(app.store.instances().some(i=>i.branchId===b.id&&i.applied));
+ assert.ok(await evaluate('document.querySelector("#pending-progress").textContent.includes("Changes discarded")'));
+
 
  await evaluate('document.querySelector("#upload").click()');await wait('document.querySelector("#sync").dataset.operation==="running"');
  assert.equal(await evaluate('document.querySelector("#upload").disabled'),true);assert.equal(await evaluate('document.querySelector("#upload").dataset.operation'), '');

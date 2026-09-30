@@ -198,15 +198,15 @@ test('discard restores the exact acknowledged snapshot, removes an empty fork an
     assert.ok(fs.existsSync(path.join(a.store.root,'trash',result.recoveryId+'.json.gz')));
     const restored=restoreTrash(a.store,result.recoveryId);assert.ok(restored);assert.ok(a.store.all('branch').some(b=>b.name==='Empty fork'),'discarded work can be recovered under new identities');
 });
-test('discard rejects stale selection and active changed conversations, but allows live metadata undo',async t=>{
+test('discard reconciles updated selections and only confirms active changed conversations',async t=>{
     const {discardChanges}=await import('../src/discard-changes.js');
     const e=fixture(t),a=e.device('undo-guards'),b=branch(a);await push(a);const native={collect:()=>({errors:[]})};
     a.store.edit(b.id,{name:'First'});const stale=a.cloud.pendingItems();a.store.edit(b.id,{name:'Second'});
-    await assert.rejects(discardChanges(a.store,a.cloud,native,stale),/changed/);assert.equal(a.store.get('branch',b.id).name,'Second');
+    assert.equal((await discardChanges(a.store,a.cloud,native,stale)).discarded,1);assert.equal(a.store.get('branch',b.id).name,'Sample');a.store.edit(b.id,{name:'Second'});
     a.store.local('instances',[{id:'native',branchId:b.id,agent:'codex',nativeId:'native-id',applied:true,baseRevision:b.head}]);
     await discardChanges(a.store,a.cloud,native,a.cloud.pendingItems());assert.equal(a.store.get('branch',b.id).name,'Sample');
     a.store.ingest(b.id,a.store.raw(b.head)+codexTurn('New question','New answer').map(v=>JSON.stringify(v)+'\n').join(''),b.head,{operation:'capture'});
-    await assert.rejects(discardChanges(a.store,a.cloud,native,a.cloud.pendingItems()),/Deactivate/);
+    const approval=await discardChanges(a.store,a.cloud,native,a.cloud.pendingItems());assert.equal(approval.confirmationRequired,true);assert.equal(approval.sessions[0].nativeId,'native-id');
 });
 test('discarding a never-synced session works offline without publishing a deletion',async t=>{
     const {discardChanges}=await import('../src/discard-changes.js');
@@ -221,14 +221,14 @@ test('discard cancels a queued removal and restores the original synced identiti
     await discardChanges(a.store,a.cloud,{collect:()=>({errors:[]})},a.cloud.pendingItems());
     assert.ok(!a.store.isTrashed(b.id));assert.equal(a.cloud.pendingItems().length,0);assert.equal(a.store.get('branch',b.id).name,'Sample');
 });
-test('unrelated Trash cleanup preserves the live undo baseline and shared project changes require all rows',async t=>{
+test('shared project rollback is automatic and preserves other sessions edits and undo bodies',async t=>{
     const {discardChanges}=await import('../src/discard-changes.js');
     const e=fixture(t),a=e.device('undo-gc'),p=a.store.project('Original project'),b=branch(a),other=branch(a,'Other');
     a.store.edit(b.id,{name:'Original'});a.store.moveItems({itemIds:[b.id,other.id],projectId:p.id});await push(a);
     const native={collect:()=>({errors:[]})},original=a.store.raw(b.head);
-    a.store.put('project',{...p,name:'Accidental project rename'});
-    await assert.rejects(discardChanges(a.store,a.cloud,native,a.cloud.pendingItems().filter(i=>i.id===b.id)),/shared changes/);
-    await discardChanges(a.store,a.cloud,native,a.cloud.pendingItems());assert.equal(a.store.get('project',p.id).name,'Original project');
+    a.store.edit(other.id,{name:'Independent edit'});a.store.put('project',{...p,name:'Accidental project rename'});
+    assert.equal((await discardChanges(a.store,a.cloud,native,a.cloud.pendingItems().filter(i=>i.id===b.id))).discarded,1);
+    assert.equal(a.store.get('project',p.id).name,'Original project');assert.equal(a.store.get('branch',other.id).name,'Independent edit');
     const revision=a.store.revision(codexSample('/synthetic',[['Replacement','Oops']]),null,{agent:'codex'});
     a.store.put('branch',{...a.store.get('branch',b.id),head:revision.id});
     stageTrash(a.store,[other.id],[other.id]);cleanupLocal(a.store);
@@ -255,4 +255,11 @@ test('archiving a synced tree removes its current Git entry on the next explicit
     const e=fixture(t),a=e.device('archive-publish'),session=branch(a);await push(a);
     a.store.edit(session.id,{archived:true});assert.equal(a.cloud.pendingItems().length,0);
     await push(a);assert.ok(a.store.find('branch',session.id)?.archived);assert.equal(a.cloud.entries().length,0);assert.equal(a.cloud.archiveCleanupNeeded(),false);
+});
+test('discard recovers an older verified baseline from local Git after the working cache was rewritten',async t=>{
+ const {discardChanges}=await import('../src/discard-changes.js'),e=fixture(t),a=e.device('undo-local-history'),b=branch(a);await push(a);
+ a.store.local(a.cloud.undoKey(b.id),null);a.store.edit(b.id,{name:'Unpublished mistake'});
+ a.cloud.write(a.cloud.folder(b.id)+'/graph.json',{schema:3,branches:[],projects:[],revisions:[],nodes:[],layouts:[]});
+ const remote=a.cloud.connection.remote,run=remote.run.bind(remote);remote.run=(args,options)=>{assert.ok(!['fetch','push','ls-remote'].includes(args[0]),'discard must stay offline');return run(args,options);};
+ await discardChanges(a.store,a.cloud,{collect:()=>({errors:[]})},a.cloud.pendingItems());assert.equal(a.store.get('branch',b.id).name,'Sample');assert.equal(a.cloud.pendingItems().length,0);
 });

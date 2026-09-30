@@ -1,3 +1,4 @@
+import {readyToDeactivate} from './native-readiness.js';
 import {isTrashed,nativeSuppressed} from './trash.js';
 import { claudeTitle } from './claude-title.js';
 import { groveTitle } from './node-activation.js';
@@ -150,7 +151,7 @@ export class Native {
             const cached = this.scanCache.get(item.file);
             if (cached?.stamp === stamp && cached.summary.storedSummary) this.store.summaryCache.set(item.agent + ':' + b.head, cached.summary.storedSummary);
             const summary = this.store.summary(b.head, item.agent);
-            instances.push({ summaryVersion: 5, summaryRevision: b.head, summaryJson: JSON.stringify(summary), observedStamp: stamp, ...(sidecarDir ? { auxiliaryStamp: auxiliaryStamp(sidecarDir) } : {}), id: id(), branchId: b.id, agent: b.agent, root: this.roots[b.agent], nativeId: item.nativeId, file: item.file, cwd: item.cwd, cwdAvailable: item.cwdAvailable, desired: observe && !item.archived, applied: !item.archived, baseRevision: b.head, baseline: null, historyResolved: true, observedHash: hash(physical), adopted: true, title: b.name, excluded: false, requiresAuxiliary });
+            instances.push({ summaryVersion: 5, summaryRevision: b.head, summaryJson: JSON.stringify(summary), observedStamp: stamp, ...(sidecarDir ? { auxiliaryStamp: auxiliaryStamp(sidecarDir) } : {}), id: id(), branchId: b.id, agent: b.agent, root: this.roots[b.agent], nativeId: item.nativeId, file: item.file, cwd: item.cwd, cwdAvailable: item.cwdAvailable, desired: observe && !item.archived, applied: !item.archived, baseRevision: b.head, baseline: null, historyResolved: true, observedHash: hash(physical), adopted: true, nativeArchived:!!item.archived, title: b.name, excluded: false, requiresAuxiliary });
             this.store.local('instances', instances);
             return b;
         });
@@ -178,7 +179,14 @@ export class Native {
             if (instance.excluded !== !!observed.excluded) { instance.excluded = !!observed.excluded; metadataChanged = true; }
             // Native names are observed by identity, never used as identity or
             // copied over the independent Grove alias after initial import.
-            if (observed.archived !== undefined) { instance.nativeArchived = !!observed.archived; if(instance.adopted) { const followingClient=instance.desired===instance.applied;instance.applied=!observed.archived;if(followingClient)instance.desired=instance.applied; } }
+            if (observed.archived !== undefined) {
+                const previous=instance.nativeArchived,changed=previous!==undefined&&previous!==!!observed.archived;
+                if(changed&&!observed.archived)instance.deactivatedByGrove=false;
+                instance.nativeArchived = !!observed.archived;
+                if(instance.adopted){const followingClient=instance.desired===instance.applied;instance.applied=!observed.archived;if(followingClient)instance.desired=instance.applied;
+                    if(changed&&!instance.deactivatedByGrove&&!instances.some(other=>other.id!==instance.id&&other.branchId===instance.branchId&&other.applied&&!other.nativeArchived))patch.archived=!!observed.archived;
+                }
+            }
             if (observed.title) {
                 instance.observedTitle = observed.title;
                 instance.title = observed.title;
@@ -235,7 +243,7 @@ export class Native {
                 instance = { id: id(), branchId, agent: b.agent, root: this.roots[b.agent], nativeId: id(), cwd, desired: true, applied: false, file: null, baseRevision: b.head, baseline: '', adopted: false };
                 instances.push(instance);
             }
-            instance.desired = true;
+            instance.desired = true;instance.deactivatedByGrove=false;
             if (options.nodeName) { instance.groveTitle = true; instance.activationNodeName = options.nodeName; }
         }
         this.store.local('instances', instances);
@@ -375,7 +383,7 @@ export class Native {
                 const i = after.find(i => i.id === op.instanceId), b = this.store.get('branch', i.branchId);
                 if (additive) assert(op.action === 'activate' && !i.file && !i.applied && !i.adopted, 'Activation changed. Retry.', 409);
                 assert(i.root === this.roots[i.agent], '原生存储配置已改变，请重新绑定');
-                assert(!i.pending, i.pending || '等待完整记录');
+                assert(!i.pending||op.action==='deactivate'&&readyToDeactivate(this.store,i), i.pending || '等待完整记录');
                 assert(!i.requiresAuxiliary, '此会话含伴随目录，当前版本尚未完整收纳；拒绝移除或改写原生记录');
                 if (i.file && fs.existsSync(i.file))
                     assert(hash(this.read(i.file)) === i.observedHash, '原生记录正在变化，请稍后重试', 409);
@@ -442,7 +450,7 @@ export class Native {
                         if (i.file !== parked) writes.set(i.file, null);
                         i.file = parked;
                     }
-                    i.applied = false;
+                    i.applied = false;i.deactivatedByGrove=true;i.pending=null;
                     if (i.agent === 'codex')
                         dbs.get(root)?.prepare('UPDATE threads SET archived=1, archived_at=?, rollout_path=? WHERE id=?').run(Math.floor(Date.now() / 1000), i.file, i.nativeId);
                 }

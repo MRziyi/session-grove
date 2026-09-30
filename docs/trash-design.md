@@ -43,3 +43,9 @@ Staging can require temporary cloud space for retained data and can be substanti
 Conversation records retain their original bytes. Sparse manifests specify required ranges and additional native fork metadata. In particular, Claude can inherit metadata located after the chosen checkpoint; those referenced records are retained without keeping the discarded conversation suffix.
 
 Tests cover shared-prefix reclamation, cloud-generation fencing, stale and divergent offline clients, configurable local expiry/startup expiry, legacy archives, native-copy guards, logical labels, HTTP 207 failures, lock renewal, interrupted cleanup and successive cleanup generations. The real Teracloud test uses only a newly created synthetic self-check folder and removes that folder afterward.
+
+## 1.0.2 interface and restoration
+
+Client archive and Trash are separate views. The archive entry appears above Trash only when there are client-archived histories. Deactivated Grove continuations and native leftovers of trashed histories do not belong to Client archive. Moving an inactive Grove session to Trash saves its recovery copy first, then removes the native copy when file-idle and shared-prefix checks allow it. Any blocked cleanup remains a stateful, retryable removal operation on the Trash item, never a new archive category.
+
+Restoring Trash creates visible project sessions under new identities and navigates to Projects. Restoration clears staging/exclusion and archived flags on selected copies and does not activate a client or create a client archive entry. Recovery files and archived-only transcripts remain excluded from Git uploads.

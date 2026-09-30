@@ -4,6 +4,7 @@ import {gunzipSync} from 'node:zlib';
 import {assert,hash} from './util.js';
 import {rootOf,treeMembers} from './organization.js';
 import {treeSnapshot} from './cloud.js';
+import {changeSnapshot} from './session-changes.js';
 import {INBOX_ID} from './inbox.js';
 import {isActive} from './workspace.js';
 import {isTrashed,stageTrashAsync} from './trash.js';
@@ -11,25 +12,50 @@ import {bodyRefs} from './retention.js';
 const digest=value=>hash(JSON.stringify(value));
 
 // Restore acknowledged local snapshots. No fetch, push, or native-file rewrite.
-export async function discardChanges(store,cloud,native,selections) {
+export async function discardChanges(store,cloud,native,selections,{confirmation=null,deactivate,onProgress=async()=>{}}={}) {
     assert(Array.isArray(selections)&&selections.length&&selections.every(s=>typeof s.id==='string'&&typeof s.version==='string'),'Select pending changes.');
     assert(cloud.provider==='git','Discard is available for Git sync.');
+    await onProgress({phase:'Reading current changes'});
     const collected=native.collect();
-    const selected=new Map(selections.map(s=>[s.id,s.version])),pending=cloud.pendingItems(),events=store.local('trashPending')||[];
-    const validate=()=>{const current=new Map(cloud.pendingItems().map(i=>[i.id,i.version]));assert([...selected].every(([id,version])=>current.get(id)===version),'Pending changes changed. Reopen the list and select them again.',409);};validate();
+    const pending=cloud.pendingItems(),events=store.local('trashPending')||[],current=new Map(pending.map(i=>[i.id,i]));
+    const selected=new Map(selections.filter(s=>current.has(s.id)).map(s=>[s.id,current.get(s.id).version]));
+    if(!selected.size){await onProgress({phase:'No local changes waiting to upload.',state:'success'});return {discarded:0,recoveryId:null};}
+    const validate=()=>{const current=new Map(cloud.pendingItems().map(i=>[i.id,i.version]));assert([...selected].every(([id,version])=>current.get(id)===version),'Local history changed during rollback. Current data was kept; retry Discard.',409);};validate();
     const rootsFor=item=>item.action==='remove'?[...new Set(events.find(e=>e.id===item.id).branchIds.map(id=>rootOf(store,id).id))]:[item.id];
     const roots=new Set(pending.filter(i=>selected.has(i.id)).flatMap(rootsFor));
-    assert(pending.filter(i=>rootsFor(i).some(id=>roots.has(id))).every(i=>selected.has(i.id)),'Select all pending changes for the same session before discarding.',409);
-    const localArchives=new Set(store.all('branch').filter(b=>store.localArchivesOnly&&(b.archived||b.projectId&&store.find('project',b.projectId)?.archived)).map(b=>b.id));
-    const plans=[...roots].map(id=>({id,graph:cloud.undoBaseline(id),current:treeMembers(store,id).filter(b=>!localArchives.has(b.id))}));
+    await onProgress({phase:'Reading synced snapshot'});
+    const baselines=new Map();const loadBaseline=async id=>{if(!baselines.has(id))baselines.set(id,await cloud.undoBaseline(id));return baselines.get(id);};
+    const include=item=>{selected.set(item.id,item.version);for(const id of rootsFor(item))roots.add(id);};
+    // Pending deletion markers and the surviving portion of one tree share a snapshot.
+    for(let changed=true;changed;){const count=selected.size;for(const item of pending)if(rootsFor(item).some(id=>roots.has(id)))include(item);changed=count!==selected.size;}
+    const localArchives=new Set(store.all('branch').filter(b=>store.localArchivesOnly&&!isTrashed(store,b.id)&&(b.archived||b.projectId&&store.find('project',b.projectId)?.archived)).map(b=>b.id));
+    const plans=await Promise.all([...roots].map(async id=>({id,graph:await loadBaseline(id),current:treeMembers(store,id).filter(b=>!localArchives.has(b.id))})));
     const replaced=new Set(plans.flatMap(p=>p.current.map(b=>b.id))),baseline=new Map(plans.flatMap(p=>(p.graph?.branches||[]).map(b=>[b.id,b])));
     const affectedInstances=new Set(store.instances().filter(i=>replaced.has(i.branchId)).map(i=>i.id));
     assert(!collected.errors.some(e=>affectedInstances.has(e.instanceId)),'A selected native session could not be captured. Update before discarding.',409);
     const changesContent=b=>!baseline.has(b.id)||baseline.get(b.id).head!==b.head||digest(baseline.get(b.id).contextPolicy||{})!==digest(b.contextPolicy||{});
-    assert(!store.instances().some(i=>replaced.has(i.branchId)&&isActive(i)&&changesContent(store.get('branch',i.branchId))),'Deactivate sessions with changed conversations before discarding. Metadata-only changes can be discarded while active.',409);
-    const projects=new Map(plans.flatMap(p=>(p.graph?.projects||[]).filter(p=>p.id!==INBOX_ID).map(p=>[p.id,p])));
-    for(const [id,project] of projects)if(digest(store.find('project',id))!==digest(project))
-        assert(store.syncCollections().items.filter(i=>i.projectId===id).every(i=>roots.has(i.id)),'This project has shared changes. Select all its pending sessions before discarding.',409);
+    const active=store.instances().filter(i=>replaced.has(i.branchId)&&isActive(i)&&changesContent(store.get('branch',i.branchId)));
+    const approval=digest(active.map(i=>[i.id,i.branchId,i.nativeId,i.agent]));
+    const sessions=active.map(i=>({branchId:i.branchId,name:i.title||store.get('branch',i.branchId).name,agent:i.agent,cwd:i.cwd,nativeId:i.nativeId}));
+    if(active.length&&confirmation!==approval){
+        await onProgress({phase:'Confirmation required',state:'confirmation',sessions});
+        return {confirmationRequired:true,confirmation:approval,sessions,additional:[]};
+    }
+    const projects=new Map();
+    const consider=project=>{
+        if(project.id===INBOX_ID)return;
+        const old=projects.get(project.id);
+        if(!old||project.metaAncestors?.includes(old.metaVersion)||!old.metaAncestors?.includes(project.metaVersion)&&(project.metadataUpdatedAt||project.updatedAt||'')>(old.metadataUpdatedAt||old.updatedAt||''))projects.set(project.id,project);
+    };
+    for(const p of plans)for(const project of p.graph?.projects||[])consider(project);
+    // A shared project's newest acknowledged metadata can belong to another tree.
+    // Revert only that metadata globally; never discard that tree's unrelated local edits.
+    for(const [id,ack] of Object.entries(cloud.cache().ack)){
+        if(roots.has(id)||!store.find('branch',id))continue;
+        const current=treeSnapshot(store,id),saved=store.local(cloud.undoKey(id));
+        const synced=current&&digest(current)===ack?current:saved?.ack===ack&&digest(saved.graph)===ack?saved.graph:null;
+        for(const project of synced?.projects||[])if(projects.has(project.id))consider(project);
+    }
     const needed=new Set(plans.flatMap(p=>p.graph?bodyRefs(p.graph):[]).filter(ref=>!store.objectStatement.get(ref))),recovered={};
     if(needed.size)for(const event of events.filter(e=>selected.has(e.id))){
         const file=path.join(store.root,'trash',event.id+'.json.gz');if(!fs.existsSync(file))continue;
@@ -37,8 +63,17 @@ export async function discardChanges(store,cloud,native,selections) {
         for(const [ref,body] of Object.entries(backup.objects||{}))if(needed.has(ref)){assert(hash(body)===ref,'Recovery copy integrity failed.');recovered[ref]=body;needed.delete(ref);}
     }
     assert(!needed.size,'The last synced conversation is unavailable locally.',409);
+    if(active.length){
+        assert(typeof deactivate==='function','Native deactivation is unavailable.');
+        await onProgress({phase:'Deactivating sessions',sessions});
+        await deactivate([...new Set(active.map(i=>i.branchId))]);
+        assert(!store.instances().some(i=>replaced.has(i.branchId)&&isActive(i)&&changesContent(store.get('branch',i.branchId))),'A selected session is still active.');
+    }
+    await onProgress({phase:'Saving recovery copy'});
     // Keep a normal, expiring recovery copy before replacing local state.
     const live=[...replaced].filter(id=>!isTrashed(store,id)),recovery=live.length?await stageTrashAsync(store,live,[],{rescueFor:'discard-pending'}):null;
+    validate();
+    await onProgress({phase:'Restoring synced changes'});
     validate();
     store.transaction(()=>{
         for(const [ref,body] of Object.entries(recovered))store.insertObject.run(ref,body);
@@ -60,10 +95,11 @@ export async function discardChanges(store,cloud,native,selections) {
         store.invalidate();
         const cache=cloud.cache();
         for(const {id,graph} of plans){
-            if(graph){const restored=treeSnapshot(store,id);assert(digest({...restored,retention:null})===digest({...graph,retention:null}),'Could not restore the exact synced snapshot. No changes were discarded.',409);cache.ack[id]=digest(restored);cloud.rememberBaseline(id,restored);}
+            if(graph){const restored=treeSnapshot(store,id);assert(digest({...restored,retention:null})===digest({...graph,projects:graph.projects.map(p=>projects.get(p.id)||p),retention:null}),'Could not restore the exact synced snapshot. No changes were discarded.',409);cache.ack[id]=digest(restored);(cache.baselines||={})[id]=changeSnapshot(restored);cloud.rememberBaseline(id,restored);}
             else{delete cache.ack[id];delete cache.loaded[id];if(cache.baselines)delete cache.baselines[id];}
         }
         cloud.save(cache);
     });
+    await onProgress({phase:'Changes discarded',state:'success'});
     return {discarded:selected.size,recoveryId:recovery?.id||null};
 }

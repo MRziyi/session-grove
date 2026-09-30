@@ -69,3 +69,17 @@ test('asynchronous recovery staging is never visible or eligible for cloud uploa
  const result=await moveNativeToRecovery(store,native,[instance.id],{...options,onProgress:async p=>{if(p.phase==='Copying recovery records'){checked=true;const helpers=store.all('branch').filter(b=>b.excluded==='recovery-staging').map(b=>b.id);assert.ok(helpers.length);assert.ok(store.exportGraph().branches.every(b=>!helpers.includes(b.id)));}}});
  assert.equal(checked,true);assert.deepEqual(result.blocked,[]);const restored=restoreTrash(store,result.recoveryIds[0]);assert.ok(store.syncCollections().items.some(i=>i.sessionIds.includes(restored.branchIds[0])));
 });
+test('restoring a recovery copy creates a visible project session and never a client archive',t=>{
+ const {store,native,b,instance}=setup(t);native.setActive(b.id,null,false);native.apply([b.id]);
+ store.put('branch',{...store.get('branch',b.id),excluded:'recovery-staging',background:'agent-owned'});
+ const entry=stageTrash(store,[b.id],[b.id],{transient:true}),restored=restoreTrash(store,entry.id),id=restored.branchIds[0];
+ assert.ok(store.listing('projects').items.some(i=>i.sessionIds.includes(id)));assert.equal(store.instances().filter(i=>i.branchId===id).length,0);
+ assert.ok(!nativeTrashCandidates(store).some(i=>i.clientArchived&&i.branchId===b.id));assert.ok(!store.listing('archived').items.some(i=>i.sessionIds.includes(id)));
+});
+test('client archive changes follow an adopted identity without confusing Grove deactivation with archive',t=>{
+ const {store,native,b,instance}=setup(t);store.local('instances',store.instances().map(i=>({...i,adopted:true,nativeArchived:false})));
+ const archived=path.join(native.roots.codex,'archived_sessions',path.basename(instance.file));fs.mkdirSync(path.dirname(archived),{recursive:true});fs.renameSync(instance.file,archived);native.refreshLocal();
+ assert.equal(store.get('branch',b.id).archived,true);assert.ok(nativeTrashCandidates(store).some(i=>i.branchId===b.id&&i.clientArchived));
+ fs.renameSync(archived,instance.file);native.refreshLocal();assert.equal(store.get('branch',b.id).archived,false);assert.ok(store.listing('projects').items.some(i=>i.sessionIds.includes(b.id)));
+ native.setActive(b.id,null,false);native.apply([b.id]);native.refreshLocal();assert.ok(!nativeTrashCandidates(store).some(i=>i.branchId===b.id&&i.clientArchived));
+});
