@@ -100,7 +100,8 @@ async function api(path, method = 'GET', body, retried = false) {
 function modal(title, html, action, label = 'Save') {
     modalVersion++;
     $$('[data-modal-action]').forEach(el=>el.remove());
-    $('#dialog').dataset.kind = title === 'About' ? 'about' : 'normal'; $('#dialog-title').textContent = t(title); $('#dialog-content').innerHTML = html; $('#dialog-error').textContent = '';
+    $('#dialog').dataset.kind = ({About:'about',Settings:'settings',Information:'information'})[title] || 'normal'; $('#dialog-title').textContent = t(title); $('#dialog-content').innerHTML = html; $('#dialog-error').textContent = '';
+    $('.dialog-actions').hidden = !action;
     $('#dialog-submit').textContent = t(label); $('#dialog-submit').hidden = !action; $('#dialog-submit').disabled = false;
     $('#dialog-cancel').textContent = t(action ? 'Cancel' : 'Close'); submitAction = action;
     if (!$('#dialog').open) $('#dialog').showModal();
@@ -129,6 +130,7 @@ function translateBanner() {
     for (const [id, glyph, label] of [['sync', 'download', 'Pull'], ['upload', 'upload', 'Push'], ['collect', 'refresh', 'Update'], ['settings', 'settings', 'Settings']]) {
         const el = $('#' + id); el.dataset.glyph= glyph; el.innerHTML = `${icon(glyph)}<span class="button-label">${t(label)}</span>${['sync','upload'].includes(id)?'<span class="button-check" aria-hidden="true">✓</span>':''}`; el.title = t(label); el.setAttribute('aria-label', t(label));
     }
+    $('#language-toggle').textContent=locale()==='zh'?'中':'En';$('#language-toggle').title=locale()==='zh'?'English':'中文';
     $('#about').textContent = t('About'); $('#information').title = t('Information'); $('#information').setAttribute('aria-label', t('Information'));
     $('#search-icon').innerHTML = icon('search'); $('#search').placeholder = t('Search title or content…'); $('#search').setAttribute('aria-label', t('Search title or content…'));
     $('#back').innerHTML = icon('back'); $('#back').title = t('Back to list'); $('#back').setAttribute('aria-label', t('Back to list'));
@@ -138,7 +140,7 @@ function translateBanner() {
 }
 function renderNavigation() {
     const d = state.data, directoryScroll = $('.project-directory-scroll')?.scrollTop || 0;
-    const selectedScope = state.tree ? state.tree.projectId || INBOX : state.scope === PROJECTS ? state.projectFocus : state.scope;
+    const selectedScope = state.scope === PROJECTS ? state.projectFocus : state.scope;
     const entry = (scope, name, count, css = '') => `<button class="nav-entry ${css} ${selectedScope === scope ? 'selected' : ''}" data-scope="${esc(scope)}" ${selectedScope === scope ? 'aria-current="page"' : ''}><span class="nav-name">${esc(name)}</span><span class="count">${count}</span></button>`;
     const projectTimes = new Map(projectGroups(d.items.filter(i=>!i.archived).map(i=>({...i,updatedAt:i.sessions.filter(s=>!s.archived).map(s=>s.updatedAt).sort().at(-1)||i.updatedAt})), d.projects).map(g=>[g.id,g.updatedAt]));
     const projects = d.projects.filter(p => !p.archived && (d.items.some(i => i.projectId === p.id && !i.archived) || p.count > 0));
@@ -275,21 +277,7 @@ async function navigate(scope) {
     try {await refresh();if(project&&focus)focusProject(focus);}catch(e){toast(e.message);}
 }
 function title() { if(state.scope==='trash')return t('Trash'); if(state.scope === PROJECTS) return t('Projects'); if(state.scope === INBOX) return t('Ungrouped'); return state.scope === 'active:codex' ? t('Active Codex Sessions') : state.scope === 'active:claude' ? t('Active Claude Code Sessions') : state.scope === 'archived' ? t('Archived') : currentProject()?.name || t('Projects'); }
-function groups() {
-    if(state.scope === PROJECTS) return projectGroups(state.list.items,state.data.projects);
-    if(state.scope === INBOX && !state.query) {
-        const buckets=[{id:'recent',name:t('Last 7 days'),items:[]},{id:'month',name:t('Last 30 days'),items:[]},{id:'older',name:t('Older'),items:[],collapsed:true}];
-        for(const item of state.list.items){const days=(Date.now()-new Date(item.updatedAt).getTime())/86400000;buckets[days<7?0:days<30?1:2].items.push(item);}
-        return buckets.filter(g=>g.items.length);
-    }
-    const result = new Map();
-    for (const item of state.list.items) {
-        const key = item.groupId || 'ungrouped';
-        if (!result.has(key)) result.set(key, { name: item.groupName || t('Ungrouped'), items: [], id: item.groupId });
-        result.get(key).items.push(item);
-    }
-    return [...result.values()];
-}
+function groups() { return projectGroups(state.list.items,state.data.projects); }
 function itemMeta(item) {
     if (item.kind === 'tree') return t('{count} branches', { count: item.sessions.length });
     return item.sessions[0]?.chats == null ? t('Session') : t('{count} chats', { count: item.sessions[0].chats });
@@ -306,16 +294,17 @@ function renderList() {
     const organizing = !state.scope.startsWith('active:') && state.scope !== 'archived';
     $('#list-actions').innerHTML = '<button id="select-all"></button>' + (selected.length ? `<span class="selection-count">${t('{count} selected',{count:selected.length})}</span>${selected.length===1?'<button id="rename-items"></button>':''}${state.scope==='archived'?'<button id="restore-items"></button>':organizing?'<button id="move-items"></button>':'<button id="deactivate-items"></button>'}<button id="archive-items"></button>`:'');
     button('#rename-items', 'Rename', () => renameSession(selected[0]));
-    button('#select-all','Select all',()=>{const items=state.scope===PROJECTS&&state.projectFocus?state.list.items.filter(i=>(i.projectId||INBOX)===state.projectFocus):state.list.items;const all=items.every(i=>state.selected.has(i.id));for(const i of items)all?state.selected.delete(i.id):state.selected.add(i.id);renderList();});
+    button('#select-all',state.selected.size?'Deselect':'Select all',()=>{state.selected=state.selected.size?new Set():new Set(state.list.items.map(i=>i.id));renderList();});
     button('#move-items','Move to project',()=>moveDialog([...state.selected]));
     button('#archive-items','Move to Trash',()=>trashDialog({itemIds:[...state.selected],view:state.scope.startsWith('active:')?state.scope:state.scope==='archived'?'archived':'in-use'},selected.length));
     button('#restore-items','Restore',()=>restore({itemIds:[...state.selected]}));
     button('#deactivate-items','Deactivate',()=>run(()=>api('/manage','POST',{action:'deactivate',itemIds:[...state.selected],agent:state.scope.slice(7)})));
     const row=i=>`<article class="session-row ${state.selected.has(i.id)?'checked':''}" data-item="${esc(i.id)}"><button class="row-open" data-open="${esc(i.id)}">${icon(i.kind)}<span class="row-text"><span class="row-title">${esc(i.name)} ${cloudMark(i)}</span><span class="row-meta">${itemMeta(i)} ${sourceTags(i)}</span></span><time class="row-date">${date(i.updatedAt)}</time></button>${`<input type="checkbox" data-select="${esc(i.id)}" aria-label="${esc(t('Select {name}',{name:i.name}))}" ${state.selected.has(i.id)?'checked':''}>`}</article>`;
-    const groupHtml = g=>{const {limited,expanded,shown}=projectRows(g);return `<section class="list-group project-group" data-project-group="${esc(g.id||INBOX)}"><h2>${esc(g.name==='Scheduled & background'?t(g.name):g.name)}<span>${g.items.length}</span></h2>${shown.map(row).join('')}${foldButton(g,limited,expanded)}</section>`;};
+    const groupHtml = g=>{const {limited,expanded,shown}=projectRows(g);return `<section class="list-group project-group" data-project-group="${esc(g.id||INBOX)}"><h2>${esc(g.name==='Scheduled & background'?t(g.name):g.name)}<span class="group-actions"><span>${g.items.length}</span><input type="checkbox" data-group-select="${esc(g.id)}" aria-label="${esc(t('Select group {name}',{name:g.name}))}"></span></h2>${shown.map(row).join('')}${foldButton(g,limited,expanded)}</section>`;};
     const allGroups = groups(), older = state.scope===PROJECTS&&!state.query ? allGroups.filter(g=>isInactive(g.updatedAt)) : [], olderIds = new Set(older.map(g=>g.id));
     $('#session-list').innerHTML = allGroups.filter(g=>!olderIds.has(g.id)).map(groupHtml).join('') + (older.length ? `<section class="older-projects">${olderToggle(older.length)}${state.olderProjects?older.map(groupHtml).join(''):''}</section>` : '') || `<p class="empty">${t(state.query?'No matching sessions':'No sessions here.')}</p>`;
     bindOlderProjects();
+    $$('[data-group-select]').forEach(el=>{const items=allGroups.find(g=>g.id===el.dataset.groupSelect)?.items||[],count=items.filter(i=>state.selected.has(i.id)).length;el.checked=!!items.length&&count===items.length;el.indeterminate=count>0&&count<items.length;el.onchange=()=>{for(const i of items)el.checked?state.selected.add(i.id):state.selected.delete(i.id);renderList();};});
     $$('[data-open]').forEach(el=>el.onclick=()=>openTree(el.dataset.open));
     $$('[data-select]').forEach(el=>el.onchange=()=>{el.checked?state.selected.add(el.dataset.select):state.selected.delete(el.dataset.select);renderList();});
     bindProjectFolds();
@@ -344,7 +333,7 @@ async function openTree(id) {
         if (ticket !== requestId || state.scope !== scope) return;
         if (tree.view !== view || tree.paths.some(p => view === 'archived' ? !p.archived && !tree.projectArchived : p.archived || tree.projectArchived)) throw new Error(t('The view changed. Please open the session again.'));
         if (!tree.paths.length) { state.tree = null; render(); return; }
-        state.tree = tree;state.projectFocus=tree.projectId || INBOX;
+        state.tree = tree;state.projectFocus=tree.projectId || INBOX;if(listView&&!listView.entryProject)listView.entryProject=state.projectFocus;
         state.branchId = (state.query ? tree.paths.find(p => item?.matchedSessionIds?.includes(p.branchId)) : null)?.branchId || tree.paths.find(p=>p.branchId===tree.id)?.branchId || [...tree.paths].sort((a,b)=>b.nodeIds.length-a.nodeIds.length)[0].branchId;
         for (const list of [state.list.items,state.data.items]) { const cached=list.find(i=>i.id===id); if(cached)cached.cloudState='cached'; }
         state.nodeId = null; state.compactionId = null; clearRange(); state.expanded.clear(); camera.x = 0; camera.y = 0; camera.zoom = 1; camera.newView = true; render();animateView($('#detail-page'));
@@ -388,7 +377,7 @@ function renderDetailActions() {
     button('#activate-node', terminal && p.active ? 'Deactivate' : 'Activate', () => terminal && p.active ? run(()=>api('/manage','POST',{action:'deactivate',branchIds:[p.branchId]})) : activateDialog(p));
     button('#combine', 'Combine', combineDialog);
     button('#dissolve', 'Dissolve', () => run(async () => { await saveOrganization('dissolve'); clearRange(); }));
-    button('#clear-selection', 'Clear', () => { clearRange(); updateRangeSelection(); renderDetailActions(); renderGraph(); });
+    button('#clear-selection', 'Deselect', () => { clearRange(); updateRangeSelection(); renderDetailActions(); renderGraph(); });
     button('#restore-session', 'Restore', () => restore({ branchIds: [p.branchId] }));
     button('#rename-node', 'Rename', renameNode);
     button('#archive-path', 'Move to Trash', archivePath);
@@ -643,13 +632,30 @@ function trashDialog(target,count=1){
 }
 function archivePath(){const p=route(),node=selectedNode();if(!node?.endBranchIds.includes(p.branchId))return;trashDialog({branchIds:[p.branchId],nodeId:node.id,version:state.tree.version});}
 function renderTrash(){
-    $('#list-title').textContent=t('Trash');$('#list-actions').innerHTML='';$('#active-notice').hidden=true;
-    const trashDate = new Intl.DateTimeFormat(locale()==='zh'?'zh-CN':'en-US',{dateStyle:'medium',timeStyle:'short'});
-    const query=state.query.toLocaleLowerCase(),entries=(state.data.trashEntries||[]).filter(e=>!e.restoredAt&&(!query||e.names.some(n=>n.toLocaleLowerCase().includes(query)))),native=(state.data.trashNative||[]).filter(i=>!query||(i.title||i.agent).toLocaleLowerCase().includes(query));
-    $('#list-count').textContent=t('Recovery copies on this device');$('#search').placeholder=t('Search discarded titles…');
-    $('#session-list').innerHTML=entries.filter(e=>!e.restoredAt).map(e=>`<article class="trash-row"><div><strong>${esc(e.names.join(', '))}</strong><small>${t(({pending:'Waiting for Sync',removed:'Removed from current version',cleaned:'Removed from current version'})[e.state]||'Waiting for Sync')} · ${e.expired?t('Recovery expired'):t('Local recovery until {date}',{date:trashDate.format(new Date(e.expiresAt))})}</small></div>${!e.expired?`<button data-trash-restore="${esc(e.id)}">${t('Restore as a new session')}</button>`:''}</article>`).join('')+(!entries.length?`<p class="empty">${t('No local recovery copies.')}</p>`:'')+(native.length?`<section class="trash-native"><h2>${t('Native copies on this device')}</h2><p>${t('Close the agent before removing its local copy.')}</p>${native.map(i=>`<article class="trash-row"><span>${esc(i.title||i.agent)}<small>${t(i.active?'Still active in the native client':'Deactivated native copy')}</small></span><button data-trash-native="${esc(i.branchId)}">${t('Remove native copy')}</button></article>`).join('')}</section>`:'');
-    $$('[data-trash-restore]').forEach(el=>el.onclick=async()=>{let target;await run(async()=>{const r=await api('/trash/restore','POST',{id:el.dataset.trashRestore});target=r.projectIds[0];state.scope=PROJECTS;state.tree=null;state.projectFocus=target;state.olderProjects=true;for(const id of r.projectIds)state.expandedProjects.add(id);state.query='';$('#search').value='';toast(t(r.background?'Restored locally. Background visibility still follows Settings.':'Restored to Projects. It is not activated.'));});if(target)focusProject(target);});
-    $$('[data-trash-native]').forEach(el=>el.onclick=()=>run(async()=>{const r=await api('/trash/native','POST',{branchIds:[el.dataset.trashNative]});if(r.blocked.length)toast(r.blocked.map(b=>t(b.reason)).join('\n'));}));
+    $('#list-title').textContent=t('Trash');$('#active-notice').hidden=true;
+    const query=state.query.toLocaleLowerCase(),entries=(state.data.trashEntries||[]).filter(e=>!e.expired&&!e.restoredAt&&(!query||e.names.some(n=>n.toLocaleLowerCase().includes(query)))),copies=(state.data.trashNative||[]).filter(i=>!query||(i.title||i.agent).toLocaleLowerCase().includes(query));
+    const rows=[...entries.map(e=>({key:'recovery:'+e.id,id:e.id,kind:'recovery',name:e.names.join(', '),at:e.at,description:t('Local recovery until {date}',{date:date(e.expiresAt)})})),...copies.map(i=>({key:'native:'+i.id,id:i.id,kind:'native',name:i.title||i.agent,agent:i.agent,at:i.updatedAt,description:t(i.archived?'Archived in client':i.active?'Client copy still present':'Inactive client copy')}))];
+    const visible=new Set(rows.map(r=>r.key));state.selected=new Set([...state.selected].filter(id=>visible.has(id)));
+    const recovery=rows.filter(r=>r.kind==='recovery'&&state.selected.has(r.key)),native=rows.filter(r=>r.kind==='native'&&state.selected.has(r.key));
+    $('#list-count').textContent=t('{count} copies',{count:rows.length});$('#search').placeholder=t('Search discarded titles…');
+    $('#list-actions').innerHTML='<button id="trash-select-all"></button>'+(native.length?'<button id="trash-move-selected"></button>':'')+(recovery.length?'<button id="trash-restore-selected"></button><button id="trash-delete-selected"></button>':'');
+    button('#trash-select-all',state.selected.size?'Deselect':'Select all',()=>{state.selected=state.selected.size?new Set():new Set(rows.map(r=>r.key));renderTrash();});
+    button('#trash-move-selected',t('Move to recovery ({count})',{count:native.length}),()=>run(async()=>{
+        const result=await api('/trash/native','POST',{instanceIds:native.map(r=>r.id)});
+        state.trashFeedback=result.blocked.map(b=>`${native.find(r=>r.id===b.instanceId)?.name||''}: ${t(b.reason)}`).join('\n');
+        for(const id of result.moved)state.selected.delete('native:'+id);
+        if(result.moved.length)toast(t('Moved {count} copies to recovery.',{count:result.moved.length}));
+    }));
+    button('#trash-restore-selected',t('Restore ({count})',{count:recovery.length}),()=>run(async()=>{
+        const result=await api('/trash/recovery','POST',{action:'restore',ids:recovery.map(r=>r.id)});
+        state.trashFeedback=result.failed.map(e=>t(e.reason)).join('\n');for(const r of result.restored)state.selected.delete('recovery:'+r.id);
+        if(result.restored.length)toast(t('Restored {count} copies.',{count:result.restored.length}));
+    }));
+    button('#trash-delete-selected',t('Delete now ({count})',{count:recovery.length}),()=>modal('Delete recovery copies',`<p>${t('Permanently delete {count} local recovery copies?',{count:recovery.length})}</p>`,async()=>{await api('/trash/recovery','POST',{action:'delete',ids:recovery.map(r=>r.id)});state.trashFeedback='';state.selected.clear();},'Delete now'));
+    const row=r=>`<article class="session-row ${state.selected.has(r.key)?'checked':''}"><div class="row-open trash-copy"><span class="row-text"><span class="row-title">${esc(r.name)}</span><span class="row-meta">${esc(r.description)}${r.agent?' · '+esc(r.agent==='codex'?'Codex':'Claude'):''}</span></span><time class="row-date">${esc(date(r.at))}</time></div><input type="checkbox" data-trash-select="${esc(r.key)}" aria-label="${esc(t('Select {name}',{name:r.name}))}" ${state.selected.has(r.key)?'checked':''}></article>`;
+    $('#session-list').innerHTML=(state.trashFeedback?`<p class="trash-feedback" role="status">${esc(state.trashFeedback)}</p>`:'')+['recovery','native'].map(kind=>{const items=rows.filter(r=>r.kind===kind).sort((a,b)=>(b.at||'').localeCompare(a.at||'')||a.id.localeCompare(b.id));return items.length?`<section class="list-group"><h2>${t(kind==='recovery'?'Recovery copies':'Client copies')}<span class="group-actions"><span>${items.length}</span><input type="checkbox" data-trash-group="${kind}" aria-label="${esc(t('Select group {name}',{name:t(kind==='recovery'?'Recovery copies':'Client copies')}))}"></span></h2>${items.map(row).join('')}</section>`:'';}).join('')+(!rows.length?`<p class="empty">${t('Trash is empty.')}</p>`:'');
+    $$('[data-trash-group]').forEach(el=>{const items=rows.filter(r=>r.kind===el.dataset.trashGroup),count=items.filter(r=>state.selected.has(r.key)).length;el.checked=count===items.length;el.indeterminate=count>0&&count<items.length;el.onchange=()=>{for(const r of items)el.checked?state.selected.add(r.key):state.selected.delete(r.key);renderTrash();};});
+    $$('[data-trash-select]').forEach(el=>el.onchange=()=>{el.checked?state.selected.add(el.dataset.trashSelect):state.selected.delete(el.dataset.trashSelect);renderTrash();});
     renderCloudStatus();
 }
 
@@ -748,11 +754,11 @@ async function settings(options = {}) {
     try {
         const c = await api('/settings'), edit = options.editConnection || !c.verified;
         const p = c.preferences;
-        modal('Settings', `<div class="settings-top"><label class="field">${t('Language')}<select id="language"><option value="en" ${locale() === 'en' ? 'selected' : ''}>English</option><option value="zh" ${locale() === 'zh' ? 'selected' : ''}>中文</option></select></label></div>
+        modal('Settings', `
           <section class="settings-card"><div class="settings-section-heading"><h3>${t('Git repository')}</h3>${!edit ? `<span class="setting-ok">✓ ${t('Connected')}</span><button type="button" id="modify-connection">${t('Modify')}</button>` : ''}</div>
           <label class="field">${t('Repository address')}<input name="url" type="text" value="${esc(c.url)}" placeholder="git@github.com:owner/repository.git" ${!edit ? 'disabled' : ''}></label>
 
-          ${edit ? `<button type="button" id="verify-connection" class="primary">${t('Connect repository')}</button>` : ''}
+          ${edit ? `<button type="button" id="verify-connection" class="primary">${t('Verify and connect')}</button>` : ''}
 </section>
           <section class="settings-card"><h3>${t('Trash')}</h3><label class="field">${t('Local recovery days')}<input type="number" name="trashRetentionDays" min="1" max="365" value="${p.trashRetentionDays}"></label></section><section class="settings-card"><h3>${t('Project contents')}</h3><label class="field">${t('Collapse older sessions')}<select name="projectFoldMode">${[['time','By age'],['count','By count'],['none','Show all']].map(([v,l])=>`<option value="${v}" ${p.projectFoldMode===v?'selected':''}>${t(l)}</option>`).join('')}</select></label>${p.projectFoldMode==='time'?`<label class="field">${t('Keep recent days')}<input type="number" name="projectFoldDays" min="1" max="365" value="${p.projectFoldDays}"></label>`:p.projectFoldMode==='count'?`<label class="field">${t('Visible sessions per project')}<input type="number" name="projectFoldCount" min="1" max="365" value="${p.projectFoldCount}"></label>`:''}</section><section class="settings-card"><h3>${t('Automatic updates')}</h3><div class="timer-row"><label><input type="checkbox" name="showScheduledSessions" ${p.showScheduledSessions?'checked':''}>${t('Show scheduled and background sessions')}</label></div>
             <label class="timer-row collapse-setting"><span>${t('Collapse projects after')}</span><select name="inactiveProjectDays" aria-label="${t('Collapse projects after')}">${[[7,'One week'],[15,'Half a month'],[30,'One month'],[60,'Two months']].map(([days,label])=>`<option value="${days}" ${days===p.inactiveProjectDays?'selected':''}>${t(label)}</option>`).join('')}</select></label>
@@ -760,9 +766,7 @@ async function settings(options = {}) {
             <button type="button" id="save-timers" hidden>${t('Save preferences')}</button>
           </section>`, null);
         $('#dialog-cancel').textContent = t('Close');
-        enhanceSelect($('#language'));
-        $('#language').onchange = async e => { setLocale(e.target.value); render(); await settings(options); };
-        const busy = async (button, fn) => { if (working) return; working = true; button.disabled = true; const original = button.textContent; button.textContent = t('Working…'); $('#dialog-error').textContent = '';
+        const busy = async (button, fn) => { if (working) return; working = true; button.disabled = true; const original = button.textContent; button.textContent = t(button.id==='verify-connection'?'Verifying connection…':'Working…'); $('#dialog-error').textContent = '';
             try { await fn(); } catch(e) { $('#dialog-error').textContent = e.message; } finally { working = false; renderCloudStatus(); if (button.isConnected) { button.disabled = false; button.textContent = original; } } };
         if ($('#modify-connection')) $('#modify-connection').onclick = () => settings({editConnection:true});
         if ($('#verify-connection')) {
@@ -782,10 +786,9 @@ async function settings(options = {}) {
     } catch(e) { toast(e.message); }
 }
 function information() {
-    modal('Information', `<details><summary>${t('Using Grove')}</summary><ul class="action-guide"><li>${t('Update reads your local sessions. Pull gets changes from your other devices. Push sends your changes after pulling.')}</li><li>${t('Activate opens the selected node and its preceding context in your tool. Deactivate is available at the active endpoint.')}</li><li>${t('Renaming changes the Grove label. Your conversation keeps the same identity.')}</li></ul></details><details><summary>${t('Sync and recovery')}</summary><p>${t('Sessions are stored as readable files in your Git repository. Earlier versions remain in Git history.')}</p><p>${t('Changes made during upload remain queued for the next upload.')}</p><p>${t('Trash keeps a recovery copy on this device until its displayed expiry date.')}</p></details><details><summary>${t('Tokens and tools')}</summary><p>${t('Token counts estimate the selected conversation and recorded tool context. Model capacity and compaction thresholds come from available model settings.')}</p>${['lean','full','messages'].map(m=>`<p><strong>${t(modeName(m))}</strong> — ${contextCopy(m)}</p>`).join('')}<p>${t('Switching tools creates a new session. Thinking and attachments remain in the original.')}</p></details><details><summary>${t('Diagnostics')}</summary><button type="button" id="download-diagnostics">${t('Download diagnostics')}</button></details>${(state.data.plan?.pendingRecovery||[]).map(id=>`<button type="button" data-recover="${esc(id)}">${t('Recover interrupted operation')}</button>`).join('')}${state.data.conflicts.map((c,i)=>`<div class="conflict">${t('Conflict')}: ${esc(c.local.name)}<button type="button" data-conflict="${i}" data-choice="local">${t('Keep local')}</button><button type="button" data-conflict="${i}" data-choice="remote">${t('Use remote')}</button></div>`).join('')}`,null);
+    modal('Information', `<details><summary>${t('Using Grove')}</summary><ul class="action-guide"><li>${t('Update reads your local sessions. Pull gets changes from your other devices. Push sends your changes after pulling.')}</li><li>${t('Activate opens the selected node and its preceding context in your tool. Deactivate is available at the active endpoint.')}</li><li>${t('Renaming changes the Grove label. Your conversation keeps the same identity.')}</li></ul></details><details><summary>${t('Sync and recovery')}</summary><p>${t('Sessions are stored as readable files in your Git repository. Earlier versions remain in Git history.')}</p><p>${t('Changes made during upload remain queued for the next upload.')}</p><p>${t('Trash keeps a recovery copy on this device until its displayed expiry date.')}</p></details><details><summary>${t('Tokens and tools')}</summary><p>${t('Token counts estimate the selected conversation and recorded tool context. Model capacity and compaction thresholds come from available model settings.')}</p>${['lean','full','messages'].map(m=>`<p><strong>${t(modeName(m))}</strong> — ${contextCopy(m)}</p>`).join('')}<p>${t('Switching tools creates a new session. Thinking and attachments remain in the original.')}</p></details>${(state.data.plan?.pendingRecovery||[]).map(id=>`<button type="button" data-recover="${esc(id)}">${t('Recover interrupted operation')}</button>`).join('')}${state.data.conflicts.map((c,i)=>`<div class="conflict">${t('Conflict')}: ${esc(c.local.name)}<button type="button" data-conflict="${i}" data-choice="local">${t('Keep local')}</button><button type="button" data-conflict="${i}" data-choice="remote">${t('Use remote')}</button></div>`).join('')}`,null);
     const operation=state.data.cloud.operation;
     if (operation) $('#dialog-content').insertAdjacentHTML('beforeend', `<details id="transfer-diagnostics"><summary>${t('Last transfer')}</summary><dl><dt>${t('Elapsed')}</dt><dd>${Math.round(((operation.finishedAt||Date.now())-operation.startedAt)/1000)} s</dd>${operation.summary?`<dt>${t('Sessions checked')}</dt><dd>${operation.summary.checked||0}</dd><dt>${t('Items pushed')}</dt><dd>${operation.summary.published||0}</dd>`:''}</dl></details>`);
-    $('#download-diagnostics').onclick=async()=>{try{const report=await api('/diagnostics'),url=URL.createObjectURL(new Blob([JSON.stringify(report,null,2)],{type:'application/json'})),link=document.createElement('a');link.href=url;link.download='session-grove-diagnostics.json';link.click();setTimeout(()=>URL.revokeObjectURL(url),1000);}catch(e){$('#dialog-error').textContent=e.message;}};
     $$('[data-conflict]').forEach(el=>el.onclick=()=>run(async()=>{await api('/conflicts/resolve','POST',{index:Number(el.dataset.conflict),choice:el.dataset.choice});$('#dialog').close();}));
     $$('[data-recover]').forEach(el=>el.onclick=()=>run(async()=>{await api('/recover','POST',{id:el.dataset.recover});$('#dialog').close();}));
 }
@@ -799,6 +802,7 @@ async function sync(direction = 'pull'){
     try{const result=await api('/synchronize/transfer','POST',{direction});state.syncOperation=result.operationId;const next=await api('/status');state.data.cloud=next.cloud;renderCloudStatus();}
     catch(e){toast(e.message);}finally{state.syncPreparing=false;renderCloudStatus();}
 }
+$('#language-toggle').onclick=()=>{setLocale(locale()==='zh'?'en':'zh');render();};
 $('#about').onclick=about;$('#information').onclick=information;$('#sync').onclick=()=>sync('pull');$('#upload').onclick=()=>sync('push');$('#settings').onclick=()=>settings();
 $('#push-zone').onmouseenter=$('#push-zone').onfocusin=showPendingUploads;
 $('#push-zone').onmouseleave=$('#push-zone').onfocusout=e=>{if(!$('#push-zone').contains(e.relatedTarget))pendingTimer=setTimeout(()=>{pendingTicket++;hideSyncPanel($('#pending-uploads'));},180);};
@@ -819,7 +823,7 @@ divider.onkeydown=e=>{if(!['ArrowLeft','ArrowRight'].includes(e.key))return;e.pr
 applyPanePreferences();
 $('#collect').onclick = () => run(async () => { const r = await api('/collect', 'POST', {}); if (r.errors?.length) toast(r.errors.map(e => errorText(e.message)).join('\n')); else toast(t('Refresh complete · {updates} updated · {discovered} discovered', { updates: r.updates.length, discovered: r.discovered })); }, 'update');
 $('#search').oninput = e => { state.query = e.target.value; state.selected.clear(); clearTimeout(searchTimer); searchTimer = setTimeout(() => refresh().catch(e => toast(e.message)), 180); };
-$('#back').onclick = () => { ++requestId;opening=false;$('#main').removeAttribute('aria-busy');state.tree=null;clearRange();if(listView)state.projectFocus=listView.projectFocus;render();if(listView)$('#session-list').scrollTo({top:listView.scroll,behavior:'instant'});listView=null;animateView($('#list-page')); };
+$('#back').onclick = () => { ++requestId;opening=false;$('#main').removeAttribute('aria-busy');const target=state.tree?.projectId || INBOX;state.tree=null;clearRange();if(state.scope===PROJECTS)state.projectFocus=target;render();if(state.scope===PROJECTS&&listView?.entryProject!==target)focusProject(target);else if(listView)$('#session-list').scrollTo({top:listView.scroll,behavior:'instant'});listView=null;animateView($('#list-page')); };
 $('#source').onclick = showSource;
 $('#branch-picker').onchange = e => { state.branchId = e.target.value; clearRange(); state.nodeId = null; state.compactionId = null; renderDetail(); };
 $('#transcripts').onscroll = () => scheduleRibbons();

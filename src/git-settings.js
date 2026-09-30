@@ -4,6 +4,16 @@ import { gitRemote } from './git-remote.js';
 import { atomic, json, assert } from './util.js';
 import { preferences, savePreferences } from './preferences.js';
 
+export function connectionError(error) {
+    const message = error.message || '';
+    if (/Permission denied.*publickey|no supported authentication/i.test(message)) return 'SSH authentication failed. Check your SSH key and repository access.';
+    if (/Host key verification failed/i.test(message)) return 'SSH host verification failed. Verify this host in your SSH configuration.';
+    if (/Repository not found|does not appear to be a git repository/i.test(message)) return 'Repository unavailable. Check its address and your account access.';
+    if (/Could not resolve|Connection timed out|Connection refused|Network is unreachable/i.test(message)) return 'Cannot reach the Git server. Check the address and network connection.';
+    if (error.code === 'ENOENT') return 'Git is not installed or is unavailable to Grove.';
+    return message;
+}
+
 export class GitSettings {
     constructor(root, store, autoSync, onTimers) {
         Object.assign(this, { root, store, autoSync, onTimers });
@@ -35,6 +45,8 @@ export class GitSettings {
             this.store.local('syncStarted', false);
             this.autoSync.configureTimer();
             return this.status();
+        } catch (error) {
+            throw new Error(connectionError(error), { cause: error });
         } finally { cloud.lock(); this.job = null; }
     }
     async start(body) { return this.verify(body); }

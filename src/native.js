@@ -161,7 +161,7 @@ export class Native {
         let metadataChanged = false;
         for (const instance of instances) {
             const current = [...this.catalog.values()].find(v => v.nativeId === instance.nativeId && v.agent === instance.agent);
-            if (current && current.file !== instance.file && instance.applied) { instance.file = current.file; this.observedStats.delete(instance.id); }
+            if (current && current.file !== instance.file) { instance.file = current.file; this.observedStats.delete(instance.id); }
             if (current?.cwd && instance.adopted && current.cwd !== instance.cwd) { instance.cwd = current.cwd; metadataChanged = true; }
             const observed = current || this.observations.get(instance.file); if (!observed) continue;
             const branch = this.store.get('branch', instance.branchId), patch = {};
@@ -173,6 +173,7 @@ export class Native {
             if (instance.excluded !== !!observed.excluded) { instance.excluded = !!observed.excluded; metadataChanged = true; }
             // Native names are observed by identity, never used as identity or
             // copied over the independent Grove alias after initial import.
+            if (observed.archived !== undefined) { instance.nativeArchived = !!observed.archived; if(instance.adopted) { const followingClient=instance.desired===instance.applied;instance.applied=!observed.archived;if(followingClient)instance.desired=instance.applied; } }
             if (observed.title) {
                 instance.observedTitle = observed.title;
                 instance.title = observed.title;

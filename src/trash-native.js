@@ -5,12 +5,12 @@ import { assert, atomic, inside, safePath, hash } from './util.js';
 import { isTrashed, cleanupLocal } from './trash.js';
 import { codexFiles } from './codex-history.js';
 // Explicit user action only. Native files are never touched by background cloud GC.
-export function removeTrashNativeCopies(store, native, branchIds) {
+export function removeTrashNativeCopies(store, native, branchIds, options = {}) {
     const selected = new Set(branchIds),
         instances = store.instances(),
-        targets = instances.filter((i) => selected.has(i.branchId) && isTrashed(store, i.branchId));
+        targets = instances.filter((i) => selected.has(i.branchId) && (isTrashed(store, i.branchId) || options.recoverySaved) && (!options.instanceIds || options.instanceIds.includes(i.id)));
     assert(targets.length, 'No native Trash copies to remove.');
-    native.guard([...new Set(targets.map((i) => i.agent))]);
+    if (!options.archivedByClient) native.guard([...new Set(targets.map((i) => i.agent))]);
     const blocked = [],
         removed = [];
     for (const i of targets) {
@@ -28,6 +28,7 @@ export function removeTrashNativeCopies(store, native, branchIds) {
             'Native copy is outside managed storage.',
         );
         safePath(inside(store.root, i.file) ? store.root : native.roots[i.agent], i.file);
+        options.checkFile?.(i.file);
         if (i.observedHash && hash(fs.readFileSync(i.file)) !== i.observedHash) {
             blocked.push({
                 instanceId: i.id,
@@ -91,7 +92,7 @@ export function removeTrashNativeCopies(store, native, branchIds) {
             }
         } else {
             const companions = path.join(path.dirname(i.file), i.nativeId);
-            if (fs.existsSync(companions) && fs.readdirSync(companions).length) {
+            if (!options.companionsCaptured && fs.existsSync(companions) && fs.readdirSync(companions).length) {
                 blocked.push({
                     instanceId: i.id,
                     reason: 'Native companion files are retained for manual review.',
@@ -111,7 +112,7 @@ export function removeTrashNativeCopies(store, native, branchIds) {
             native.roots[i.agent],
             i.agent === 'codex' ? 'session_index.jsonl' : 'history.jsonl',
         );
-        if (fs.existsSync(index)) {
+        if (fs.existsSync(index) && !(options.archivedByClient && i.agent === 'codex')) {
             const lines = fs
                 .readFileSync(index, 'utf8')
                 .split('\n')
@@ -126,7 +127,10 @@ export function removeTrashNativeCopies(store, native, branchIds) {
                 });
             atomic(index, lines.length ? lines.join('\n') + '\n' : '');
         }
+        options.checkFile?.(i.file);
+        if (i.observedHash && hash(fs.readFileSync(i.file)) !== i.observedHash) { blocked.push({instanceId:i.id,reason:'Native history changed. Retry to save its latest version.'}); continue; }
         fs.rmSync(i.file);
+        if (i.agent === 'claude' && options.companionsCaptured) fs.rmSync(path.join(path.dirname(i.file),i.nativeId),{recursive:true,force:true});
         i.applied = false;
         i.desired = false;
         i.missing = true;

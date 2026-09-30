@@ -20,6 +20,8 @@ try{
  const evaluate=async expression=>{const r=await call('Runtime.evaluate',{expression,awaitPromise:true,returnByValue:true});if(r.exceptionDetails)throw Error(JSON.stringify(r.exceptionDetails));return r.result.value;};
  const wait=async expression=>{for(let i=0;i<100;i++){if(await evaluate(expression))return;await new Promise(r=>setTimeout(r,100));}throw Error('Timeout '+expression);};
  await call('Runtime.enable');await call('Emulation.setDeviceMetricsOverride',{width:1512,height:982,deviceScaleFactor:1,mobile:false});await wait('document.querySelector("[data-open]")');await evaluate('document.querySelector("[data-open]").click()');await wait('document.querySelectorAll("[data-node]").length>10');
+ assert.equal(await evaluate(`document.querySelector('[data-scope="active:codex"]').classList.contains('selected')`),true);
+ assert.ok(await evaluate('(()=>{const a=document.querySelector(".transcript-panel").getBoundingClientRect(),b=document.querySelector(".graph-panel").getBoundingClientRect(),p=parseFloat(getComputedStyle(document.querySelector("#editor")).paddingLeft);return Math.abs(b.left-a.right-p)<1})()'));
  await evaluate('document.querySelector("#graph-reset").click()');
  const graph=store.treeGraph(parent.id),targets=[parent,child].map(b=>graph.paths.find(p=>p.branchId===b.id).nodeIds.at(-4));
  async function positionNode(node){const v=await evaluate(`(()=>{const a=document.querySelector('[data-node="${node}"]').getBoundingClientRect(),b=document.querySelector('#graph-scroll').getBoundingClientRect();return {x:b.x+b.width/2,y:b.y+b.height/2,deltaX:a.x+a.width/2-b.x-b.width/2,deltaY:a.y+a.height/2-b.y-b.height/2}})()`);await call('Input.dispatchMouseEvent',{type:'mouseWheel',...v});await evaluate('new Promise(resolve=>requestAnimationFrame(resolve))');}
@@ -63,11 +65,23 @@ try{
   await evaluate('window.__requests=[];const originalFetch=window.fetch;window.fetch=(url,...args)=>{window.__requests.push(String(url));return originalFetch(url,...args)};document.querySelector("[data-scope=trash]").click()');await wait('document.querySelector("#list-title").textContent==="Trash"&&window.__requests.includes("/api/trash")');
   const paths=await evaluate('window.__requests');assert.ok(!paths.some(p=>p==='/api/state'||p.startsWith('/api/list')),'Trash must use its lightweight endpoint');
  }
+ fs.writeFileSync(path.join(root,'app','git-sync.json'),JSON.stringify({provider:'git',url:'git@example.invalid:owner/data.git',verified:true}));
  for(const selector of ['#about','#settings','#information']){
   await evaluate(`document.querySelector('${selector}').click()`);await wait('document.querySelector("#dialog").open');
   if(selector==='#settings')assert.ok(await evaluate('(()=>{const row=document.querySelector(".collapse-setting"),s=row.querySelector(".select-control").getBoundingClientRect(),l=row.querySelector("span").getBoundingClientRect();return l.right<=s.left&&Math.abs(l.y+l.height/2-s.y-s.height/2)<2})()'));
+  assert.equal(await evaluate('document.querySelector(".dialog-actions").hidden'),true);
+  if(selector==='#settings'){
+   assert.equal(await evaluate('!!document.querySelector("#language")'),false);
+   assert.ok(await evaluate('(()=>{const h=document.querySelector(".settings-section-heading h3").getBoundingClientRect(),b=document.querySelector("#modify-connection").getBoundingClientRect();return b.left>h.right&&Math.abs(h.y+h.height/2-b.y-b.height/2)<2})()'));
+   assert.ok(await evaluate('[...document.querySelectorAll(".settings-card")].every(c=>{const style=getComputedStyle(c),h=c.querySelector("h3");return style.paddingTop===style.paddingBottom&&style.paddingTop===style.paddingLeft&&getComputedStyle(h).marginTop==="0px"})'));
+   assert.ok(await evaluate('[...document.querySelectorAll(".settings-card")].every(c=>{const v=[...c.children].filter(e=>getComputedStyle(e).display!=="none"),r=c.getBoundingClientRect();return Math.abs((v[0].getBoundingClientRect().top-r.top)-(r.bottom-v.at(-1).getBoundingClientRect().bottom))<2})'));
+   fs.mkdirSync('test-results',{recursive:true});fs.writeFileSync('test-results/settings-spacing.png',Buffer.from((await call('Page.captureScreenshot',{format:'png'})).data,'base64'));
+  }
+  if(selector==='#information')assert.equal(await evaluate('/diagnostic/i.test(document.querySelector("#dialog-content").textContent)'),false);
   await call('Input.dispatchMouseEvent',{type:'mousePressed',x:5,y:150,button:'left',clickCount:1});await call('Input.dispatchMouseEvent',{type:'mouseReleased',x:5,y:150,button:'left',clickCount:1});await wait('!document.querySelector("#dialog").open');
  }
+ await evaluate('document.querySelector("#language-toggle").click()');assert.equal(await evaluate('document.querySelector("#language-toggle").textContent'),'中');
+ await evaluate('document.querySelector("#language-toggle").click()');assert.equal(await evaluate('document.querySelector("#language-toggle").textContent'),'En');
  const {savePreferences}=await import(pathToFileURL(path.join(source,'src/preferences.js')));
  savePreferences(store,{projectFoldMode:'count',projectFoldCount:2,localUpdateEnabled:false});
  const projectA=store.project('Navigation A'),projectB=store.project('Navigation B');
@@ -92,6 +106,21 @@ try{
  await evaluate('document.querySelector("#back").click()');
  assert.equal(await evaluate(`document.querySelectorAll('[data-project-group="${projectA.id}"] [data-open]').length`),8);
  assert.equal(await evaluate(`document.querySelectorAll('[data-project-group="${projectB.id}"] [data-open]').length`),2);
- assert.ok(Math.abs((await evaluate('document.querySelector("#session-list").scrollTop'))-listTop)<2,'Back restores list position');
+ await wait(`(()=>{const g=document.querySelector('[data-project-group="${projectB.id}"]').getBoundingClientRect(),v=document.querySelector('#session-list').getBoundingClientRect();return Math.abs(g.top-v.top)<24})()`);
+ assert.ok(await evaluate(`document.querySelector('[data-scope="${projectB.id}"]').classList.contains('selected')`),'Back follows the last browsed project');
+ await evaluate(`document.querySelector('[data-group-select="${projectA.id}"]').click()`);
+ assert.equal(await evaluate(`document.querySelectorAll('[data-project-group="${projectA.id}"] [data-select]:checked').length`),8);
+ assert.equal(await evaluate('document.querySelector("#select-all").textContent'),'Deselect');
+ await evaluate('document.querySelector("#select-all").click()');assert.equal(await evaluate('document.querySelectorAll("[data-select]:checked").length'),0);
+ const {stageTrash}=await import(pathToFileURL(path.join(source,'src/trash.js')));
+ const rb=store.branch(null,'Restore selected','codex',codexSample(root,[['Recovery','Keep']])),re=stageTrash(store,[rb.id],[rb.id]);
+ await evaluate('document.querySelector("[data-scope=trash]").click()');await wait(`document.querySelector('[data-trash-select="recovery:${re.id}"]')`);
+ await evaluate(`document.querySelector('[data-trash-select="recovery:${re.id}"]').click()`);assert.equal(await evaluate('document.querySelector("#trash-select-all").textContent'),'Deselect');
+ await evaluate('document.querySelector("#trash-restore-selected").click()');await wait(`!document.querySelector('[data-trash-select="recovery:${re.id}"]')`);
+ assert.ok(store.syncCollections().items.some(i=>i.name==='Restore selected'));
+ const db=store.branch(null,'Delete selected','codex',codexSample(root,[['Delete','Discard']])),de=stageTrash(store,[db.id],[db.id]);
+ await wait(`document.querySelector('[data-trash-select="recovery:${de.id}"]')`);await evaluate(`document.querySelector('[data-trash-select="recovery:${de.id}"]').click();document.querySelector('#trash-delete-selected').click()`);await wait('document.querySelector("#dialog").open');await evaluate('document.querySelector("#dialog-form").requestSubmit()');await wait('!document.querySelector("#dialog").open');assert.equal(fs.existsSync(path.join(store.root,'trash',de.id+'.json.gz')),false);
+ const nb=store.branch(null,'Move client copy','codex',codexSample(root,[['Client copy','Preserve']]));app.native.setActive(nb.id,root,true);app.native.apply([nb.id]);const ni=store.instances().find(i=>i.branchId===nb.id);store.edit(nb.id,{archived:true});
+ await wait(`document.querySelector('[data-trash-select="native:${ni.id}"]')`);await evaluate(`document.querySelector('[data-trash-select="native:${ni.id}"]').click();document.querySelector('#trash-move-selected').click()`);await wait(`!document.querySelector('[data-trash-select="native:${ni.id}"]')`);assert.equal(fs.existsSync(ni.file),false);assert.ok(store.local('trashEntries').some(e=>e.nativeInstanceId===ni.id));
  assert.deepEqual(errors,[]);console.log('Browser passed: one-click cross-tool branch positioning, stable graph camera, unified activation preview/title, conversion panel, prefix continuation, lightweight Trash.');
 }finally{ws?.close();chrome.kill();await once(chrome,'exit');await new Promise(r=>app.close(r));fs.rmSync(root,{recursive:true,force:true});}

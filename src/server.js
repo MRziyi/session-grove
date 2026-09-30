@@ -1,5 +1,5 @@
 import {stageTrash,restoreTrash,expireTrash,cleanupLocal,isTrashed} from './trash.js';
-import {removeTrashNativeCopies} from './trash-native.js';
+import {nativeTrashCandidates,moveNativeToRecovery,deleteRecoveryCopies,restoreRecoveryCopies} from './trash-actions.js';
 import os from 'node:os';
 import { recordPreview } from './record-preview.js';
 import { VERSION } from './version.js';
@@ -51,7 +51,7 @@ export function createApp({ root, roots, guard, demo = false }) {
     autoSync.onOperation = value => operation('sync', {...value, status:autoSync.status()});
     const timing = () => ({ appVersion: VERSION, serverNow: Date.now(), stateVersion: diagnostics.startedAt + ':' + store.version + ':' + store.cloudVersion, update: { nextRunAt: nextCaptureAt, lastRunAt: lastCaptureAt, started: !!store.local('localUpdateStarted'), operation: updateOperation } });
     let expiryTimer;const configureExpiry=()=>{clearTimeout(expiryTimer);const entries=expireTrash(store),next=entries.filter(e=>!e.expired).map(e=>Date.parse(e.expiresAt)).sort((a,b)=>a-b)[0];if(next){expiryTimer=setTimeout(configureExpiry,Math.max(1000,Math.min(2147483647,next-Date.now())));expiryTimer.unref();}};configureExpiry();
-    const trashSnapshot = () => ({ trashEntries:(store.local('trashEntries')||[]).filter(e=>!e.expired||e.state!=='cleaned'), trashNative:store.instances().filter(i=>isTrashed(store,i.branchId)&&i.file&&fs.existsSync(i.file)).map(i=>({id:i.id,branchId:i.branchId,title:i.title,agent:i.agent,active:i.applied})) });
+    const trashSnapshot = () => ({ trashEntries:(store.local('trashEntries')||[]).filter(e=>!e.expired&&!e.restoredAt), trashNative:nativeTrashCandidates(store) });
     const snapshot = () => ({ ...autoSync.decorate(store.snapshot()), preferences: preferences(store), ...trashSnapshot() });
     const server = http.createServer(async (req, res) => {
         const started = performance.now(), requestId = id().slice(0, 8);
@@ -148,7 +148,16 @@ export function createApp({ root, roots, guard, demo = false }) {
                 const entry=stageTrash(store,ids,treeIds);cleanupLocal(store);configureExpiry();autoSync.reconcileTimer();return send(202,entry);
             }
             if(req.method==='POST'&&route==='/api/trash/restore'){const result=restoreTrash(store,body.id);autoSync.schedule();return send(201,result);}
-            if(req.method==='POST'&&route==='/api/trash/native')return send(200,removeTrashNativeCopies(store,native,body.branchIds||[]));
+            if(req.method==='POST'&&route==='/api/trash/native'){
+                const ids=body.instanceIds || nativeTrashCandidates(store).filter(i=>(body.branchIds||[]).includes(i.branchId)).map(i=>i.id);
+                const result=await moveNativeToRecovery(store,native,ids);configureExpiry();autoSync.schedule();return send(200,result);
+            }
+            if(req.method==='POST'&&route==='/api/trash/recovery'){
+                assert(Array.isArray(body.ids)&&body.ids.length&&body.ids.every(id=>typeof id==='string'),'Select recovery copies.');
+                assert(['restore','delete'].includes(body.action),'Choose Restore or Delete now.');
+                const result=body.action==='restore'?restoreRecoveryCopies(store,body.ids):deleteRecoveryCopies(store,body.ids);
+                configureExpiry();autoSync.schedule();return send(200,result);
+            }
             if (req.method === 'POST' && route === '/api/move') {
                 for (const id of body.itemIds || []) await autoSync.openTree(id, { check: true });
                 if (body.projectId && body.projectId !== INBOX_ID && !store.all('project').some(p => p.id === body.projectId)) {
