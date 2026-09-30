@@ -5,13 +5,14 @@ import {cleanupLocal} from './trash.js';
 import { cloudProjectId } from './inbox.js';
 import { preferences } from './preferences.js';
 import { Cloud } from './cloud.js';
+import { GitCloud } from './git-cloud.js';
 import { assert, now, id } from './util.js';
 export class AutoSync {
-    constructor(store, readConfig, run = null) {
+    constructor(store, readConfig, run = null, { provider = 'webdav' } = {}) {
         this.store = store; this.readConfig = readConfig; this.run = run;
-        this.cloud = new Cloud(store, readConfig); this.cloud.onProgress=value=>this.progress(value);
+        this.cloud = provider === 'git' ? new GitCloud(store, readConfig) : new Cloud(store, readConfig); this.cloud.onProgress=value=>this.progress(value);
         this.cloud.mergeByModified = true;
-        this.passphrase = null; this.running = false; this.error = null; this.closed = false; this.retryAt = 0; this.failures = 0; this.rateLimitUntil = 0;
+        this.passphrase = this.cloud.provider === 'git' ? '' : null; this.running = false; this.error = null; this.closed = false; this.retryAt = 0; this.failures = 0; this.rateLimitUntil = 0;
         this.lastManualOperation = store.local('lastManualSync');
         this.lastFailure = store.local('lastSyncFailure');
         if (this.lastFailure?.requiresReview && /^(Sync stopped by request|Transfer stopped to load)/.test(this.lastFailure.error || '')) this.lastFailure = { ...this.lastFailure, state: 'interrupted' };
@@ -21,8 +22,9 @@ export class AutoSync {
         this.queue = new Set(store.local('uploadQueue') || []);
         this.configureTimer();
     }
-    trashPending() { return !!(this.store.local('trashPending')||[]).length || fs.existsSync(path.join(this.store.root,'trash-cleanup.json')); }
+    trashPending() { if (this.cloud.provider === 'git') return !!(this.store.local('trashPending') || []).length; return !!(this.store.local('trashPending')||[]).length || fs.existsSync(path.join(this.store.root,'trash-cleanup.json')); }
     async syncTrash(options = {}) {
+        if (this.cloud.provider === 'git') return null;
         try {
             if(fs.existsSync(path.join(this.store.root,'trash-cleanup.json')))await resumeTrashCleanup(this.cloud,this.passphrase);
             const result = (this.store.local('trashPending')||[]).length ? await collectTrash(this.cloud,this.passphrase, options) : null;
@@ -51,6 +53,8 @@ export class AutoSync {
             if (value.phase === 'Pulling sessions') { group.completed = value.completed; group.fraction = 0; }
             else if (value.total > 0) group.fraction = Math.max(group.fraction, Math.min(1, value.completed / value.total));
             this.operation.stageProgress = { completed: Math.min(group.total, group.completed + group.fraction), total: group.total };
+        } else if (this.cloud.provider === 'git') {
+            this.operation.stageProgress = value.total > 0 ? { completed: value.completed, total: value.total } : null;
         } else if (this.operation.step === 'push' && value.phase === 'Uploading records' && value.total > 0) {
             this.operation.stageProgress = { completed: value.completed, total: value.total };
         }
@@ -79,8 +83,8 @@ export class AutoSync {
         this.cloud.report('Updating project lists', 0, projects.length, started);
         for (const p of projects) { await this.cloud.project(p.id, this.passphrase); this.cloud.report('Updating project lists', ++completed, projects.length, started, p.name); }
         const local = new Set(this.store.all('branch').map(b => b.id));
-        const items = this.cloud.items().filter(i => local.has(i.id));
-        if (!deferProgress) this.pullGroup = { completed: 0, fraction: 0, total: items.length };
+        const items = this.cloud.items().filter(i => this.cloud.provider === 'git' || local.has(i.id));
+        if (!deferProgress || this.cloud.provider === 'git') this.pullGroup = { completed: 0, fraction: 0, total: items.length };
         try {
             this.cloud.report('Pulling sessions', 0, items.length, started);
             for (const [index, item] of items.entries()) { this.cloud.report('Updating downloaded sessions', 0, null, started, item.name); await this.cloud.hydrate(item.id, this.passphrase, { latest: true }); this.cloud.report('Pulling sessions', index + 1, items.length, started, item.name); }
@@ -90,9 +94,9 @@ export class AutoSync {
         return { downloaded: items.length };
     }
     startTransfer(direction, manual = true, captured = false) {
-        assert(['pull', 'push'].includes(direction), 'Choose Download or Upload.');
+        assert(['pull', 'push'].includes(direction), 'Choose Pull or Push.');
         assert(!this.running && !this.pending && !this.migrating, 'A cloud transfer is already running.', 409);
-        assert(this.passphrase !== null && this.readConfig()?.url, 'Configure WebDAV and unlock project sync first.');
+        assert(this.passphrase !== null && this.readConfig()?.url, 'Configure sync in Settings first.');
         assert(this.rateLimitUntil <= Date.now(), 'Provider requested a pause before retrying.', 429);
         this.store.local('syncStarted', true);
         this.syncJob = this.exclusive(async () => {
@@ -113,7 +117,7 @@ export class AutoSync {
             const ids = this.cloud.dirtyIds();
             // Cleanup has already published a frozen snapshot of all surviving data.
             // New local changes stay queued instead of triggering a second upload pass.
-            const result = cleanup?.rebuilt ? cleanup : this.run ? await this.run(this.store, this.readConfig(), this.passphrase, 'push', ids) : ids.length ? await this.cloud.publish(ids, this.passphrase, { catalogFresh: true }) : { uploaded: 0, published: 0 };
+            const result = cleanup?.rebuilt ? cleanup : this.run ? await this.run(this.store, this.readConfig(), this.passphrase, 'push', ids) : (ids.length || this.trashPending()) ? await this.cloud.publish(ids, this.passphrase, { catalogFresh: true }) : { uploaded: 0, published: 0 };
             if (cleanup?.rebuilt) { const cache = this.cloud.cache(); cache.lastUpload = now(); this.cloud.save(cache); }
             this.queue = new Set(this.cloud.dirtyIds()); this.store.local('uploadQueue', [...this.queue]);
             this.store.local('lastSync', { at: now(), ...result }); this.needsReview = null;
@@ -124,7 +128,7 @@ export class AutoSync {
         return { operationId: this.operation.id };
     }
     async prepareSync() {
-        assert(this.passphrase !== null && this.readConfig()?.url, 'Configure WebDAV and unlock project sync first.');
+        assert(this.passphrase !== null && this.readConfig()?.url, 'Configure sync in Settings first.');
         return this.exclusive(async () => {
             await this.beforeUpload?.();
             await this.syncTrash();
@@ -144,7 +148,7 @@ export class AutoSync {
             assert(!(this.store.local('conflicts') || []).length, 'Resolve sync conflicts before uploading.');
             await this.beforeUpload?.();
             const dirty = this.cloud.dirtyIds();
-            const result = dirty.length ? await this.cloud.publish(dirty, this.passphrase, { catalogFresh: true }) : { uploaded: 0, published: 0 };
+            const result = (dirty.length || this.trashPending()) ? await this.cloud.publish(dirty, this.passphrase, { catalogFresh: true }) : { uploaded: 0, published: 0 };
             cleanupLocal(this.store);
             this.queue = new Set(this.cloud.dirtyIds()); this.store.local('uploadQueue', [...this.queue]); this.store.local('lastSync', { at: now(), ...result });
             return result;
@@ -159,9 +163,9 @@ export class AutoSync {
         let operation = this.running ? this.operation : this.lastManualOperation?.state === 'error' ? this.lastManualOperation : this.operation || this.lastManualOperation;
         if (!this.running && this.needsReview && this.lastFailure && (!operation || this.lastFailure.finishedAt >= (operation.finishedAt || 0))) operation = this.lastFailure;
         const metrics = this.cloud.connection?.dav.metrics || this.cloud.metrics;
-        if (operation && metrics && operation.id === this.metricsOperation) operation = { ...operation, network: { sampledAt: Date.now(), ...Object.fromEntries(['requests','bytesSent','bytesReceived','requestMs','responseBodyMs'].map(key => [key, Math.max(0, (metrics[key] || 0) - (this.metricsStart?.[key] || 0))])) } };
+        if (this.cloud.provider !== 'git' && operation && metrics && operation.id === this.metricsOperation) operation = { ...operation, network: { sampledAt: Date.now(), ...Object.fromEntries(['requests','bytesSent','bytesReceived','requestMs','responseBodyMs'].map(key => [key, Math.max(0, (metrics[key] || 0) - (this.metricsStart?.[key] || 0))])) } };
         const error = this.needsReview && this.lastFailure?.requiresReview ? this.lastFailure.error : this.lastManualOperation?.state === 'error' ? this.lastManualOperation.error : this.error;
-        return { lastFailure: this.lastFailure || null, manualOperation: this.running && this.operation?.manual ? this.operation : this.lastManualOperation || null, needsReview: this.needsReview || null, started: this.store.local('syncStarted') !== false, operation: operation || null, configured, unlocked: this.passphrase !== null, queued: this.queue.size > 0, dirty: dirty.length > 0 || this.trashPending(), dirtyCount: dirty.length + Number(this.trashPending()),
+        return { provider: this.cloud.provider || 'webdav', lastFailure: this.lastFailure || null, manualOperation: this.running && this.operation?.manual ? this.operation : this.lastManualOperation || null, needsReview: this.needsReview || null, started: this.store.local('syncStarted') !== false, operation: operation || null, configured, unlocked: this.passphrase !== null, queued: this.queue.size > 0, dirty: dirty.length > 0 || this.trashPending(), dirtyCount: dirty.length + Number(this.trashPending()),
             phase: this.migrating ? 'migrating' : this.running ? 'syncing' : !configured ? 'unconfigured' : this.passphrase === null ? 'locked' : this.error ? this.store.local('syncStarted') === false ? 'failed' : 'retrying' : this.queue.size ? 'queued' : dirty.length || this.trashPending() ? 'local' : 'synced',
             nextRunAt: !preferences(this.store).autoUploadEnabled || this.running || this.needsReview || !dirty.length && !this.trashPending() || this.store.local('syncStarted') === false || this.passphrase === null || !configured ? null : this.retryAt > Date.now() ? this.retryAt : this.queue.size && this.queuedAt ? this.queuedAt : this.nextFallbackAt, error, retryAt: this.retryAt || null, fallbackMinutes: preferences(this.store).autoUploadEnabled ? preferences(this.store).autoUploadMinutes : null, lastUpload: cache.lastUpload || null, lastCheck: cache.checkedAt || null, lastSuccess: cache.lastUpload || null };
     }
@@ -193,13 +197,18 @@ export class AutoSync {
         finally { if(manual){this.lastManualOperation=this.operation;this.store.local('lastManualSync',this.operation);} this.pending = null; this.running = false; this.store.transferReaders--; if (!this.store.transferReaders && this.store.cleanupDeferred) { this.store.cleanupDeferred = false; cleanupLocal(this.store); } this.reconcileTimer(); this.onOperation?.(this.operation); }
     }
     async flush(direction = 'queued', explicit = false, captured = false) {
+        if (this.cloud.provider === 'git') {
+            if (!explicit && (!preferences(this.store).autoUploadEnabled || this.needsReview || !this.cloud.dirtyIds().length && !this.trashPending())) return null;
+            this.startTransfer(direction === 'pull' ? 'pull' : 'push', explicit, captured);
+            return this.syncJob;
+        }
         if (!explicit && this.store.local('syncStarted') === false) return null;
         if (direction === 'queued' && !this.queue.size && !this.trashPending()) return { published: 0, uploaded: 0 };
         if (explicit && this.rateLimitUntil > Date.now()) throw new Error('Provider requested a pause. Try again after ' + new Date(this.rateLimitUntil).toLocaleTimeString());
         if (this.closed || !explicit && (this.migrating || this.needsReview || !preferences(this.store).autoUploadEnabled || this.retryAt > Date.now())) return null;
         if (!explicit && direction !== 'pull' && !this.cloud.dirtyIds().length && !this.trashPending()) return { published: 0, uploaded: 0 };
         if (!this.readConfig()?.url || this.passphrase === null) {
-            if (explicit) throw new Error('Configure WebDAV and unlock project sync first.');
+            if (explicit) throw new Error('Configure sync in Settings first.');
             return null;
         }
         if (!explicit && !this.run && direction !== 'pull' && !this.trashPending()) {
@@ -242,7 +251,7 @@ export class AutoSync {
     async checkCatalog(maxAge = 2 * 60 * 1000) {
         // Background catalog checks must not queue behind a long transfer and
         // block opening already-local projects or trees.
-        if (this.closed || this.running) return;
+        if (this.closed || this.running || this.cloud.provider === 'git') return;
         if (this.store.local('syncStarted') === false || this.migrating || this.passphrase === null || !this.readConfig()?.url || this.retryAt > Date.now()) return;
         const checked = this.cloud.cache().checkedAt;
         if (checked && Date.now() - new Date(checked).getTime() < maxAge) return;

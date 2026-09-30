@@ -4,7 +4,7 @@ import os from 'node:os';
 import { recordPreview } from './record-preview.js';
 import { VERSION } from './version.js';
 import { INBOX_ID, inboxProject } from './inbox.js';
-import { Settings } from './settings.js';
+import { GitSettings as Settings } from './git-settings.js';
 import { preferences } from './preferences.js';
 import http from 'node:http';
 import { performance } from 'node:perf_hooks';
@@ -29,9 +29,9 @@ const webRoot = fileURLToPath(new URL('../web/', import.meta.url));
 export function createApp({ root, roots, guard, demo = false }) {
     const store = new Store(root), native = new Native(store, { roots, guard }), token = randomBytes(32).toString('hex');
     const webAssets = new Map(['index.html', 'app.js', 'library-view.js', 'select.js', 'markdown.js', 'i18n.js', 'style.css'].map(file => [file, fs.readFileSync(path.join(webRoot, file))]));
-    const configFile = path.join(root, 'webdav.json');
+    const configFile = path.join(root, 'git-sync.json');
     const diagnostics = new Diagnostics(root);
-    const autoSync = new AutoSync(store, () => json(configFile, {}));
+    const autoSync = new AutoSync(store, () => ({ ...json(configFile, {}), provider: 'git' }), null, { provider: 'git' });
     autoSync.diagnostics = diagnostics;
     if (store.local('localUpdateStarted') === null) store.local('localUpdateStarted', demo || store.instances().length > 0);
     if (store.local('syncStarted') === null) store.local('syncStarted', !!store.local('lastSync') || !!autoSync.status().lastCheck);
@@ -39,8 +39,7 @@ export function createApp({ root, roots, guard, demo = false }) {
     autoSync.beforeUpload = () => store.local('localUpdateStarted') ? captureLocal() : null;
     let capturePromise; let interval, nextCaptureAt = null, lastCaptureAt = null;
     const settings = new Settings(root, store, autoSync, configureCapture); settings.diagnostics = diagnostics;
-    const savedKey = settings.savedKey();
-    if (savedKey !== null && !fs.existsSync(settings.journal)) autoSync.unlock(savedKey);
+
     const management = () => new Map(store.collections().items.map(i => [i.id, hash(JSON.stringify([
         i.projectId ? store.get('project', i.projectId) : inboxProject(), i.sessionIds.map(id => { const b = store.get('branch', id); return [b.id, b.name, b.projectId, b.archived, b.parentId, b.forkEnd, b.nodeHead, b.layoutHead, b.contextPolicy, b.endpointName]; }),
         store.get('branch', i.id).layoutHead
@@ -117,12 +116,12 @@ export function createApp({ root, roots, guard, demo = false }) {
             if (req.method === 'POST' && route === '/api/synchronize/start') return send(202, autoSync.startSync(body.planId, body.confirmed));
             if (req.method === 'GET' && route === '/api/state')
                 return send(200, { ...snapshot(), ...timing(), cloud: autoSync.status(), discoveryError: store.local('discoveryError'), lastSync: store.local('lastSync'), plan: native.plan() });
-            if (req.method === 'GET' && route === '/api/diagnostics') return send(200, { ...diagnostics.report(), webdav: autoSync.cloud.connection?.dav.metrics || null, fallbackMinutes: autoSync.status().fallbackMinutes });
+            if (req.method === 'GET' && route === '/api/diagnostics') return send(200, { ...diagnostics.report(), git: { commit: autoSync.cloud.connection?.remote.head || null, progress: autoSync.status().operation?.progress || null }, fallbackMinutes: autoSync.status().fallbackMinutes });
             if (req.method === 'GET' && route === '/api/discover')
                 return send(200, native.discover());
             if (req.method === 'GET' && ['/api/webdav', '/api/settings'].includes(route)) return send(200, settings.status());
             if (req.method === 'POST' && route === '/api/settings/verify') return send(200, await settings.verify(body));
-            if (req.method === 'POST' && route === '/api/settings/confirm') return send(202, settings.start(body));
+            if (req.method === 'POST' && route === '/api/settings/confirm') return send(200, await settings.start(body));
             if (req.method === 'POST' && route === '/api/settings/recover') return send(200, await settings.recover());
             if (req.method === 'POST' && route === '/api/settings/timers') { const previous = preferences(store).showScheduledSessions, saved = settings.timers(body); if (saved.showScheduledSessions && !previous) await captureLocal(); return send(200, saved); }
             if (req.method === 'GET' && route === '/api/list') {

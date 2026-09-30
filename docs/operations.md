@@ -1,5 +1,7 @@
 # Running and diagnosing Session Grove
 
+> Git 技术分支（0.15）以 [Git 同步与迁移](git-sync.md) 为当前规范。下文 WebDAV、加密、按需下载及云端物理清理描述属于旧实现；该分支不再启用这些流程。
+
 ## Local service
 
 Node.js 24+ and `pnpm install` are required. `pnpm dev` and `npm run dev` start the local server with source watching; `pnpm start` is also available. Demo mode (`pnpm run demo`) uses isolated sample data. The default URL is `http://127.0.0.1:7421`; the service binds only to loopback.

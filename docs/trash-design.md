@@ -1,5 +1,7 @@
 # Trash lifecycle (0.13)
 
+> Git 技术分支（0.15）以 [Git 同步与迁移](git-sync.md) 为当前规范。下文 WebDAV、加密、按需下载及云端物理清理描述属于旧实现；该分支不再启用这些流程。
+
 Trash is discarded work, not a history archive. Keep useful older sessions in Projects.
 
 ## User behavior

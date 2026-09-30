@@ -4,7 +4,7 @@
 
 **Your AI conversations have branches. Your chat list should not be the only way to find them.**
 
-Session Grove is a project-based session manager for **Claude Code and Codex**. Keep chatting in your CLI or VS Code extension; use Grove to organize conversation history, preserve useful context, manage branches, and continue work on another Mac through WebDAV.
+Session Grove is a project-based session manager for **Claude Code and Codex**. Keep chatting in your CLI or VS Code extension; use Grove to organize conversation history, preserve useful context, manage branches, and continue work on another Mac through a private Git repository.
 
 ![A conversation and its context tree in Session Grove](docs/images/workspace.png)
 
@@ -21,7 +21,7 @@ Session Grove gives that work a structure:
 - **See the branch and read its context together.** The Transcript and Graph stay side by side, with color bands connecting the actual chats to your logical Nodes.
 - **Choose which context to continue with.** Use a recorded compaction result or restore the recorded history before it. The graph shows which earlier Nodes are superseded; choices apply when you activate or explicitly apply the context.
 - **Keep only useful sessions active.** Activate the path you want in your agent. Move failed or unwanted paths to Trash. Keep useful older work in Projects.
-- **Pick up on another Mac.** Named projects and Ungrouped sync through your WebDAV storage. Sync refreshes the saved directory; open a cloud-only tree to download and keep its context locally.
+- **Pick up on another Mac.** Named projects and Ungrouped sync through your private Git repository. Pull imports all sessions locally; click any session to open it.
 
 Grove manages the session library. **Codex and Claude Code remain where you actually talk to the agent.** It does not replace their editor integrations or send model requests on your behalf.
 
@@ -38,7 +38,7 @@ Internal-node activation adds a continuation containing the selected node and it
 
 Read conversations as Markdown. Expand recorded activity to inspect tool inputs/results, named files and readable reasoning alongside the conversation. Encrypted reasoning without a readable summary is labeled explicitly: Grove preserves its original bytes and does not pretend to decode them. Large record previews are paged. Large graphs support background dragging, zoom and reset; Sankey bands connect only visible content.
 
-Actions appear only when they apply to the current selection. **Settings** contains language, WebDAV and automatic-update intervals. **ⓘ Information**, at the bottom of the sidebar, contains the action guide and diagnostics. **About** links to the author and repository.
+Actions appear only when they apply to the current selection. **Settings** contains language, the Git SSH remote and automatic-update intervals. **ⓘ Information**, at the bottom of the sidebar, contains the action guide and diagnostics. **About** links to the author and repository.
 
 ## Try it
 
@@ -63,13 +63,13 @@ npm works too: `npm run demo`, `npm run dev`, and `npm test`. The interface defa
 
 ## Your context, on your storage
 
-WebDAV is optional. Enter your server address, account and password; Grove adds its own **/Session-Grove/** folder. Verify the connection, then optionally set a content-encryption passphrase. Saved secrets remain visibly masked. Changing the connection or encryption settings runs a verified migration with progress.
+Git sync is optional. In Settings, connect an empty private repository using `git@github.com:owner/repository.git` and your existing SSH key. Grove stores readable JSON and JSONL files; Git handles compression, history and incremental transfer. No Grove passphrase is required. See [Git sync and migration](docs/git-sync.md).
 
-Downloads and uploads are manual by default. **Pull** refreshes project lists and already-cached sessions; cloud-only histories remain on demand. **Push** completes Pull before publishing local changes. Hover/focus Push to inspect pending items. Automatic upload is opt-in, including after upgrade; its default interval is 15 minutes and it follows the same pull-before-push sequence. There is no independent download timer. Local session capture remains independently configurable, defaulting to 1 minute.
+Downloads and uploads are manual by default. **Pull** fetches the repository and imports all current sessions locally. **Push** completes Pull before publishing local changes. Hover/focus Push to inspect pending items. Automatic upload is opt-in, including after upgrade; its default interval is 15 minutes and it follows the same pull-before-push sequence. There is no independent download timer. Local session capture remains independently configurable, defaulting to 1 minute.
 
 Transfer details show concrete stages, the current action, progress, remaining time and download speed; technical counters are in Information. Errors use a bounded header inspector. Local Rename, Activate, Trash and node organization remain available during sync. Publication acknowledges its snapshot only; later edits remain queued. Session modification dates include transcript and organization changes, drive sorting and newer-version reconciliation, and are not advanced by browsing or downloading. See the mandatory [white-box design](docs/design.md) and [sync contract](docs/sync-policy.md).
 
-The library retains original session records. Node edits organize those records rather than rewriting the conversation. Cloud content is encrypted when you enable encryption; a yellow status identifies unencrypted storage. Saved credentials and the optional passphrase live in owner-only local files so `pnpm dev` can reconnect. This is not macOS Keychain storage.
+The library retains original session records. Node edits organize those records rather than rewriting the conversation. Pull fetches and imports the entire current library. Push pulls first and publishes a Git commit; native Active choices stay on each device. Trash removes content from the current version on Push, while earlier Git commits remain. Local recovery is optional convenience, not a cloud cleanup operation.
 
 ## Current scope
 
@@ -77,7 +77,7 @@ The library retains original session records. Node edits organize those records 
 
 **Context fidelity has limits.** Supported materialization preserves recorded tool calls/results, reasoning and instructions instead of rebuilding a conversation from visible prose. Codex paginated forks resolve their recorded prefix references and remain paginated on activation. Native New branch and Grove Fork have been compared at the same checkpoint, including tool/reasoning records and native projected items. Missing history segments still block context changes. Dynamic client instructions, opaque compaction and external assets prevent a promise of identical model requests. See the [requirements and fidelity audit](docs/requirements-audit.md).
 
-Native activation changes currently require closing running agent processes first. The UI explains this in Settings. Codex native read/resume has been exercised with a real executable; Claude read/fork behavior has been compared against the official SDK on 32 sessions and 111 checkpoints; dynamic model state is outside that equivalence. WebDAV has passed isolated protocol tests and a live Teracloud round trip; other providers can differ.
+Native activation changes currently require closing running agent processes first. The UI explains this in Settings. Codex native read/resume has been exercised with a real executable; Claude read/fork behavior has been compared against the official SDK on 32 sessions and 111 checkpoints; dynamic model state is outside that equivalence. The Git backend is tested with isolated bare repositories for cross-device continuation, deletion and interrupted upload recovery. Legacy WebDAV is available only for migration.
 
 Select a session endpoint and use “Activate as…” to preview full or lean context and create an independent target session with source provenance.
 
@@ -96,7 +96,7 @@ pnpm test
 <details>
 <summary>中文简介</summary>
 
-Session Grove 用项目和分支图管理 Claude Code 与 Codex 的会话。你仍在原生客户端对话，在 Grove 里整理上下文、为一段工作命名、分叉、激活或归档，并通过自己的 WebDAV 在不同 Mac 之间续接。
+Session Grove 用项目和分支图管理 Claude Code 与 Codex 的会话。你仍在原生客户端对话，在 Grove 里整理上下文、为一段工作命名、分叉、激活或归档，并通过自己的私有 Git 仓库 在不同 Mac 之间续接。
 
 [阅读完整中文说明 →](README.zh-CN.md)
 

@@ -9,7 +9,7 @@ import { seedDemo } from '../src/demo.js';
 import { controlService } from '../src/service.js';
 const args = process.argv.slice(2);
 if (args.includes('--help')) {
-    console.log(`Session Grove\n\nnode bin/session-grove.js [status|stop] [--demo] [--port 7421] [--data-dir PATH]\n  --codex-home PATH   Codex native store (default CODEX_HOME or ~/.codex)\n  --claude-home PATH  Claude native store (default CLAUDE_CONFIG_DIR or ~/.claude)\n  --sync-key-file PATH  Optional private file for unattended sync unlock\n\n--demo uses isolated sample sessions and never reads personal session directories.`);
+    console.log(`Session Grove\n\nnode bin/session-grove.js [status|stop] [--demo] [--port 7421] [--data-dir PATH]\n  --codex-home PATH   Codex native store (default CODEX_HOME or ~/.codex)\n  --claude-home PATH  Claude native store (default CLAUDE_CONFIG_DIR or ~/.claude)\n\n--demo uses isolated sample sessions and never reads personal session directories.`);
     process.exit(0);
 }
 const value = (key, fallback) => {
@@ -61,12 +61,6 @@ const app = createApp({ root, roots, demo, guard: demo ? () => { } : undefined }
 if (demo) {
     seedDemo(app.store, roots);
     app.native.refreshLocal();
-}
-const keyFile = value('--sync-key-file', null);
-if (keyFile) {
-    const file = path.resolve(keyFile);
-    if (fs.statSync(file).mode & 0o077) throw new Error('Sync key file must have owner-only permissions.');
-    app.autoSync.unlock(fs.readFileSync(file, 'utf8').replace(/\r?\n$/, ''));
 }
 const port = Number(value('--port', '7421'));
 if (!Number.isInteger(port) || port < 0 || port > 65535)

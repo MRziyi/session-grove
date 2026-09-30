@@ -1,5 +1,7 @@
 # Context visibility and incremental cloud sync
 
+> Git 技术分支（0.15）以 [Git 同步与迁移](git-sync.md) 为当前规范。下文 WebDAV、加密、按需下载及云端物理清理描述属于旧实现；该分支不再启用这些流程。
+
 Updated for 0.8.0. This document complements the [interaction model](interaction-model.md).
 
 ## Three different token quantities

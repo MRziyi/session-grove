@@ -1,6 +1,6 @@
 {
   "name": "session-grove",
-  "version": "0.14.0",
+  "version": "0.15.0-git.1",
   "private": true,
   "description": "A project-centered workspace for branching and managing agent sessions.",
   "type": "module",
@@ -23,7 +23,8 @@
     "test:sync-browser": "node scripts/sync-browser-smoke.js",
     "bench:sync": "node --expose-gc scripts/sync-benchmark.js",
     "bench:store": "node --expose-gc scripts/store-benchmark.js",
-    "bench:provider": "node scripts/provider-benchmark.js"
+    "bench:provider": "node scripts/provider-benchmark.js",
+    "migrate:git": "node scripts/migrate-git.js"
   },
   "bin": {
     "session-grove": "bin/session-grove.js"

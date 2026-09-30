@@ -55,5 +55,7 @@ try{
  await call('Emulation.setDeviceMetricsOverride',{width:390,height:844,deviceScaleFactor:1,mobile:true});await evaluate('new Promise(r=>requestAnimationFrame(r))');await fits('#transfer-progress');
  screenshot=await call('Page.captureScreenshot',{format:'png'});fs.writeFileSync('test-results/sync-mobile-error.png',Buffer.from(screenshot.data,'base64'));
  await evaluate('document.dispatchEvent(new KeyboardEvent("keydown",{key:"Escape"}));document.querySelector("#settings").click()');await wait('document.querySelector("[name=autoUploadEnabled]")');assert.equal(await evaluate('document.querySelector("[name=autoUploadEnabled]").checked'),false);
- assert.deepEqual(errors,[]);console.log('Browser passed: split Download/Upload sequencing, concrete progress, pending hover, local Activate/Trash during transfer, post-snapshot queue, bounded long error on desktop/mobile, manual defaults.');
+ assert.equal(await evaluate('!!document.querySelector("[name=passphrase],[name=password],[name=username]")'),false);
+ assert.equal(await evaluate('document.querySelector("[name=url]").placeholder'),'git@github.com:owner/repository.git');
+ assert.deepEqual(errors,[]);console.log('Browser passed: split Pull/Push sequencing and Git SSH settings, concrete progress, pending hover, local Activate/Trash during transfer, post-snapshot queue, bounded long error on desktop/mobile, manual defaults.');
 }finally{pull.resolve();push.resolve();await app.autoSync.syncJob?.catch(()=>{});ws?.close();chrome.kill();await once(chrome,'exit');await new Promise(r=>app.close(r));fs.rmSync(root,{recursive:true,force:true});}
