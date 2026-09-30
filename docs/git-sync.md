@@ -39,6 +39,15 @@ pnpm migrate:git --remote git@github.com:owner/repository.git --publish
 
 The staging directory defaults to `.grove/git-migration` (gitignored), and can be set with `--staging`. `--source` selects the old application library. Preparation copies SQLite through its backup API, reads the old cloud directory, reuses locally verified record caches, imports surviving cloud-only content, removes archived paths, and reports counts. `--local-only` intentionally omits the old cloud and is for installations with no cloud-only data. A prepared snapshot is reused on subsequent runs; to capture newer source changes, choose a new staging directory.
 
-The source database, native agent files, old credentials and old WebDAV vault are left untouched. Only the prepared live graph and its referenced bodies enter Git. Recovery backups, SQLite, credentials, temporary files and discarded bodies are not committed. After publication, configure the live app with the new remote and Pull to apply deletion markers and import the remaining sessions. Old credentials may be retained locally for rollback; the Git runtime never reads them.
+The source database, native agent files, old credentials and old WebDAV vault are left untouched. Only the prepared live graph and its referenced bodies enter Git. Recovery backups, SQLite, credential files, temporary files and discarded bodies are not committed. After publication, configure the live app with the new remote and Pull to apply deletion markers and import the remaining sessions. Old credentials may be retained locally for rollback; the Git runtime never reads them.
 
 All devices must use this Git branch and the same data remote. A repository's private setting provides access control, not client-side encryption. Git retains history and ordinary fetch downloads reachable history; this intentionally favors easy local access over the old cloud-only storage model.
+
+## Validation on 2026-09-30
+
+- 181 automated tests passed, including eight Git/migration tests; both isolated browser suites passed.
+- Initial migration excluded 76 archived branches and existing Trash. The published current state contains 141 sessions in 65 trees and 122,830 referenced records. Required shared prefixes remain.
+- Reused 78,878 verified records from the previous transfer cache; no additional transcript bodies were needed from WebDAV. Its directory/manifests still had to be read once.
+- Published plain files occupy about 1.1 GiB in the working tree; the local Git pack is 555,082,751 bytes (about 529 MiB). These are disk measurements, not billed network traffic.
+- Reusing that checkout, first import into the live SQLite library took 15.34 seconds. A subsequent unchanged Pull took 2.45 seconds; unchanged Push (including Pull) took 2.44 seconds and created no new commit. Both left zero conflicts and zero pending changes.
+- These timings measure this library and connection, with native scanning omitted in the isolated transfer invocation. They are not an equal-work benchmark against the former WebDAV cleanup operation or a guarantee for another network.
