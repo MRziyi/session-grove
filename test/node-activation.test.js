@@ -10,6 +10,7 @@ import { activationInfo } from '../src/activation.js';
 import { nodeActivation } from '../src/node-activation.js';
 import { claudeTitle } from '../src/claude-title.js';
 import { parse } from '../src/transcript.js';
+import { estimateTokens } from '../src/context.js';
 async function setup(t) {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'grove-node-activate-'));
     const app = createApp({ root: path.join(root, 'library'), roots: { codex: path.join(root, 'codex'), claude: path.join(root, 'claude') }, guard: () => {} });
@@ -18,6 +19,52 @@ async function setup(t) {
     const api = async (route, body, method = 'POST') => { const response = await fetch('http://127.0.0.1:' + app.server.address().port + '/api/' + route, { method, headers: { 'X-Grove-Token': app.token, 'Content-Type': 'application/json' }, ...(body ? { body: JSON.stringify(body) } : {}) }); return { status: response.status, value: await response.json() }; };
     return { app, root, api };
 }
+test('multiple compactions respect the selected window and zero usage does not erase its estimate', async t => {
+    const {app,root}=await setup(t),store=app.store;
+    const compact = summary => ({type:'compacted',payload:{message:summary,replacement_history:[]}});
+    const zero = {type:'event_msg',payload:{type:'token_count',info:{last_token_usage:{input_tokens:0,output_tokens:0}}}};
+    const second = codexTurn('Second question','Second answer'); second.splice(-1,0,zero);
+    const rows = [compact('Earlier context summary'), ...second,compact('Later context summary'),...codexTurn('Third question','Third answer')];
+    const b=store.branch(null,'Windows','codex',codexSample(root,[['First question','First answer']])+rows.map(v=>JSON.stringify(v)+'\n').join(''));
+    let graph=store.treeGraph(b.id);
+    const preview=()=>nodeActivation(store,app.native,{branchId:b.id,nodeId:graph.nodes[1].id,version:graph.version,cwd:root});
+    let selected=preview();
+    assert.equal(selected.parsed.context.compactions.length,1);
+    assert.equal(selected.preview.estimated,estimateTokens('Earlier context summary')+estimateTokens('Second question')+estimateTokens('Second answer'));
+    store.put('branch',{...store.get('branch',b.id),contextPolicy:{disabled:[selected.parsed.context.compactions[0].id]}});
+    graph=store.treeGraph(b.id);selected=preview();
+    assert.equal(selected.preview.estimated,['First question','First answer','Second question','Second answer'].reduce((n,s)=>n+estimateTokens(s),0));
+    assert.doesNotMatch(selected.parsed.records.map(r=>r.raw).join(''),/Later context summary|Third question/);
+});
+test('a compaction inside an unfinished turn is excluded from the preceding node', async t => {
+    const {app,root}=await setup(t),store=app.store;
+    const rows=codexSample(root,[['Before compact','Earlier reply']]).trim().split('\n').map(JSON.parse);
+    rows.pop(); // No task_complete checkpoint before the compaction.
+    rows.push({type:'compacted',payload:{replacement_history:[{type:'compaction',encrypted_content:'opaque'}]}},...codexTurn('After compact','Later reply'));
+    const b=store.branch(null,'Inside turn','codex',rows.map(v=>JSON.stringify(v)+'\n').join(''));
+    const graph=store.treeGraph(b.id);
+    const selected=nodeActivation(store,app.native,{branchId:b.id,nodeId:graph.nodes[0].id,version:graph.version,cwd:root});
+    assert.equal(selected.parsed.context.compactions.length,0);
+    assert.equal(selected.preview.estimated,estimateTokens('Before compact')+estimateTokens('Earlier reply'));
+    assert.equal(selected.preview.complete,true);
+    const last=nodeActivation(store,app.native,{branchId:b.id,nodeId:graph.nodes.at(-1).id,version:graph.version,cwd:root});
+    assert.equal(last.preview.estimateIncomplete,true,'opaque summaries must not be represented as a complete token estimate');
+});
+test('fresh Codex and Claude node activations never require stopping clients', async t => {
+    const {app,root,api}=await setup(t);
+    app.native.guard=()=>{throw new Error('Client is running');};
+    for(const [agent,sample] of [['codex',codexSample],['claude',claudeSample]]) {
+        const b=app.store.branch(null,'New copy',agent,sample(root,[['Request','Response']]));
+        const graph=app.store.treeGraph(b.id),selection={branchId:b.id,nodeId:graph.nodes[0].id,version:graph.version,cwd:root};
+        const check=(await api('node-activation/check',selection)).value;
+        const result=await api('node-activation/activate',{...selection,contextAcknowledgement:check.fingerprint});
+        assert.equal(result.status,201,JSON.stringify(result.value));
+        const instance=app.store.instances().find(i=>i.branchId===result.value.branch.id);
+        assert.ok(fs.existsSync(instance.file));
+        app.native.setActive(instance.branchId,null,false);
+        assert.throws(()=>app.native.apply([instance.branchId]),/Client is running/,'rewriting an existing file still requires protection');
+    }
+});
 test('activate an internal node includes it, preserves suffixes, labels native title, and attaches new work', async t => {
     const { app, root, api } = await setup(t), store = app.store;
     const b = store.branch(null, 'My session', 'codex', codexSample(root, [['Setup', 'Ready'], ['Existing later question', 'Long later answer. '.repeat(100)]]));

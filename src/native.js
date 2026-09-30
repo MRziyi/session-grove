@@ -348,16 +348,18 @@ export class Native {
     apply(branchIds = null) {
         const targeted = this.plan().operations.filter(op => !branchIds || branchIds.includes(op.branchId));
         if (!targeted.length) return { applied: 0 };
-        this.guard([...new Set(targeted.map(op => op.agent))]);
+        const initialInstances = this.store.instances();
+        const additive = targeted.every(op => op.action === 'activate' && initialInstances.some(i => i.id === op.instanceId && !i.file && !i.applied && !i.adopted));
+        if (!additive) this.guard([...new Set(targeted.map(op => op.agent))]);
         assert(!this.plan().pendingRecovery.length, '存在未完成操作，请先恢复备份', 409);
         this.collect();
         const instances = this.store.instances(), plan = this.plan();
         if (branchIds) plan.operations = plan.operations.filter(op => branchIds.includes(op.branchId));
         if (!plan.operations.length)
             return { applied: 0 };
-        const job = { id: id(), createdAt: now(), status: 'prepared', files: [], instancesBefore: instances, operations: plan.operations };
-        const jobFile = path.join(this.jobs, `${job.id}.json`), dbs = new Map(), writes = new Map();
-        const after = structuredClone(instances);
+        const job = { id: id(), createdAt: now(), status: 'prepared', additive, files: [], instancesBefore: instances, operations: plan.operations };
+        const jobFile = path.join(this.jobs, `${job.id}.json`), dbs = new Map(), writes = new Map(), appends = new Map();
+        const after = structuredClone(instances), createdFiles = new Set();
         const backup = file => {
             if (job.files.some(f => f.path === file))
                 return;
@@ -366,6 +368,7 @@ export class Native {
         try {
             for (const op of plan.operations) {
                 const i = after.find(i => i.id === op.instanceId), b = this.store.get('branch', i.branchId);
+                if (additive) assert(op.action === 'activate' && !i.file && !i.applied && !i.adopted, 'Activation changed. Retry.', 409);
                 assert(i.root === this.roots[i.agent], '原生存储配置已改变，请重新绑定');
                 assert(!i.pending, i.pending || '等待完整记录');
                 assert(!i.requiresAuxiliary, '此会话含伴随目录，当前版本尚未完整收纳；拒绝移除或改写原生记录');
@@ -376,8 +379,8 @@ export class Native {
                     const dbFile = this.stateDb(root);
                     if (dbFile) {
                         const db = new DatabaseSync(dbFile);
-                        db.exec('PRAGMA busy_timeout=1000; PRAGMA wal_checkpoint(TRUNCATE)');
-                        backup(dbFile);
+                        db.exec('PRAGMA busy_timeout=1000');
+                        if (!additive) { db.exec('PRAGMA wal_checkpoint(TRUNCATE)'); backup(dbFile); }
                         db.exec('BEGIN IMMEDIATE');
                         dbs.set(root, db);
                     }
@@ -416,8 +419,10 @@ export class Native {
                     i.observedHash = hash(output);
                     i.missing = false;
                     i.title = this.title(b, i); i.observedTitle = i.title; i.contextPolicyHash = policyHash(b.contextPolicy);
-                    if (i.agent === 'codex')
+                    if (i.agent === 'codex') {
+                        if (additive && dbs.get(root)) assert(!dbs.get(root).prepare('SELECT id FROM threads WHERE id=?').get(i.nativeId), 'Native session ID already exists.');
                         this.updateCodexDb(dbs.get(root), i, b, parsed);
+                    }
                 }
                 else {
                     if (i.file && fs.existsSync(i.file)) {
@@ -445,6 +450,15 @@ export class Native {
                 const root = this.roots[agent], file = safePath(root, path.join(root, agent === 'codex' ? 'session_index.jsonl' : 'history.jsonl'));
                 const changedIds = new Set(plan.operations.map(op => op.instanceId));
                 const managed = new Set(after.filter(i => i.agent === agent && changedIds.has(i.id)).map(i => i.nativeId));
+                if (additive) {
+                    // Append-only hints avoid replacing history concurrently written by a client.
+                    appends.set(file, after.filter(i => i.agent === agent && i.applied && changedIds.has(i.id)).map(i => {
+                        const b = this.store.get('branch', i.branchId);
+                        return JSON.stringify(agent === 'codex' ? { id: i.nativeId, thread_name: this.title(b, i), updated_at: now() } : { display: this.title(b, i), pastedContents: {}, timestamp: Date.now(), project: i.cwd, sessionId: i.nativeId });
+                    }).join('\n') + '\n');
+                    // Claude discovers new transcript files; its shared index is a client-owned cache.
+                    continue;
+                }
                 const existing = fs.existsSync(file) ? this.read(file).split('\n').filter(Boolean) : [];
                 const kept = existing.filter(line => {
                     try {
@@ -487,7 +501,12 @@ export class Native {
             for (const [file, content] of writes) {
                 if (content === null)
                     fs.rmSync(file, { force: true });
-                else
+                else if (additive) {
+                    fs.mkdirSync(path.dirname(file), { recursive: true });
+                    const fd = fs.openSync(file, 'wx', 0o600);
+                    createdFiles.add(file);
+                    try { fs.writeFileSync(fd, content); } finally { fs.closeSync(fd); }
+                } else
                     atomic(file, content);
             }
             for (const db of dbs.values()) {
@@ -496,6 +515,11 @@ export class Native {
             }
             dbs.clear();
             this.store.local('instances', after);
+            // Index hints are rebuildable. A failed append must not roll back a committed session.
+            for (const [file, content] of appends) {
+                try { fs.mkdirSync(path.dirname(file), { recursive: true }); fs.appendFileSync(file, content, { mode: 0o600 }); }
+                catch (e) { job.indexWarning = e.message; }
+            }
             job.status = 'complete';
             atomic(jobFile, JSON.stringify(job));
             // Completed journals are not recoverable operations; do not retain
@@ -514,6 +538,7 @@ export class Native {
             // Roll back only after an operation journal was durably created.
             if (fs.existsSync(jobFile)) {
                 try {
+                    if (additive) job.files = job.files.filter(f => createdFiles.has(f.path));
                     this.restoreFiles(job);
                     this.store.local('instances', instances);
                     job.status = 'rolled_back';
@@ -542,6 +567,18 @@ export class Native {
         db.prepare(`INSERT INTO threads (${keys.join(',')}) VALUES (${keys.map(() => '?').join(',')}) ON CONFLICT(id) DO UPDATE SET ${updates.map(k => `${k}=excluded.${k}`).join(',')}`).run(...keys.map(k => values[k]));
     }
     restoreFiles(job) {
+        if (job.additive) {
+            // Undo only rows introduced by this job, never restore a shared live DB snapshot.
+            for (const op of job.operations) {
+                const i = job.instancesBefore.find(i => i.id === op.instanceId);
+                if (i?.agent !== 'codex') continue;
+                const file = this.stateDb(i.root);
+                if (!file) continue;
+                const db = new DatabaseSync(file);
+                try { db.exec('PRAGMA busy_timeout=1000'); db.prepare('DELETE FROM threads WHERE id=? AND rollout_path=?').run(i.nativeId, op.file); }
+                finally { db.close(); }
+            }
+        }
         for (const f of [...job.files].reverse()) {
             assert(Object.values(this.roots).some(r => inside(r, f.path)) || inside(this.store.root, f.path), '备份路径不在允许范围');
             if (f.content === null)

@@ -49,16 +49,17 @@ export function activationInfo(store, native, branchId, cwd, env = process.env) 
     let estimated = 0, basis = 'recorded-text';
     const estimateAfter = line => parsed.messages.filter(m => m.line > line).reduce((n, m) => n + estimateTokens(m.text), 0) + parsed.records.slice(line).reduce((n, r) => n + estimateTokens(toolText(r.value, branch.agent)), 0);
     if (expanded) { estimated = (compact ? estimateTokens(compact.summary || '') + compact.retained.reduce((n, m) => n + estimateTokens(m.text), 0) : 0) + estimateAfter(compact?.line || 0); basis = 'expanded-history-estimate'; }
-    else if (usage && context.usageAfterCompaction && Number.isFinite(usage.input)) { estimated = usage.input + (usage.output || 0) + estimateAfter(usage.line); basis = 'last-native-request-plus-new-text'; }
+    else if (usage && context.usageAfterCompaction && Number.isFinite(usage.input) && usage.input > 0) { estimated = usage.input + (usage.output || 0) + estimateAfter(usage.line); basis = 'last-native-request-plus-new-text'; }
     else if (compact) {
         estimated = estimateTokens(compact.summary || '') + compact.retained.reduce((n, m) => n + estimateTokens(m.text), 0) + estimateAfter(compact.line);
         basis = compact.opaque ? 'incomplete-after-compaction' : 'readable-compaction-plus-new-text';
     } else estimated = estimateAfter(0);
+    const estimateIncomplete = !!compact?.opaque && basis !== 'last-native-request-plus-new-text';
     const threshold = Math.min(window ? window * .8 : Infinity, compactAt || Infinity);
     const risk = Number.isFinite(threshold) && estimated >= threshold;
     const original = store.instances().some(i => i.branchId === branchId && i.adopted && i.baseRevision === branch.head && i.cwd === target && !(branch.contextPolicy?.disabled || []).length);
     const formatSupported = supportedHistory(parsed) || original;
     const complete = formatSupported && (parsed.complete || branch.allowNodeBoundary && !parsed.pendingToolCalls) && !parsed.errors.length && !parsed.warnings.some(w => w.includes('历史格式') || w.includes('外部附件'));
     const fingerprint = hash(JSON.stringify([branch.head, branch.contextPolicy, target, model, window, compactAt, estimated, basis]));
-    return { readiness: !parsed.complete && !branch.allowNodeBoundary ? 'unfinished-turn' : parsed.warnings.some(w=>w.includes('外部附件')) ? 'external-attachments' : !formatSupported ? 'unsupported-history' : 'ready', fidelity: formatSupported ? 'record-preserving' : 'unsupported-history-mode', model, window, compactAt, source, estimated, basis, risk, unknown: !window && !compactAt, complete, fingerprint, cwd: target || '', observedAt: usage?.at || null };
+    return { readiness: !parsed.complete && !branch.allowNodeBoundary ? 'unfinished-turn' : parsed.warnings.some(w=>w.includes('外部附件')) ? 'external-attachments' : !formatSupported ? 'unsupported-history' : 'ready', fidelity: formatSupported ? 'record-preserving' : 'unsupported-history-mode', model, window, compactAt, source, estimated, estimateIncomplete, basis, risk, unknown: !window && !compactAt, complete, fingerprint, cwd: target || '', observedAt: usage?.at || null };
 }

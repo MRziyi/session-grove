@@ -15,10 +15,13 @@ export function nodeActivation(store, native, { branchId, nodeId, version, cwd }
     const terminal = node.endBranchIds.includes(branchId), revision = store.get('revision', branch.head);
     const last = path.messages.findLast(m => node.chatIds.includes(m.id));
     const next = last && path.messages[path.messages.indexOf(last) + 1];
-    const checkpoint = last && path.checkpoints.findLast(c => c.end >= last.line && (!next || c.end < next.line));
+    // The next compaction belongs to the following context window.
+    const followingCompact = last && path.context.compactions.find(c => c.line > last.line);
+    const boundary = Math.min(next?.line ?? Infinity, followingCompact?.line ?? Infinity);
+    const checkpoint = last && path.checkpoints.findLast(c => c.end >= last.line && c.end < boundary);
     let end = terminal ? revision.refs.length : checkpoint?.end;
     if (!end && last) {
-        end = next ? Math.ceil(next.line) - 1 : revision.refs.length;
+        end = Number.isFinite(boundary) ? Math.ceil(boundary) - 1 : revision.refs.length;
         // Duplicate native event text belongs to the following visible message.
         const records = store.parsed(branch.head, branch.agent).records;
         for (let i = Math.ceil(last.line); i < end; i++) {
@@ -26,6 +29,7 @@ export function nodeActivation(store, native, { branchId, nodeId, version, cwd }
             if (v?.type === 'event_msg' && ['task_started', next?.role === 'assistant' ? 'agent_message' : 'user_message'].includes(v.payload?.type)) { end = i; break; }
         }
     }
+    if (end && Number.isFinite(boundary)) end = Math.min(end, Math.ceil(boundary) - 1);
     const nodeName = node.name || 'Pending ' + pendingLabels(graph.nodes).get(node.id);
     if (!end) return { branch, node, terminal, preview: { complete: false, readiness: 'node-boundary', title: groveTitle(branch.name, nodeName), nodeName } };
     const parsed = store.parsed(branch.head, branch.agent, end);

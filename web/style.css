@@ -1381,7 +1381,7 @@ body{height:100dvh;display:flex;flex-direction:column;overflow:hidden}
 #dialog-content .settings-section-heading h3{margin:0 auto 0 0}
 #dialog-content .settings-section-heading .setting-ok,#dialog-content .settings-section-heading button{flex-shrink:0}
 .nav-footer{gap:5px;justify-content:flex-start}
-.nav-footer #information,.nav-footer #language-toggle{border:1px solid #bfceda;border-radius:6px;background:#fff;min-width:29px;min-height:28px;padding:4px 6px;color:#36576b}
+.nav-footer #information,.nav-footer #language-toggle{border:1px solid transparent;border-radius:6px;background:transparent;min-width:29px;min-height:28px;padding:4px 6px;color:#36576b}
 .nav-footer #information:hover,.nav-footer #language-toggle:hover{background:#e2edf5;border-color:#839fb3}
 .nav-footer #language-toggle{font-size:12px;font-weight:600}
 .trash-copy{cursor:default;min-width:0;display:flex;align-items:center;gap:12px;flex:1;padding:12px}

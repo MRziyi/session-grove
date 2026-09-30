@@ -177,7 +177,6 @@ export function createApp({ root, roots, guard, demo = false }) {
                 assert(check.complete, 'Select a node ending at a completed turn.');
                 assert(body.contextAcknowledgement === check.fingerprint, 'Activation preview changed. Review it again.', 409);
                 assert(typeof body.cwd === 'string' && path.isAbsolute(body.cwd) && fs.existsSync(body.cwd) && fs.statSync(body.cwd).isDirectory(), 'Choose an existing working directory.');
-                native.guard([selected.branch.agent]);
                 let branch = selected.branch;
                 if (check.createsContinuation) { branch = store.fork(branch.id, { name: branch.name.slice(0, 200), end: selected.end, revisionId: branch.head, nodeBoundary: selected.nodeBoundary }); branch = store.put('branch', { ...branch, activationNodeName: check.nodeName }); }
                 const before = store.instances();
@@ -196,7 +195,6 @@ export function createApp({ root, roots, guard, demo = false }) {
                 if (route === '/api/conversion-check') return send(200, { ...prepared.preview, budget, title: groveTitle(prepared.branch.name, selected?.preview.nodeName || 'Pending') });
                 assert(!budget.risk || body.contextAcknowledgement === budget.fingerprint, 'Review the context-length warning before activating.', 409);
                 assert(typeof body.cwd === 'string' && path.isAbsolute(body.cwd) && fs.existsSync(body.cwd) && fs.statSync(body.cwd).isDirectory(), 'Choose an existing working directory.');
-                native.guard([body.target]);
                 const result = createConversion(store, body.branchId, body);
                 try { native.setActive(result.branch.id, body.cwd, true, { nodeName: selected?.preview.nodeName || 'Pending' }); native.apply([result.branch.id]); }
                 catch (e) { native.setActive(result.branch.id, null, false); throw Object.assign(new Error(`Conversion was saved in Grove but activation failed: ${e.message}`), { status: e.status || 409 }); }

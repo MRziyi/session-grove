@@ -54,15 +54,12 @@ try {
     client = connect();
     await client.init();
     await client.request('thread/list', { limit: 10 });
-    await client.close();
     const native = new Native(store, { roots: { codex: nativeHome, claude: path.join(root, 'claude') }, guard: () => { } });
     const p = store.project('Native verification'), raw = codexSample(cwd, [['Remember the marker grove-42.', 'The marker is grove-42.']]);
     const parent = store.branch(p.id, 'Root context', 'codex', raw), fork = store.fork(parent.id, { name: 'Native fork', end: store.detail(parent.id).checkpoints[0].end });
     native.setActive(fork.id, cwd, true);
     native.apply();
     const instance = store.instances()[0];
-    client = connect();
-    await client.init();
     const list = await client.request('thread/list', { limit: 100 });
     assert.ok(list.data.some(t => t.id === instance.nativeId), 'Codex did not list the materialized thread');
     const read = await client.request('thread/read', { threadId: instance.nativeId, includeTurns: true });
@@ -103,7 +100,7 @@ try {
         const resumedContext = await client.request('thread/resume', { threadId: live.nativeId, cwd, approvalPolicy: 'on-request', sandbox: 'read-only' });
         assert.equal(resumedContext.thread.id, live.nativeId); await client.close(); native.collect();
     }
-    const report = { version: execFileSync(executable, ['--version'], { encoding: 'utf8' }).trim(), list: true, read: true, resume: true, deactivate: true, reactivate: true, compactionEnabledReadResume: true, compactionDisabledReadResume: true, modelTurnsSubmitted: 0 };
+    const report = { version: execFileSync(executable, ['--version'], { encoding: 'utf8' }).trim(), activationWhileClientRunning: true, list: true, read: true, resume: true, deactivate: true, reactivate: true, compactionEnabledReadResume: true, compactionDisabledReadResume: true, modelTurnsSubmitted: 0 };
     fs.mkdirSync('test-results', { recursive: true });
     fs.writeFileSync('test-results/codex-compatibility.json', JSON.stringify(report, null, 2));
     console.log(JSON.stringify(report));

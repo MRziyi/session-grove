@@ -1,5 +1,6 @@
 let language = localStorage.getItem('grove-language') === 'zh' ? 'zh' : 'en';
 const dictionary = {
+"Token estimate unavailable after encrypted compaction":"加密压缩后的 token 数暂时无法估算",
 "Deactivate ({count})":"停用（{count}）",
 "Deactivate all active sessions in the selection before moving it to Trash.":"请先停用所选范围内的所有 Active 会话，再移入废纸篓。",
 "A Trash operation is in progress.":"废纸篓操作正在进行。",

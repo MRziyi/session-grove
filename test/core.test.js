@@ -85,13 +85,14 @@ test('adoption is read only, then non-active sessions are parked on explicit app
     assert.equal(fs.existsSync(file), false);
     assert.equal(store.detail(store.all('branch')[0].id).messages.length, 2);
 });
-test('running processes block writes but not project operations', t => {
+test('running processes permit new sessions but block rewriting existing copies', t => {
     const { store, roots, p, cwd } = setup(t), native = new Native(store, { roots, guard: () => { throw new Error('running'); } });
     const b = store.branch(p.id, 'main', 'codex', codexSample(cwd, [['Hello', 'Hi']]));
     native.setActive(b.id, cwd, true);
+    assert.equal(native.apply().applied, 1);
+    native.setActive(b.id, null, false);
     assert.throws(() => native.apply(), /running/);
-    assert.equal(store.instances()[0].applied, false);
-    assert.equal(fs.readdirSync(roots.codex).length, 0);
+    assert.equal(store.instances()[0].applied, true);
 });
 test('unknown required Codex schema fails closed and rolls back DB', t => {
     const { store, native, roots, p, cwd } = setup(t);
@@ -103,6 +104,21 @@ test('unknown required Codex schema fails closed and rolls back DB', t => {
     assert.throws(() => native.apply(), /new_required/);
     assert.equal(fs.existsSync(path.join(roots.codex, 'sessions')), false);
     assert.equal(store.instances()[0].applied, false);
+});
+test('recovery of a new activation removes only its own database row', t => {
+    const {store,native,roots,p,cwd}=setup(t);
+    const db=new DatabaseSync(path.join(roots.codex,'state_5.sqlite'));
+    db.exec('CREATE TABLE threads(id TEXT PRIMARY KEY,rollout_path TEXT,cwd TEXT,archived INTEGER)');
+    db.prepare('INSERT INTO threads VALUES(?,?,?,0)').run('unrelated','keep.jsonl',cwd);
+    const b=store.branch(p.id,'New','codex',codexSample(cwd,[['Hello','Hi']]));
+    native.setActive(b.id,cwd,true);
+    const instancesBefore=structuredClone(store.instances()),operations=native.plan().operations;
+    native.apply();
+    const jobId=randomUUID(),file=operations[0].file;
+    fs.writeFileSync(path.join(native.jobs,jobId+'.json'),JSON.stringify({id:jobId,status:'applying',additive:true,instancesBefore,operations,files:[{path:file,content:null}]}));
+    native.recover(jobId);
+    assert.deepEqual(db.prepare('SELECT id FROM threads').all().map(r=>r.id),['unrelated']);
+    assert.equal(fs.existsSync(file),false);db.close();
 });
 test('Codex SQLite index and archive follow the explicit active set', t => {
     const { store, native, roots, p, cwd } = setup(t);
@@ -160,17 +176,17 @@ test('mid-apply filesystem failure rolls back written logs and leaves unrelated 
     fs.writeFileSync(index, original);
     const b = store.branch(p.id, 'main', 'codex', codexSample(cwd, [['Hello', 'Hi']]));
     native.setActive(b.id, cwd, true);
-    const destination = native.plan().operations[0].file, rename = fs.renameSync;
+    const destination = native.plan().operations[0].file, write = fs.writeFileSync;
     let injected = false;
-    fs.renameSync = (from, to) => { if (to === index && !injected) {
+    fs.writeFileSync = (file, ...args) => { if (typeof file === 'number' && !injected) {
         injected = true;
         throw new Error('simulated disk failure');
-    } return rename(from, to); };
+    } return write(file, ...args); };
     try {
         assert.throws(() => native.apply(), /simulated disk failure/);
     }
     finally {
-        fs.renameSync = rename;
+        fs.writeFileSync = write;
     }
     assert.equal(fs.existsSync(destination), false);
     assert.equal(fs.readFileSync(index, 'utf8'), original);
