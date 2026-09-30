@@ -13,6 +13,7 @@ import { rootOf, treeMembers, nativePrefixBoundary, metadata } from './organizat
 export const isActive = i => i.applied && !i.missing && !i.excluded && i.cwdAvailable !== false;
 export function visibleSession(store, b, forSync = false) {
     if(isTrashed(store,b.id)||b.trashed)return false;
+    if(forSync&&store.localArchivesOnly&&(b.archived||b.projectId&&store.find('project',b.projectId)?.archived))return false;
     if(forSync&&store.memo('retention-preserve-remote',()=>new Set(store.local('preserveRemoteForRetention')||[])).has(b.id))return !b.synthetic;
     const show = forSync ? false : preferences(store).showScheduledSessions;
     if ((b.scheduled || b.background) && !show) return false;
@@ -30,7 +31,7 @@ export function collections(store, forSync = false) {
     const items = [...buckets.values()].flatMap(({ root, members }) => {
         const sessions = members.filter(b => visibleSession(store, b, forSync));
         if (!sessions.length) return [];
-        const representative = root.synthetic ? [...sessions].sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id))[0] : root;
+        const representative = root.synthetic || !sessions.some(b=>b.id===root.id) ? [...sessions].sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id))[0] : root;
         const count = b => store.summary(b.head, b.agent).chats;
         return [{ id: root.id, name: representative.name, projectId: root.projectId, agent: root.agent, agents: [...new Set(sessions.map(b => b.agent))], origin: contentOrigin(store, [...sessions].sort((a,b) => modified(b).localeCompare(modified(a)))[0].head),
             kind: sessions.length > 1 ? 'tree' : 'session', sessionIds: sessions.map(b => b.id),
@@ -159,7 +160,7 @@ export function buildGraph(store, branchId) {
             n.branchIds.push(p.branchId);
         }
         const branch = store.get('branch', p.branchId);
-        if (branch.parentId && !p.messages.some(m => m.line > branch.forkEnd)) {
+        if (branch.parentId && (p.active || !branch.activationNodeName) && !p.messages.some(m => m.line > branch.forkEnd)) {
             const empty = {id:'empty-'+p.branchId, empty:true, name:branch.endpointName || null, pending:!branch.endpointName, chatIds:[], branchIds:[p.branchId], endBranchIds:[], parentIds:[], childIds:[]};
             nodes.push(empty); byNode.set(empty.id,empty); p.nodeIds.push(empty.id);
         }
@@ -198,7 +199,7 @@ export function buildGraph(store, branchId) {
         store.parseCache.clear(); store.parseBytes = 0; store.recordCache.clear(); store.recordBytes = 0;
     }
     return { id: root.id, projectId: root.projectId, layoutHead: root.layoutHead || null,
-        version: hash(JSON.stringify([members.map(b => [b.id, b.head, b.nodeHead, b.parentId, b.archived, b.contextPolicy, b.name, b.endpointName]), root.layoutHead || null])),
+        version: hash(JSON.stringify([members.map(b => [b.id, b.head, b.nodeHead, b.parentId, b.archived, b.contextPolicy, b.name, b.endpointName]), root.layoutHead || null, paths.map(p=>[p.branchId,p.active])])),
         name: store.collections().items.find(i => i.id === root.id)?.name || root.name,
         nodes: ordered, edges: [...edges.values()], paths, assignments,
         chatCount: new Set(paths.flatMap(p => p.messages.map(m => m.id))).size,

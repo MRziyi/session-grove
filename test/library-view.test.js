@@ -37,3 +37,11 @@ test('Pull and Push share pending, active, complete and failed stage semantics',
     assert.deepEqual(transferStages({ direction: 'pull', step: 'pull', state: 'success' }), { pull: 'complete', push: 'pending' });
     assert.deepEqual(transferStages({ direction: 'push', step: 'push', state: 'success' }), { pull: 'complete', push: 'complete' });
 });
+
+test('older projects use the session fold threshold, not an independent project age',async()=>{
+ const {olderProject}=await import('../web/library-view.js'),at=Date.parse('2026-09-30T12:00:00Z'),items=[{updatedAt:'2026-09-20T12:00:00Z'},{updatedAt:'2026-09-21T12:00:00Z'}];
+ assert.equal(olderProject(items,{projectFoldMode:'time',projectFoldDays:7},at),true);
+ assert.equal(olderProject(items,{projectFoldMode:'time',projectFoldDays:14},at),false);
+ assert.equal(olderProject(items,{projectFoldMode:'count',projectFoldCount:1},at),false);
+ assert.equal(olderProject(items,{projectFoldMode:'none'},at),false);assert.equal(olderProject([],{},at),false);
+});

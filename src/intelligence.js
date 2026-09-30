@@ -40,7 +40,7 @@ export class Intelligence {
         if('concurrency' in body){assert(Number.isInteger(body.concurrency)&&body.concurrency>=1&&body.concurrency<=4,'Choose 1 to 4 concurrent requests.');next.concurrency=body.concurrency;}
         if('minIntervalSeconds' in body){assert(Number.isFinite(body.minIntervalSeconds)&&body.minIntervalSeconds>=0&&body.minIntervalSeconds<=60,'Choose a request interval from 0 to 60 seconds.');next.minIntervalSeconds=body.minIntervalSeconds;}
         if('apiKey' in body){assert(typeof body.apiKey==='string'&&body.apiKey.length<500,'Enter an API key.');next.apiKey=body.apiKey.trim();
-            if(next.apiKey){await this.request(next.apiKey,'node',{user:'Verify connection',assistant:'Connection verified'});}}
+            if(next.apiKey){await this.request(next.apiKey,'node',{user:'Verify connection',assistant:'Connection verified'});next.classify=true;next.nameNodes=true;}}
         if(body.removeKey){next.apiKey='';next.classify=false;next.nameNodes=false;}
         assert(!(next.classify||next.nameNodes)||next.apiKey,'Add an API key first.');
         writePrivateFile(this.file,JSON.stringify(next));

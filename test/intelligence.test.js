@@ -100,7 +100,7 @@ test('API key is verified before replacement and disabling removes queued jobs',
  await assert.rejects(f.smart.save({apiKey:'bad'}),/rejected/);assert.equal(f.smart.config().apiKey,'test-local-secret');
  await f.smart.save({removeKey:true});assert.equal(f.smart.status().hasKey,false);assert.equal(f.smart.status().classify,false);
  await assert.rejects(f.smart.save({classify:true}),/API key first/);
- await f.smart.save({apiKey:'new-local-secret'});assert.equal(privateFile(f.smart.file),true);
+ await f.smart.save({apiKey:'new-local-secret'});assert.equal(privateFile(f.smart.file),true);assert.equal(f.smart.status().classify,true);assert.equal(f.smart.status().nameNodes,true);
 });
 test('Claude fork evidence excludes sibling replies and names only the shared segment',async t=>{
  let observed;const f=setup(t,async(k,kind,e)=>{observed=e;return {name:'Shared result'};}),p=f.store.project('Paper');

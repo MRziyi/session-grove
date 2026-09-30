@@ -1,0 +1,51 @@
+import {browserBinary,closeBrowser} from './browser-runtime.js';
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import {spawn} from 'node:child_process';
+import {once} from 'node:events';
+import {createApp} from '../src/server.js';
+import {codexSample} from '../src/demo.js';
+const root=fs.mkdtempSync(path.join(os.tmpdir(),'grove-drag-browser-'));
+const app=createApp({root:path.join(root,'app'),roots:{codex:path.join(root,'codex'),claude:path.join(root,'claude')},guard:()=>{}});
+const store=app.store;store.local('preferences',{projectFoldMode:'none'});
+for(let i=0;i<30;i++){const p=store.project('Project '+i);store.branch(p.id,'Session '+i,'codex',codexSample(root,[['Question '+i,'Answer']]));}
+const empty=store.project('Empty destination');
+app.server.listen(0,'127.0.0.1');await once(app.server,'listening');
+const chrome=spawn(browserBinary(),['--headless=new','--no-first-run','--no-default-browser-check','--remote-debugging-port=0','--user-data-dir='+path.join(root,'chrome'),'about:blank'],{stdio:'ignore'});let ws;
+try{
+ let port;for(let i=0;i<100;i++){try{port=fs.readFileSync(path.join(root,'chrome','DevToolsActivePort'),'utf8').split('\n')[0];break;}catch{}await new Promise(r=>setTimeout(r,100));}assert.ok(port);
+ const page=await(await fetch('http://127.0.0.1:'+port+'/json/new?http://127.0.0.1:'+app.server.address().port,{method:'PUT'})).json();ws=new WebSocket(page.webSocketDebuggerUrl);await once(ws,'open');let id=0;const pending=new Map(),errors=[];
+ ws.onmessage=e=>{const m=JSON.parse(e.data);if(m.id){const p=pending.get(m.id);pending.delete(m.id);m.error?p.reject(m.error):p.resolve(m.result);}if(m.method==='Runtime.exceptionThrown')errors.push(m.params.exceptionDetails.text);};
+ const call=(method,params={})=>new Promise((resolve,reject)=>{const n=++id;pending.set(n,{resolve,reject});ws.send(JSON.stringify({id:n,method,params}));});
+ const evaluate=async expression=>{const r=await call('Runtime.evaluate',{expression,awaitPromise:true,returnByValue:true});if(r.exceptionDetails)throw Error(JSON.stringify(r.exceptionDetails));return r.result.value;};
+ const wait=async expression=>{for(let i=0;i<100;i++){if(await evaluate(expression))return;await new Promise(r=>setTimeout(r,50));}throw Error('Timeout '+expression+' '+JSON.stringify(await evaluate('({toast:document.querySelector("#toast").textContent,dragging:document.body.classList.contains("session-dragging"),hits:window.__dropDebug})')));};
+ await call('Runtime.enable');await call('Emulation.setFocusEmulationEnabled',{enabled:true});await call('Page.bringToFront');await call('Emulation.setDeviceMetricsOverride',{width:1100,height:720,deviceScaleFactor:1,mobile:false});
+ await wait('document.querySelector(".project-directory [data-scope]")');
+ await evaluate('document.querySelector(".project-directory [data-scope]").click()');await wait('document.querySelectorAll("#session-list [data-item]").length===30');
+ const ids=await evaluate('[...document.querySelectorAll("#session-list [data-item]")].slice(0,2).map(e=>e.dataset.item)');
+ await evaluate(`for(const id of ${JSON.stringify(ids)})document.querySelector('[data-select="'+id+'"]').click()`);
+ await evaluate(`document.querySelector('[data-item="${ids[0]}"]').scrollIntoView({behavior:'instant',block:'center'});window.__drag=new DataTransfer();document.querySelector('[data-item="${ids[0]}"]').dispatchEvent(new DragEvent('dragstart',{bubbles:true,dataTransfer:window.__drag}))`);
+ assert.equal(await evaluate('document.querySelectorAll(".session-row.dragging").length'),2);
+ const before=await evaluate('document.querySelector("#session-list").scrollTop');
+ await evaluate('(()=>{const el=document.querySelector("#session-list"),r=el.getBoundingClientRect();el.dispatchEvent(new DragEvent("dragover",{bubbles:true,cancelable:true,dataTransfer:window.__drag,clientX:r.x+r.width/2,clientY:innerHeight-2}))})()');
+ await wait(`document.querySelector('#session-list').scrollTop>${before+100}`);
+ await evaluate(`(()=>{const el=document.querySelector('.project-directory [data-scope="${empty.id}"]');el.scrollIntoView({behavior:'instant',block:'center'});const r=el.getBoundingClientRect();el.dispatchEvent(new DragEvent('dragover',{bubbles:true,cancelable:true,dataTransfer:window.__drag,clientX:r.x+10,clientY:r.y+10}));el.dispatchEvent(new DragEvent('drop',{bubbles:true,cancelable:true,dataTransfer:window.__drag,clientX:r.x+10,clientY:r.y+10}));})()`);
+ await wait(`document.querySelector('[data-project-group="${empty.id}"] [data-item="${ids[0]}"]')`);
+ for(const id of ids)assert.equal(store.get('branch',id).projectId,empty.id);
+ assert.equal(await evaluate('document.body.classList.contains("session-dragging")'),false);
+ // A group in the main list is also a target, and moving one unselected row stays singular.
+ const target=store.all('project').find(p=>p.id!==empty.id),single=ids[0];
+ await evaluate(`(()=>{const source=document.querySelector('[data-item="${single}"]');source.scrollIntoView({behavior:'instant',block:'center'});window.__drag=new DataTransfer();source.dispatchEvent(new DragEvent('dragstart',{bubbles:true,dataTransfer:window.__drag}));const el=document.querySelector('[data-project-group="${target.id}"]');el.scrollIntoView({behavior:'instant',block:'center'});const r=el.getBoundingClientRect();window.__dropDebug={x:r.x,y:r.y,hit:document.elementFromPoint(r.x+20,r.y+20)?.outerHTML.slice(0,300),dragging:document.body.classList.contains('session-dragging')};el.dispatchEvent(new DragEvent('drop',{bubbles:true,cancelable:true,dataTransfer:window.__drag,clientX:r.x+20,clientY:r.y+20}));})()`);
+ await wait(`document.querySelector('[data-project-group="${target.id}"] [data-item="${single}"]')`);
+ assert.equal(store.get('branch',ids[0]).projectId,target.id);assert.equal(store.get('branch',ids[1]).projectId,empty.id);
+ const oldProject=store.project('Older project'),oldSession=store.branch(oldProject.id,'Old visible on expansion','codex',codexSample(root,[['Old','Answer']]));
+ const stamp=new Date(Date.now()-20*86400000).toISOString();store.put('branch',{...oldSession,updatedAt:stamp,contentUpdatedAt:stamp,createdAt:stamp});store.local('preferences',{projectFoldMode:'time',projectFoldDays:7});
+ await call('Page.reload');await wait('document.querySelector(".project-directory [data-scope]")');await evaluate('document.querySelector(".project-directory [data-scope]").click()');await wait('document.querySelector("#session-list [data-older-projects]")');
+ assert.equal(await evaluate(`!!document.querySelector('[data-project-group="${oldProject.id}"]')`),false);
+ await evaluate('document.querySelector("#session-list [data-older-projects]").click()');
+ await wait(`document.querySelector('[data-project-group="${oldProject.id}"] [data-item="${oldSession.id}"]')`);
+ assert.equal(await evaluate(`!!document.querySelector('[data-project-group="${oldProject.id}"] [data-expand-project]')`),false,'older project contents expand with their section');
+ assert.deepEqual(errors,[]);console.log('Browser passed: drag to project groups and empty sidebar projects, multi-selection, edge auto-scroll.');
+}finally{ws?.close();await closeBrowser(chrome);await new Promise(r=>app.close(r));fs.rmSync(root,{recursive:true,force:true});}

@@ -32,9 +32,9 @@ export class GitSettings {
         this.job = { state: 'running', phase: 'Checking Git repository' };
         const cloud = new GitCloud(this.store, () => config);
         try {
-            // Fetch validates access and the Grove format without publishing anything.
+            // Verify only repository metadata; synchronization downloads data later.
             await cloud.connect();
-            await cloud.connection.remote.fetch();
+            await cloud.connection.remote.verify();
             this.autoSync.lock();
             atomic(this.file, JSON.stringify({ ...config, verified: true }));
             this.autoSync.cloud.cacheKey = undefined;

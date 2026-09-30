@@ -35,3 +35,11 @@ test('invalid native settings and token ranges fail without rewriting configurat
     const f=fixture(t),file=path.join(f.roots.claude,'settings.json');fs.writeFileSync(file,'{broken');assert.match(f.settings.status().claude.error,/invalid/);assert.equal(fs.readFileSync(file,'utf8'),'{broken');
     const c=f.settings.read('codex');assert.throws(()=>f.settings.save({...c,window:10000,compactAt:20000}),/must not exceed/);assert.throws(()=>f.settings.save({...c,window:1.5,compactAt:null}),/positive token/);
 });
+
+test('context presets use selected model metadata and preserve custom current values',t=>{
+    const f=fixture(t);
+    fs.writeFileSync(path.join(f.roots.codex,'config.toml'),'model = "example"\nmodel_context_window = 321000\n');
+    fs.writeFileSync(path.join(f.roots.codex,'models_cache.json'),JSON.stringify({models:[{slug:'example',context_window:272000,max_context_window:872000}]}));
+    const c=f.settings.read('codex');assert.equal(c.defaultWindow,272000);assert.equal(c.maxWindow,872000);assert.equal(c.window,321000);
+    assert.equal(c.windowOptions[0],872000);assert.ok(c.windowOptions.includes(272000));assert.ok(c.windowOptions.every(n=>n<=872000));
+});

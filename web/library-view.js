@@ -50,3 +50,7 @@ export function transferStages(operation) {
     else if (operation.state === 'success') { stages.pull = 'complete'; if (operation.direction === 'push' || operation.direction === 'both') stages.push = 'complete'; }
     return stages;
 }
+
+export function olderProject(items,preferences={},at=Date.now()) {
+    return items.length>0&&foldedItems(items,preferences,at).length===0;
+}

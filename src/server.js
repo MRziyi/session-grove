@@ -1,3 +1,5 @@
+import { discardChanges } from './discard-changes.js';
+import { refreshNativeClients } from './client-refresh.js';
 import {stageTrash,stageTrashAsync,restoreTrash,expireTrash,cleanupLocal,isTrashed} from './trash.js';
 import {nativeTrashCandidates,moveNativeToRecovery,deleteRecoveryCopies,restoreRecoveryCopies} from './trash-actions.js';
 import os from 'node:os';
@@ -30,7 +32,7 @@ import { assert, atomic, json, text, now, id, hash } from './util.js';
 const webRoot = fileURLToPath(new URL('../web/', import.meta.url));
 export function createApp({ root, roots, guard, demo = false }) {
     const store = new Store(root), native = new Native(store, { roots, guard }), token = randomBytes(32).toString('hex');
-    const webAssets = new Map(['index.html', 'app.js', 'library-view.js', 'select.js', 'markdown.js', 'i18n.js', 'style.css'].map(file => [file, fs.readFileSync(path.join(webRoot, file))]));
+    const webAssets = new Map(['index.html', 'app.js', 'library-view.js', 'session-drag.js', 'select.js', 'markdown.js', 'i18n.js', 'style.css'].map(file => [file, fs.readFileSync(path.join(webRoot, file))]));
     const configFile = path.join(root, 'git-sync.json');
     const diagnostics = new Diagnostics(root);
     const autoSync = new AutoSync(store, () => ({ ...json(configFile, {}), provider: 'git' }), null, { provider: 'git' });
@@ -48,11 +50,11 @@ export function createApp({ root, roots, guard, demo = false }) {
         store.get('branch', i.id).layoutHead
     ]))]));
     const streams = new Set(); let updateOperation = null, trashOperation = null, trashPromise = null;
-    let stopping = false;
+    let stopping = false, discardPromise = null;
     const instance = id();
     const operation = (kind, value) => { for (const res of streams) res.write('event: operation\ndata: ' + JSON.stringify({kind, ...value}) + '\n\n'); };
     autoSync.onOperation = value => operation('sync', {...value, status:autoSync.status()});
-    const intelligence = new Intelligence(store, { onChange: id => autoSync.schedule([id]), onStatus: value => operation('intelligence', value), canApply: () => !capturePromise && !trashPromise && !stopping });
+    const intelligence = new Intelligence(store, { onChange: id => autoSync.schedule([id]), onStatus: value => operation('intelligence', value), canApply: () => !capturePromise && !trashPromise && !discardPromise && !stopping });
     const timing = () => ({ intelligence: intelligence.status(), trashOperation, appVersion: VERSION, serverNow: Date.now(), stateVersion: diagnostics.startedAt + ':' + store.version + ':' + store.cloudVersion, update: { nextRunAt: nextCaptureAt, lastRunAt: lastCaptureAt, started: !!store.local('localUpdateStarted'), operation: updateOperation } });
     let expiryTimer;const configureExpiry=()=>{clearTimeout(expiryTimer);const entries=expireTrash(store),next=entries.filter(e=>!e.expired).map(e=>Date.parse(e.expiresAt)).sort((a,b)=>a-b)[0];if(next){expiryTimer=setTimeout(configureExpiry,Math.max(1000,Math.min(2147483647,next-Date.now())));expiryTimer.unref();}};configureExpiry();
     const trashSnapshot = () => ({ trashEntries:(store.local('trashEntries')||[]).filter(e=>!e.expired&&!e.restoredAt), trashNative:nativeTrashCandidates(store) });
@@ -71,7 +73,7 @@ export function createApp({ root, roots, guard, demo = false }) {
             assert(!req.headers['sec-fetch-site'] || ['same-origin', 'none'].includes(req.headers['sec-fetch-site']), '不允许跨站请求', 403);
             const url = new URL(req.url, `http://${expected}`), route = url.pathname;
             if (req.method === 'GET' && route === '/api/service') return send(200, { pid: process.pid, instance, stopping });
-            if (req.method === 'GET' && ['/', '/app.js', '/library-view.js', '/i18n.js', '/select.js', '/markdown.js', '/style.css'].includes(route)) {
+            if (req.method === 'GET' && ['/', '/app.js', '/library-view.js', '/session-drag.js', '/i18n.js', '/select.js', '/markdown.js', '/style.css'].includes(route)) {
                 const file = route === '/' ? 'index.html' : route.slice(1);
                 return send(200, webAssets.get(file), file.endsWith('.css') ? 'text/css' : file.endsWith('.js') ? 'text/javascript' : 'text/html; charset=utf-8');
             }
@@ -82,6 +84,7 @@ export function createApp({ root, roots, guard, demo = false }) {
             assert(supplied.length === token.length && timingSafeEqual(supplied, Buffer.from(token)), '本地访问凭证无效，请刷新页面', 403);
             if (req.method === 'POST' && route === '/api/service/stop') { send(202, { stopping: true }); setImmediate(() => app.onStop?.()); return; }
             assert(!stopping, 'Server is stopping.', 503);
+            assert(req.method==='GET'||!discardPromise,'Wait for changes to finish reverting.',409);
             let body = {};
             if (!['GET', 'HEAD'].includes(req.method)) {
                 assert(req.headers['content-type']?.startsWith('application/json'), '请求必须是 JSON', 415);
@@ -115,6 +118,14 @@ export function createApp({ root, roots, guard, demo = false }) {
             }
             if (req.method === 'GET' && route === '/api/status') return send(200, { ...timing(), cloud: autoSync.status() });
             if (req.method === 'GET' && route === '/api/synchronize/pending') return send(200, { items: autoSync.pendingItems() });
+            if(req.method==='POST'&&route==='/api/synchronize/discard'){
+                assert(!autoSync.running&&!autoSync.pending&&!autoSync.migrating&&!capturePromise&&!trashPromise,'Wait for the current operation before discarding changes.',409);
+                autoSync.migrating=true;store.transferReaders=(store.transferReaders||0)+1;
+                discardPromise=discardChanges(store,autoSync.cloud,native,body.selections);
+                try{const result=await discardPromise;const dirty=new Set(autoSync.cloud.dirtyIds());autoSync.queue=new Set([...autoSync.queue].filter(id=>dirty.has(id)));store.local('uploadQueue',[...autoSync.queue]);return send(200,result);}
+                finally{discardPromise=null;autoSync.migrating=false;store.transferReaders--;if(!store.transferReaders&&store.cleanupDeferred)cleanupLocal(store);autoSync.configureTimer();configureExpiry();intelligence.kick();}
+            }
+
             if (req.method === 'POST' && route === '/api/synchronize/transfer') return send(202, autoSync.startTransfer(body.direction));
             if (req.method === 'GET' && route === '/api/trash') return send(200, trashSnapshot());
             if (req.method === 'POST' && route === '/api/synchronize/plan') return send(200, await autoSync.prepareSync());
@@ -190,7 +201,8 @@ export function createApp({ root, roots, guard, demo = false }) {
                 try { native.setActive(branch.id, body.cwd, true, { nodeName: check.nodeName }); native.apply([branch.id]); }
                 catch (e) { store.local('instances', before); if (check.createsContinuation) e.message = 'Continuation saved, but activation failed: ' + e.message; throw e; }
                 autoSync.schedule([branch.id]); intelligence.observe();
-                return send(201, { branch, title: check.title, nodeId: check.createsContinuation ? 'empty-' + branch.id : selected.node.id });
+                const clientRefresh=await refreshNativeClients(native,before);
+                return send(201, { branch, clientRefresh, title: check.title, nodeId: check.createsContinuation ? 'empty-' + branch.id : selected.node.id });
             }
             if (req.method === 'POST' && ['/api/conversion-check', '/api/convert'].includes(route)) {
                 const selected = body.nodeId ? nodeActivation(store, native, body) : null;
@@ -203,9 +215,11 @@ export function createApp({ root, roots, guard, demo = false }) {
                 assert(!budget.risk || body.contextAcknowledgement === budget.fingerprint, 'Review the context-length warning before activating.', 409);
                 assert(typeof body.cwd === 'string' && path.isAbsolute(body.cwd) && fs.existsSync(body.cwd) && fs.statSync(body.cwd).isDirectory(), 'Choose an existing working directory.');
                 const result = createConversion(store, body.branchId, body);
+                const before=store.instances();
                 try { native.setActive(result.branch.id, body.cwd, true, { nodeName: selected?.preview.nodeName || 'Pending' }); native.apply([result.branch.id]); }
                 catch (e) { native.setActive(result.branch.id, null, false); throw Object.assign(new Error(`Conversion was saved in Grove but activation failed: ${e.message}`), { status: e.status || 409 }); }
                 autoSync.schedule([result.branch.id]);
+                result.clientRefresh=await refreshNativeClients(native,before);
                 return send(201, result);
             }
             if (req.method === 'POST' && route === '/api/manage') {
@@ -277,7 +291,8 @@ export function createApp({ root, roots, guard, demo = false }) {
                         }
                     }
                 });
-                return send(200, { changed: members.filter(b => !b.synthetic).length });
+                const clientRefresh=await refreshNativeClients(native,before);
+                return send(200, { changed: members.filter(b => !b.synthetic).length, clientRefresh });
             }
             const compaction = route.match(/^\/api\/branches\/([^/]+)\/compaction$/);
             if (req.method === 'POST' && compaction) return send(200, store.setCompaction(compaction[1], body));
@@ -388,6 +403,7 @@ export function createApp({ root, roots, guard, demo = false }) {
         try{return await trashPromise;}finally{trashPromise=null;intelligence.kick();}
     }
     function captureLocal() {
+        if(discardPromise)return discardPromise.catch(()=>{}).then(()=>captureLocal());
         if(trashPromise)return trashPromise.catch(()=>{}).then(()=>captureLocal());
         if(capturePromise) return capturePromise;
         capturePromise = performCapture().finally(()=>{capturePromise=null;intelligence.kick();}); return capturePromise;
@@ -424,7 +440,7 @@ export function createApp({ root, roots, guard, demo = false }) {
     }, close(callback) {
         app.quiesce();
         for(const res of streams)res.end(); streams.clear();
-        if(capturePromise||trashPromise||intelligence.pending)Promise.allSettled([capturePromise,trashPromise,intelligence.pending]).finally(()=>server.close(callback)); else server.close(callback);
+        if(capturePromise||trashPromise||intelligence.pending||discardPromise)Promise.allSettled([capturePromise,trashPromise,intelligence.pending,discardPromise]).finally(()=>server.close(callback)); else server.close(callback);
     } };
     return app;
 }

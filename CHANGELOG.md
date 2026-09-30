@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.0.1
+
+- Verify Git using shallow, filtered metadata inspection instead of downloading history and session bodies; never fall back to an unfiltered verification fetch.
+- Save Settings changes automatically, put verification actions beside their fields, and offer context-window presets with explicit client defaults. Successful API-key verification enables classification and node naming.
+- Drag sessions, including multi-selection, into project groups or sidebar projects with edge scrolling.
+- Group projects under Older projects when all their sessions are folded by Project contents; expanding Older projects reveals the sessions immediately.
+- Remove empty activation placeholders on deactivation, retain continuations that contain chats, and correct the collapsed-sidebar footer spacing.
+- Select Pending uploads and discard local changes back to an acknowledged snapshot, with stale-selection protection and recoverable local backups.
+- Keep Previous archives local, exclude archived-only conversation suffixes from uploads, and remove old archive entries from the current Git tree on Push. Clarify local client-copy cleanup notices and hide irrelevant background-session notices.
+- Add best-effort cache notifications for compatible Codex VS Code clients and direct Open in VS Code links. Claude's external archive/list-refresh interface remains unavailable; existing native-file protections stay in place.
+- Add regression coverage for discard/recovery, archive boundaries, drag/scroll, older-project expansion, automatic settings and client notifications. See [release notes](docs/releases/v1.0.1.md).
+
 ## 1.0.0
 
 - Validate Windows local history, Git Pull, native activation, cross-agent conversion and smart organization; add Windows unit/browser CI and test-gated GitHub releases.

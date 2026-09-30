@@ -14,7 +14,7 @@ const digest = value => hash(JSON.stringify(value));
 // Git owns history, content deduplication, packing and atomic ref publication.
 // Grove owns graph semantics, modification clocks and local materialization.
 export class GitCloud extends Cloud {
-    constructor(store, readConfig) { super(store, readConfig); this.provider = 'git'; }
+    constructor(store, readConfig) { super(store, readConfig); this.provider = 'git';store.localArchivesOnly=true;store.invalidate(); }
     useSavedCache() {
         this.cacheKey ||= 'cloud:git:' + hash(this.readConfig().url || '');
     }
@@ -98,9 +98,11 @@ export class GitCloud extends Cloud {
     async loadDirectory() {
         const format = this.read('grove.json');
         assert(format?.format === 'session-grove-git' && format.schema === 1, 'This repository is not a supported Grove data repository.');
-        const projects = new Map(), indexes = {};let completed=0;
+        const projects = new Map(), indexes = {}, archiveEntries=[];let completed=0;
         for (const entry of this.entryIterator()) {
             const { project, ...item } = entry;
+            item.sessions=item.sessions.filter(s=>!s.archived);item.sessionIds=item.sessions.map(s=>s.id);
+            if(project?.archived||!item.sessions.length){archiveEntries.push(item.id);continue;}
             assert(project?.id === item.projectId && /^[a-f0-9]{64}$/.test(item.ref), 'Invalid Git project index.');
             if (!projects.has(project.id)) projects.set(project.id, { project, items: [] });
             const group = projects.get(project.id); group.items.push(item);
@@ -112,7 +114,7 @@ export class GitCloud extends Cloud {
             const treeIds = value.items.filter(i => !i.archived).map(i => i.id);
             return { ...value.project, index, treeIds, count: treeIds.length };
         });
-        const c=this.cache();c.heads = { git: { projects: summaries } }; c.indexes = indexes; c.checkedAt = now();
+        const c=this.cache();c.archiveEntries=archiveEntries;c.heads = { git: { projects: summaries } }; c.indexes = indexes; c.checkedAt = now();
         // Hydration records the verified baseline; don't read every graph twice.
         this.save(c);
         const state = this.read('trash.json', { schema: 1, events: [] });
@@ -141,6 +143,8 @@ export class GitCloud extends Cloud {
         let graph = this.read(this.folder(treeId) + '/graph.json');
         assert(digest(graph) === item.ref && graph.branches.some(b => b.id === treeId), 'Git session integrity check failed.');
         const deleted = deletedIds(this.store, graph);
+        const archivedProjects=new Set(graph.projects.filter(p=>p.archived).map(p=>p.id));
+        for(const b of graph.branches)if(b.archived||archivedProjects.has(b.projectId))deleted.add(b.id);
         if (deleted.size) graph = retainedGraph(graph, deleted);
         const needed = new Set(bodyRefs(graph)), exists = this.store.db.prepare('SELECT 1 FROM objects WHERE hash=?');
         let batch = [], bytes = 0;
@@ -159,7 +163,7 @@ export class GitCloud extends Cloud {
         c.loaded[treeId] = [item.ref];
         (c.baselines ||= {})[treeId] = changeSnapshot(graph);
         const extraLocal = before?.branches.some(b => !graph.branches.some(r => r.id === b.id));
-        if ((!wasDirty || !result.keptLocal && !extraLocal) && !(this.store.local('conflicts') || []).length) c.ack[treeId] = digest(treeSnapshot(this.store, treeId));
+        if ((!wasDirty || !result.keptLocal && !extraLocal) && !(this.store.local('conflicts') || []).length) {const baseline=treeSnapshot(this.store,treeId);c.ack[treeId]=digest(baseline);this.rememberBaseline(treeId,baseline);}
         this.save(c); this.report('Importing session from Git cache', 1, 1, Date.now(), item.name);
         await yieldToLocal();
     }
@@ -168,15 +172,34 @@ export class GitCloud extends Cloud {
         const downloadIds = this.items().filter(i => !(this.cache().loaded[i.id] || []).includes(i.ref)).map(i => i.id);
         return { pull: { trees: downloadIds.length, records: 0 }, push: { trees: this.dirtyIds().length, records: 0, bytes: 0 }, large: false, downloadIds };
     }
+    archiveCleanupNeeded() {
+        this.useSavedCache();const cache=this.cache();
+        return !!cache.archiveEntries?.length||Object.keys(cache.ack).some(id=>{
+            const branch=this.store.find('branch',id);
+            return branch&&(branch.archived||branch.projectId&&this.store.find('project',branch.projectId)?.archived)&&!this.store.syncCollections().items.some(i=>i.id===id);
+        });
+    }
+    undoKey(id) { return 'git-undo:'+hash(this.readConfig().url||'')+':'+id; }
+    rememberBaseline(id,graph) { this.store.local(this.undoKey(id),{ack:digest(graph),graph}); }
+    undoBaseline(id) {
+        this.useSavedCache();const ack=this.cache().ack[id];
+        if(!ack)return null;
+        const saved=this.store.local(this.undoKey(id));if(saved?.ack===ack&&digest(saved.graph)===ack)return saved.graph;
+        // Older libraries can reuse a verified local checkout. Never fetch just to undo.
+        let graph;try{graph=this.read(this.folder(id)+'/graph.json');}catch{}
+        assert(graph&&digest(graph)===ack,'The last synced snapshot is unavailable locally. Sync before making further changes.');
+        return graph;
+    }
     pendingItems() {
         this.useSavedCache();
         const c = this.cache(), dirty = new Set(this.dirtyIds());
-        return this.store.syncCollections().items.filter(i=>dirty.has(i.id)).map(i => {
+        const items=this.store.syncCollections().items.filter(i=>dirty.has(i.id)).map(i => {
             const graph = treeSnapshot(this.store,i.id);
             let before = c.baselines?.[i.id];
             if (!before && c.ack[i.id]) before = this.store.memo('git-baseline:'+i.id+':'+c.ack[i.id],()=>changeSnapshot(this.read(this.folder(i.id)+'/graph.json')));
             return {id:i.id,name:i.name,project:graph.projects.find(p=>p.id===cloudProjectId(i.projectId))?.name || 'Ungrouped',updatedAt:i.updatedAt,action:'upload',changes:sessionChanges(before,changeSnapshot(graph),this.store)};
         }).concat((this.store.local('trashPending') || []).map(e=>({id:e.id,name:(this.store.local('trashEntries')||[]).find(t=>t.id===e.id)?.names.join(', ') || 'Removed sessions',project:this.store.all('project').find(p=>p.id===this.store.find('branch',e.branchIds[0])?.projectId)?.name || 'Ungrouped',action:'remove',updatedAt:e.at,changes:[{kind:'session-removed',label:'Session removed'}]})));
+        return items.map(item=>({...item,version:digest([this.readConfig().url||'',item.action==='remove'?(this.store.local('trashPending')||[]).find(e=>e.id===item.id):treeSnapshot(this.store,item.id),c.ack[item.id]||null])}));
     }
     async publish(treeIds, passphrase, { catalogFresh = false } = {}) {
         if (!catalogFresh) {
@@ -196,7 +219,10 @@ export class GitCloud extends Cloud {
         fs.mkdirSync(this.file('trees'), { recursive: true });
         // Retired roots and trashed paths disappear from HEAD; Git retains old commits.
         const retired = new Set([...items.values()].flatMap(i => i.sessionIds.filter(id => id !== i.id)));
+        const archivedRemovals=[];
         for (const old of this.entries()) {
+            const local=this.store.find('branch',old.id);
+            if(old.archived||old.project?.archived||local&&(local.archived||local.projectId&&this.store.find('project',local.projectId)?.archived)&&!items.has(old.id)){fs.rmSync(this.file(this.folder(old.id)),{recursive:true});archivedRemovals.push(old.id);continue;}
             if (retired.has(old.id) || state.events.some(e => (e.treeIds || []).includes(old.id) || old.sessionIds.every(id => e.branchIds.includes(id)))) {
                 fs.rmSync(this.file(this.folder(old.id)), { recursive: true });
             } else if (!snapshots.has(old.id) && old.sessionIds.some(id => state.events.some(e => e.branchIds.includes(id)))) {
@@ -223,10 +249,11 @@ export class GitCloud extends Cloud {
             await yieldToLocal();
         }
         this.report('Pushing Git commit');
-        await remote.commitAndPush(commitMessage(changes));
+        await remote.commitAndPush(archivedRemovals.length&&!changes.length?'Grove: keep previous archives local':commitMessage(changes));
         // A failed/non-fast-forward push never clears pending work or acknowledges data.
         const c = this.cache();
-        for (const [id, graph] of snapshots) { c.ack[id] = digest(graph); (c.baselines ||= {})[id] = changeSnapshot(graph); c.loaded[id] = [digest(graph)]; }
+        for(const id of archivedRemovals){delete c.ack[id];delete c.loaded[id];if(c.baselines)delete c.baselines[id];}
+        for (const [id, graph] of snapshots) { c.ack[id] = digest(graph); this.rememberBaseline(id,graph); (c.baselines ||= {})[id] = changeSnapshot(graph); c.loaded[id] = [digest(graph)]; }
         c.lastUpload = now(); c.gitHead = remote.head; this.save(c);
         if (state.events.length) applyTrashState(this.store, state); await this.loadDirectory(); this.saveDirectory();
         return { published: snapshots.size, uploaded: 0, commit: remote.head };

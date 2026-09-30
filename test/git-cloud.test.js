@@ -10,7 +10,7 @@ import { GitRemote, gitRemote } from '../src/git-remote.js';
 import { AutoSync } from '../src/auto-sync.js';
 import { codexSample, codexTurn } from '../src/demo.js';
 import { bodyRefs } from '../src/retention.js';
-import { stageTrash } from '../src/trash.js';
+import { stageTrash,cleanupLocal,restoreTrash } from '../src/trash.js';
 
 function fixture(t) {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'grove-git-test-'));
@@ -156,4 +156,103 @@ test('pending semantic changes become the Git message and reset after Push', asy
     graph=a.store.treeGraph(s.id);const node=graph.nodes.find(n=>n.name==='First node');
     a.store.organize(s.id,{version:graph.version,pathId:s.id,nodeId:node.id,action:'rename',name:'Better node'});
     assert.deepEqual(a.auto.pendingItems()[0].changes.map(c=>c.kind),['node-renamed']);
+});
+
+test('lightweight verification downloads no session blobs or history and leaves the sync cache untouched', async t => {
+    const e=fixture(t),a=e.device('verify-source');
+    const remote=new GitRemote(path.join(e.root,'untouched'),e.url);
+    await remote.verify();
+    const session=branch(a);await push(a);
+    a.store.edit(session.id,{name:'Second revision'});await push(a);
+    await assert.rejects(remote.verify(),/lightweight verification/);
+    execFileSync('git',['--git-dir='+e.url,'config','uploadpack.allowFilter','true']);
+    execFileSync('git',['--git-dir='+e.url,'config','uploadpack.allowAnySHA1InWant','true']);
+    const original=GitRemote.prototype.run,commands=[];
+    t.mock.method(GitRemote.prototype,'run',async function(args,options){
+        commands.push(args);
+        const result=await original.call(this,args,options);
+        if(args[0]==='show'&&args[1]==='FETCH_HEAD:grove.json'){
+            const objects=execFileSync('git',['rev-list','--objects','--missing=print','FETCH_HEAD'],{cwd:this.directory,encoding:'utf8'});
+            assert.match(objects,/^\?/m,'session trees and bodies stay remote');
+            assert.equal(execFileSync('git',['rev-list','--count','FETCH_HEAD'],{cwd:this.directory,encoding:'utf8'}).trim(),'1');
+        }
+        return result;
+    });
+    await remote.verify();
+    assert.ok(!fs.existsSync(remote.directory));
+    assert.ok(!commands.some(args=>args.includes('reset')||args.includes('--hard')));
+    assert.ok(commands.some(args=>args.includes('--filter=tree:0')));
+});
+
+test('discard restores the exact acknowledged snapshot, removes an empty fork and keeps recovery',async t=>{
+    const {discardChanges}=await import('../src/discard-changes.js');
+    const e=fixture(t),a=e.device('undo'),b=branch(a);await push(a);
+    const baseline=a.cloud.cache().ack[b.id];
+    a.store.edit(b.id,{name:'Mistake'});
+    const child=a.store.fork(b.id,{name:'Empty fork',end:a.store.parsed(b.head,'codex').checkpoints.at(-1).end});
+    a.store.put('branch',{...child,activationNodeName:'Pending'});
+    const pending=a.cloud.pendingItems();assert.equal(pending.length,1);
+    const result=await discardChanges(a.store,a.cloud,{collect:()=>({errors:[]})},pending);
+    assert.equal(a.store.get('branch',b.id).name,'Sample');assert.ok(!a.store.find('branch',child.id));
+    assert.equal(a.cloud.cache().ack[b.id],baseline);assert.equal(a.cloud.dirtyIds().length,0);
+    assert.ok(fs.existsSync(path.join(a.store.root,'trash',result.recoveryId+'.json.gz')));
+    const restored=restoreTrash(a.store,result.recoveryId);assert.ok(restored);assert.ok(a.store.all('branch').some(b=>b.name==='Empty fork'),'discarded work can be recovered under new identities');
+});
+test('discard rejects stale selection and active changed conversations, but allows live metadata undo',async t=>{
+    const {discardChanges}=await import('../src/discard-changes.js');
+    const e=fixture(t),a=e.device('undo-guards'),b=branch(a);await push(a);const native={collect:()=>({errors:[]})};
+    a.store.edit(b.id,{name:'First'});const stale=a.cloud.pendingItems();a.store.edit(b.id,{name:'Second'});
+    await assert.rejects(discardChanges(a.store,a.cloud,native,stale),/changed/);assert.equal(a.store.get('branch',b.id).name,'Second');
+    a.store.local('instances',[{id:'native',branchId:b.id,agent:'codex',nativeId:'native-id',applied:true,baseRevision:b.head}]);
+    await discardChanges(a.store,a.cloud,native,a.cloud.pendingItems());assert.equal(a.store.get('branch',b.id).name,'Sample');
+    a.store.ingest(b.id,a.store.raw(b.head)+codexTurn('New question','New answer').map(v=>JSON.stringify(v)+'\n').join(''),b.head,{operation:'capture'});
+    await assert.rejects(discardChanges(a.store,a.cloud,native,a.cloud.pendingItems()),/Deactivate/);
+});
+test('discarding a never-synced session works offline without publishing a deletion',async t=>{
+    const {discardChanges}=await import('../src/discard-changes.js');
+    const e=fixture(t),a=e.device('undo-new'),b=branch(a);
+    await discardChanges(a.store,a.cloud,{collect:()=>({errors:[]})},a.cloud.pendingItems());
+    assert.ok(!a.store.find('branch',b.id));assert.equal(a.cloud.pendingItems().length,0);assert.equal((a.store.local('trashPending')||[]).length,0);
+});
+test('discard cancels a queued removal and restores the original synced identities',async t=>{
+    const {discardChanges}=await import('../src/discard-changes.js');
+    const e=fixture(t),a=e.device('undo-removal'),b=branch(a);await push(a);
+    stageTrash(a.store,[b.id],[b.id]);cleanupLocal(a.store);
+    await discardChanges(a.store,a.cloud,{collect:()=>({errors:[]})},a.cloud.pendingItems());
+    assert.ok(!a.store.isTrashed(b.id));assert.equal(a.cloud.pendingItems().length,0);assert.equal(a.store.get('branch',b.id).name,'Sample');
+});
+test('unrelated Trash cleanup preserves the live undo baseline and shared project changes require all rows',async t=>{
+    const {discardChanges}=await import('../src/discard-changes.js');
+    const e=fixture(t),a=e.device('undo-gc'),p=a.store.project('Original project'),b=branch(a),other=branch(a,'Other');
+    a.store.edit(b.id,{name:'Original'});a.store.moveItems({itemIds:[b.id,other.id],projectId:p.id});await push(a);
+    const native={collect:()=>({errors:[]})},original=a.store.raw(b.head);
+    a.store.put('project',{...p,name:'Accidental project rename'});
+    await assert.rejects(discardChanges(a.store,a.cloud,native,a.cloud.pendingItems().filter(i=>i.id===b.id)),/shared changes/);
+    await discardChanges(a.store,a.cloud,native,a.cloud.pendingItems());assert.equal(a.store.get('project',p.id).name,'Original project');
+    const revision=a.store.revision(codexSample('/synthetic',[['Replacement','Oops']]),null,{agent:'codex'});
+    a.store.put('branch',{...a.store.get('branch',b.id),head:revision.id});
+    stageTrash(a.store,[other.id],[other.id]);cleanupLocal(a.store);
+    await discardChanges(a.store,a.cloud,native,a.cloud.pendingItems().filter(i=>i.id===b.id));
+    assert.equal(a.store.raw(a.store.get('branch',b.id).head),original);
+});
+
+test('Git keeps previous archives local and retains only the prefix needed by active descendants',async t=>{
+    const e=fixture(t),a=e.device('archive-source'),b=e.device('archive-reader');
+    const root=a.store.branch(null,'Archived root','codex',codexSample('/synthetic',[['Shared','Prefix'],['ARCHIVED PRIVATE SUFFIX','Do not upload']]));
+    const child=a.store.fork(root.id,{name:'Active fork',end:a.store.parsed(root.head,'codex').checkpoints[0].end});
+    a.store.edit(root.id,{archived:true});
+    const alone=branch(a,'Archived alone');a.store.edit(alone.id,{archived:true});
+    const project=a.store.project('Archived project'),inside=branch(a,'Project archive');a.store.moveItems({itemIds:[inside.id],projectId:project.id});a.store.put('project',{...project,archived:true});
+    await push(a);assert.equal(a.cloud.items().length,1);
+    const graph=a.cloud.read(a.cloud.folder(root.id)+'/graph.json');assert.ok(!graph.branches.some(b=>!b.synthetic&&b.archived));
+    assert.ok(![...a.cloud.records(root.id)].some(([,body])=>body.includes('ARCHIVED PRIVATE SUFFIX')));
+    await pull(b);assert.equal(b.store.listing('archived').items.length,0);assert.ok(b.store.find('branch',child.id));
+    a.store.edit(child.id,{name:'Accidental rename'});
+    const {discardChanges}=await import('../src/discard-changes.js');await discardChanges(a.store,a.cloud,{collect:()=>({errors:[]})},a.cloud.pendingItems());
+    assert.equal(a.store.get('branch',root.id).archived,true);assert.ok(a.store.raw(a.store.get('branch',root.id).head).includes('ARCHIVED PRIVATE SUFFIX'),'undo must preserve local-only archived history');
+});
+test('archiving a synced tree removes its current Git entry on the next explicit Push without deleting local history',async t=>{
+    const e=fixture(t),a=e.device('archive-publish'),session=branch(a);await push(a);
+    a.store.edit(session.id,{archived:true});assert.equal(a.cloud.pendingItems().length,0);
+    await push(a);assert.ok(a.store.find('branch',session.id)?.archived);assert.equal(a.cloud.entries().length,0);assert.equal(a.cloud.archiveCleanupNeeded(),false);
 });

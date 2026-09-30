@@ -1,5 +1,27 @@
 let language = localStorage.getItem('grove-language') === 'zh' ? 'zh' : 'en';
 const dictionary = {
+"{count} local client copies of trashed sessions remain.":"回收站中有 {count} 条会话仍保留本机客户端副本。",
+"Actions":"操作",
+"Discard changes":"取消修改",
+"Discard restores the last synced version. New unsynced sessions are removed from Grove. A local recovery copy is kept.":"取消修改会恢复上次同步的版本；未同步的新会话会从 Grove 移除，并保留本地恢复副本。",
+"Changes discarded. A recovery copy is available in Trash.":"已取消修改，可在回收站找到恢复副本。",
+"Pending changes changed. Reopen the list and select them again.":"待上传内容已变化，请重新打开列表并选择。",
+"Deactivate sessions with changed conversations before discarding. Metadata-only changes can be discarded while active.":"请先停用要撤销对话内容的会话；仅名称等信息变更可直接撤销。",
+"Select all pending changes for the same session before discarding.":"请选中同一会话的全部待上传项后再取消修改。",
+"This project has shared changes. Select all its pending sessions before discarding.":"此项目有共享修改，请选中项目的所有待上传会话。",
+"The last synced snapshot is unavailable locally. Sync before making further changes.":"本地缺少上次同步的快照，暂时无法撤销这些修改。",
+
+"Session activated. Use Open in VS Code to continue.":"会话已激活，点击“在 VS Code 中打开”即可继续。",
+"Open in VS Code":"在 VS Code 中打开",
+"Open the matching workspace in VS Code first.":"请先在 VS Code 中打开对应的工作目录。",
+"Default":"默认",
+"Model default":"由模型决定",
+"Maximum":"最大值",
+"Client default":"客户端默认",
+"Verify key":"验证密钥",
+"Changes are saved automatically. Context changes apply to new client sessions; model limits still apply.":"修改自动保存。上下文设置在新客户端会话中生效，仍受模型容量限制。",
+"This Git server does not support lightweight verification (partial clone).":"此 Git 服务器不支持轻量验证（部分克隆）。",
+
 "Smart organization":"智能整理",
 "Context windows":"上下文窗口",
 "Context window (tokens)":"上下文窗口（tokens）",

@@ -1,4 +1,5 @@
-import { foldedItems, pendingLabels, projectGroups, selectRange, inactiveProject, transferStages } from './library-view.js';
+import { installSessionDrag } from './session-drag.js';
+import { foldedItems, pendingLabels, projectGroups, selectRange, inactiveProject, olderProject, transferStages } from './library-view.js';
 import { markdown } from './markdown.js';
 import { enhanceSelect } from './select.js';
 import { t, locale, setLocale, errorText } from './i18n.js';
@@ -143,12 +144,13 @@ function renderNavigation() {
     const d = state.data, directoryScroll = $('.project-directory-scroll')?.scrollTop || 0;
     const selectedScope = state.scope === PROJECTS ? state.projectFocus : state.scope;
     const entry = (scope, name, count, css = '') => `<button class="nav-entry ${css} ${selectedScope === scope ? 'selected' : ''}" data-scope="${esc(scope)}" ${selectedScope === scope ? 'aria-current="page"' : ''}><span class="nav-name">${esc(name)}</span><span class="count">${count}</span></button>`;
-    const projectTimes = new Map(projectGroups(d.items.filter(i=>!i.archived).map(i=>({...i,updatedAt:i.sessions.filter(s=>!s.archived).map(s=>s.updatedAt).sort().at(-1)||i.updatedAt})), d.projects).map(g=>[g.id,g.updatedAt]));
-    const projects = d.projects.filter(p => !p.archived && (d.items.some(i => i.projectId === p.id && !i.archived) || p.count > 0));
+    const directoryGroups=projectGroups(d.items.filter(i=>!i.archived).map(i=>({...i,updatedAt:i.sessions.filter(s=>!s.archived).map(s=>s.updatedAt).sort().at(-1)||i.updatedAt})), d.projects);
+    const projectTimes=new Map(directoryGroups.map(g=>[g.id,g.updatedAt])),olderIds=new Set(directoryGroups.filter(g=>isOlder(g.items)).map(g=>g.id));
+    const projects = d.projects.filter(p => !p.archived);
     const archivedProjects = d.projects.filter(p => p.archived && (d.items.some(i => i.projectId === p.id) || p.count>0));
     const archivedSessions = d.items.filter(i => !archivedProjects.some(p => p.id === i.projectId)).reduce((n, i) => n + i.sessions.filter(s => s.archived).length, 0);
     const directory = rows => rows.sort((a,b) => (projectTimes.get(b.id)||'').localeCompare(projectTimes.get(a.id)||'') || a.name.localeCompare(b.name)).map(p => entry(p.id, p.builtin ? t('Ungrouped') : p.name==='Scheduled & background'?t(p.name):p.name, Math.max(p.count || 0, d.items.filter(i => i.projectId === p.id && !i.archived).length))).join('');
-    const recent = projects.filter(p=>p.builtin||!isInactive(projectTimes.get(p.id))), older = projects.filter(p=>!p.builtin&&isInactive(projectTimes.get(p.id)));
+    const recent = projects.filter(p=>!olderIds.has(p.id)), older = projects.filter(p=>olderIds.has(p.id));
     $('#navigation').innerHTML = `<section class="nav-group"><h2 class="nav-label">${t('Current Active')}</h2>${entry('active:codex', 'Codex', d.activeCounts.codex, 'codex')}${entry('active:claude', 'Claude', d.activeCounts.claude, 'claude')}</section><section class="nav-group project-directory"><h2 class="nav-label">${t('Projects')}</h2><div class="project-directory-scroll">${directory(recent)}${older.length?olderToggle(older.length)+(state.olderProjects?directory(older):''):''}</div></section><section class="nav-group"><h2 class="nav-label">${t('Trash')}</h2>${entry('trash',t('Local recovery'),(d.trashEntries||[]).filter(e=>!e.restoredAt&&!e.expired).length)}${archivedProjects.length+archivedSessions?entry('archived',t('Previous archives'),archivedProjects.length+archivedSessions):''}</section>`;
     $('.project-directory-scroll').scrollTop = directoryScroll;
     $$('[data-scope]').forEach(el => el.onclick = () => navigate(el.dataset.scope));
@@ -156,6 +158,7 @@ function renderNavigation() {
     renderCloudStatus();
 }
 
+const pendingSelection=new Map();
 let pendingTimer, pendingTicket = 0, completionTimer, fillOperation = null, fillState = {pull:0,push:0};
 const bytesLabel = bytes => bytes < 1024 ? `${bytes || 0} B` : bytes < 1048576 ? `${(bytes / 1024).toFixed(1)} KiB` : `${(bytes / 1048576).toFixed(1)} MiB`;
 function positionSyncPanel(panel, anchor) {
@@ -163,7 +166,7 @@ function positionSyncPanel(panel, anchor) {
     Object.assign(panel.style, { width: width + 'px', left: Math.max(10, Math.min(rect.right - width, innerWidth - width - 10)) + 'px', top: top + 'px', maxHeight: Math.max(60, innerHeight - top - 12) + 'px' });
 }
 function showSyncPanel(panel, anchor) { panel.hidden = false; panel.showPopover?.(); positionSyncPanel(panel, anchor); }
-function hideSyncPanel(panel) { panel.hidePopover?.(); panel.hidden = true; }
+function hideSyncPanel(panel) { panel.hidePopover?.(); panel.hidden = true;if(panel.id==='pending-uploads')pendingSelection.clear(); }
 const transferPhaseNames={'Fetching Git changes':'Checking for updates','Importing session from Git cache':'Updating local sessions','Pulling sessions':'Updating local sessions','Preparing Git commit':'Preparing changes','Pushing Git commit':'Sending changes','Receiving objects':'Receiving changes','Writing objects':'Sending changes','Counting objects':'Counting changes','Compressing objects':'Compressing changes','Resolving deltas':'Applying differences','Downloading records':'Pulling changes','Uploading records':'Pushing changes','Applying downloaded changes':'Updating sessions','Updating downloaded sessions':'Updating sessions','Checking cloud directory':'Checking for changes','Reading cloud session manifests':'Checking shared history','Publishing project indexes':'Saving changes','Publishing cloud directory':'Finishing push','Download complete':'Pull complete','Preparing upload snapshot':'Preparing changes to push','Preparing shared history':'Preparing remaining sessions','Reclaiming cloud space':'Cleaning up removed sessions'};
 
 function renderIntelligence(){
@@ -252,11 +255,28 @@ async function trashRequest(path,body,action) {
     try {const result=await api(path,'POST',body);if(operations.trash?.state==='running')showOperation('trash',{...operations.trash,state:result.blocked?.length?'error':'success',error:result.blocked?.map(e=>e.reason).join('\n'),finishedAt:Date.now()});return result;}
     catch(error){showOperation('trash',{...operations.trash,state:'error',error:error.message,finishedAt:Date.now()});throw error;}
 }
-async function showPendingUploads(){
-    clearTimeout(pendingTimer); const box=$('#pending-uploads'),ticket=++pendingTicket;
-    showSyncPanel(box,$('#push-zone'));box.innerHTML=`<strong>${t('Pending uploads')}</strong><p>${t('Reading local changes…')}</p>`;
-    try{const data=await api('/synchronize/pending');if(ticket!==pendingTicket||box.hidden)return;box.innerHTML=`<strong>${t('Pending uploads')} · ${data.items.length}</strong>${data.items.length?`<ul>${data.items.map(i=>`<li><span>${esc(i.name)}</span>${i.project?`<small>${esc(i.project)}</small>`:''}${i.changes?.length?`<ul class="pending-changes">${i.changes.map(c=>`<li>${c.session&&c.session!==i.name?esc(c.session)+': ':''}${esc(t(c.label,c))}</li>`).join('')}</ul>`:''}<small>${esc(date(i.updatedAt))}</small></li>`).join('')}</ul>`:`<p>${t('No local changes waiting to upload.')}</p>`}`;positionSyncPanel(box,$('#push-zone'));}catch(e){if(ticket===pendingTicket)box.textContent=e.message;}
+async function showPendingUploads(force=false){
+    clearTimeout(pendingTimer);const box=$('#pending-uploads');if(!box.hidden&&force!==true&&(pendingSelection.size||force?.type==='focusin'))return;
+    const ticket=++pendingTicket;showSyncPanel(box,$('#push-zone'));box.innerHTML=`<strong>${t('Pending uploads')}</strong><p>${t('Reading local changes…')}</p>`;
+    try{
+        const data=await api('/synchronize/pending');if(ticket!==pendingTicket||box.hidden)return;
+        for(const [id,version] of pendingSelection)if(!data.items.some(i=>i.id===id&&i.version===version))pendingSelection.delete(id);
+        box.innerHTML=`<div class="pending-heading"><strong>${t('Pending uploads')} · ${data.items.length}</strong><span id="pending-selection-count"></span><details id="pending-actions" hidden><summary aria-label="${t('Actions')}">⋯</summary><button type="button" id="discard-pending">${t('Discard changes')}</button></details><button type="button" id="close-pending" aria-label="${t('Close')}">×</button></div>${data.items.length?`<p class="pending-help">${t('Discard restores the last synced version. New unsynced sessions are removed from Grove. A local recovery copy is kept.')}</p><ul>${data.items.map(i=>`<li class="pending-row"><div><span>${esc(i.name)}</span>${i.project?`<small>${esc(i.project)}</small>`:''}${i.changes?.length?`<ul class="pending-changes">${i.changes.map(c=>`<li>${c.session&&c.session!==i.name?esc(c.session)+': ':''}${esc(t(c.label,c))}</li>`).join('')}</ul>`:''}<small>${esc(date(i.updatedAt))}</small></div><input type="checkbox" data-pending-select="${esc(i.id)}" aria-label="${esc(t('Select {name}',{name:i.name}))}" ${pendingSelection.has(i.id)?'checked':''}></li>`).join('')}</ul>`:`<p>${t('No local changes waiting to upload.')}</p>`}<p id="pending-error" role="alert"></p>`;
+        const update=()=>{$('#pending-actions').hidden=!pendingSelection.size;$('#pending-selection-count').textContent=pendingSelection.size?t('{count} selected',{count:pendingSelection.size}):'';};update();
+        for(const checkbox of $$('[data-pending-select]'))checkbox.onchange=()=>{const item=data.items.find(i=>i.id===checkbox.dataset.pendingSelect);checkbox.checked?pendingSelection.set(item.id,item.version):pendingSelection.delete(item.id);update();};
+        $('#close-pending').onclick=()=>hideSyncPanel(box);
+        $('#discard-pending').onclick=async()=>{
+            if(working||!pendingSelection.size)return;working=true;clearTimeout(pendingTimer);
+            const selections=[...pendingSelection].map(([id,version])=>({id,version}));
+            $('#pending-error').textContent='';for(const el of box.querySelectorAll('input,button'))el.disabled=true;
+            try{await api('/synchronize/discard','POST',{selections});pendingSelection.clear();if(state.tree){const latest=await api('/state');if(!latest.items.some(i=>i.id===state.tree.id)){state.tree=null;state.scope=PROJECTS;clearRange();}}await refresh();if(!box.hidden)await showPendingUploads(true);toast(t('Changes discarded. A recovery copy is available in Trash.'));}
+            catch(error){const el=$('#pending-error');if(el)el.textContent=error.message;}
+            finally{working=false;for(const el of box.querySelectorAll('input,button'))el.disabled=false;renderCloudStatus();}
+        };
+        positionSyncPanel(box,$('#push-zone'));
+    }catch(e){if(ticket===pendingTicket)box.textContent=e.message;}
 }
+
 function renderCountdowns(){
     if(!state.data||document.hidden)return;
     for(const [id,deadline]of [['upload',state.data.cloud?.nextRunAt],['collect',state.data.update?.nextRunAt]]){const button=$('#'+id);let counter=button.querySelector('.button-countdown');if(!deadline||state.connected===false){counter?.remove();continue;}if(!counter){counter=document.createElement('span');counter.className='button-countdown';button.append(counter);}const seconds=Math.max(0,Math.ceil((deadline-Date.now())/1000));const text=Math.floor(seconds/60)+':'+String(seconds%60).padStart(2,'0');if(counter.textContent!==text)counter.textContent=text;}
@@ -271,7 +291,7 @@ function sourceTags(item) {
     return `<span class="row-tags">${toolTags(item.agents || item.sessions?.map(s=>s.agent) || [item.agent])}${o?`<span class="device-tag" title="${esc(t(o.observed?'Imported on {device}':'Last conversation update on {device}',{device:o.name}))}">${icon(type)}<span>${esc(o.model||o.name)}</span></span>`:''}</span>`;
 }
 
-function isInactive(updatedAt) { return inactiveProject(updatedAt, state.data.preferences?.inactiveProjectDays || 30); }
+function isOlder(items) { return olderProject(items,state.data.preferences); }
 function olderToggle(count) { return `<button type="button" class="older-projects-toggle" data-older-projects aria-expanded="${!!state.olderProjects}">${state.olderProjects?'▾':'▸'} ${t('Older projects')} <span>${count}</span></button>`; }
 function bindOlderProjects() { $$('[data-older-projects]').forEach(el=>el.onclick=()=>{state.olderProjects=!state.olderProjects;renderNavigation();renderList();if(state.tree)renderRail();}); }
 let projectObserver, listView = null, viewAnimation;
@@ -281,7 +301,7 @@ function animateView(element) {
     viewAnimation=element.animate([{opacity:.55},{opacity:1}],{duration:160,easing:'ease-out'});
 }
 function projectRows(g) {
-    const initial=foldedItems(g.items,state.data.preferences),limited=state.scope===PROJECTS&&!state.query&&initial.length<g.items.length;
+    const initial=foldedItems(g.items,state.data.preferences),limited=state.scope===PROJECTS&&!state.query&&initial.length<g.items.length&&!(state.olderProjects&&isOlder(g.items));
     const expanded=state.expandedProjects.has(g.id)||g.items.some(i=>state.selected.has(i.id));
     return {limited,expanded,shown:limited&&!expanded?initial:g.items};
 }
@@ -311,9 +331,9 @@ function itemMeta(item) {
 function renderList() {
     if(state.scope==='trash'){renderTrash();return;}
     $('#list-title').textContent = title();
-    const pending = state.list.pendingDeactivation || [],discarded=(state.data.trashNative||[]).filter(i=>i.active&&state.scope==='active:'+i.agent); $('#active-notice').hidden = !pending.length&&!discarded.length;
+    const pending = state.list.pendingDeactivation || [],discarded=(state.data.trashNative||[]).filter(i=>i.active&&i.discarded&&(!i.background||state.data.preferences?.showScheduledSessions)&&state.scope==='active:'+i.agent); $('#active-notice').hidden = !pending.length&&!discarded.length;
     $('#active-notice').innerHTML = pending.length ? `<span>${t('{count} archived sessions are still active on this device.',{count:pending.length})}</span><button id="deactivate-archived">${t('Deactivate archived sessions')}</button>` : '';
-    if(discarded.length){$('#active-notice').insertAdjacentHTML('beforeend',`<span>${t('{count} discarded native copies still need cleanup.',{count:discarded.length})}</span><button id="open-trash">${t('Open Trash')}</button>`);$('#open-trash').onclick=()=>navigate('trash');}
+    if(discarded.length){$('#active-notice').insertAdjacentHTML('beforeend',`<span>${t('{count} local client copies of trashed sessions remain.',{count:discarded.length})}</span><button id="open-trash">${t('Open Trash')}</button>`);$('#open-trash').onclick=()=>navigate('trash');}
     if(pending.length)$('#deactivate-archived').onclick=()=>run(()=>api('/manage','POST',{action:'deactivate',branchIds:pending.map(s=>s.id)}));
     $('#list-count').textContent = t('{count} sessions', { count: state.list.sessionCount || 0 });
     const selected = state.list.items.filter(i => state.selected.has(i.id));
@@ -326,9 +346,9 @@ function renderList() {
     button('#archive-items',activeIds.length?t('Deactivate ({count})',{count:activeIds.length}):'Move to Trash',()=>activeIds.length?run(async()=>{await api('/manage','POST',{action:'deactivate',branchIds:activeIds});if(state.scope.startsWith('active:')){state.scope=PROJECTS;state.projectFocus=selected[0]?.projectId||INBOX;}}):trashDialog({itemIds:[...state.selected],view:state.scope==='archived'?'archived':'in-use'},selected.length));
     button('#restore-items','Restore',()=>restore({itemIds:[...state.selected]}));
     button('#deactivate-items','Deactivate',()=>run(()=>api('/manage','POST',{action:'deactivate',itemIds:[...state.selected],agent:state.scope.slice(7)})));
-    const row=i=>`<article class="session-row ${state.selected.has(i.id)?'checked':''}" data-item="${esc(i.id)}"><button class="row-open" data-open="${esc(i.id)}">${icon(i.kind)}<span class="row-text"><span class="row-title">${esc(i.name)} ${cloudMark(i)}</span><span class="row-meta">${itemMeta(i)} ${sourceTags(i)}</span></span><time class="row-date">${date(i.updatedAt)}</time></button>${`<input type="checkbox" data-select="${esc(i.id)}" aria-label="${esc(t('Select {name}',{name:i.name}))}" ${state.selected.has(i.id)?'checked':''}>`}</article>`;
+    const row=i=>`<article class="session-row ${state.selected.has(i.id)?'checked':''}" data-item="${esc(i.id)}" draggable="${organizing?'true':'false'}"><button class="row-open" data-open="${esc(i.id)}">${icon(i.kind)}<span class="row-text"><span class="row-title">${esc(i.name)} ${cloudMark(i)}</span><span class="row-meta">${itemMeta(i)} ${sourceTags(i)}</span></span><time class="row-date">${date(i.updatedAt)}</time></button>${`<input type="checkbox" data-select="${esc(i.id)}" aria-label="${esc(t('Select {name}',{name:i.name}))}" ${state.selected.has(i.id)?'checked':''}>`}</article>`;
     const groupHtml = g=>{const {limited,expanded,shown}=projectRows(g);return `<section class="list-group project-group" data-project-group="${esc(g.id||INBOX)}"><h2>${esc(g.name==='Scheduled & background'?t(g.name):g.name)}<span class="group-actions"><span>${g.items.length}</span><input type="checkbox" data-group-select="${esc(g.id)}" aria-label="${esc(t('Select group {name}',{name:g.name}))}"></span></h2>${shown.map(row).join('')}${foldButton(g,limited,expanded)}</section>`;};
-    const allGroups = groups(), older = state.scope===PROJECTS&&!state.query ? allGroups.filter(g=>isInactive(g.updatedAt)) : [], olderIds = new Set(older.map(g=>g.id));
+    const allGroups = groups(), older = state.scope===PROJECTS&&!state.query ? allGroups.filter(g=>isOlder(g.items)) : [], olderIds = new Set(older.map(g=>g.id));
     $('#session-list').innerHTML = allGroups.filter(g=>!olderIds.has(g.id)).map(groupHtml).join('') + (older.length ? `<section class="older-projects">${olderToggle(older.length)}${state.olderProjects?older.map(groupHtml).join(''):''}</section>` : '') || `<p class="empty">${t(state.query?'No matching sessions':'No sessions here.')}</p>`;
     bindOlderProjects();
     $$('[data-group-select]').forEach(el=>{const items=allGroups.find(g=>g.id===el.dataset.groupSelect)?.items||[],count=items.filter(i=>state.selected.has(i.id)).length;el.checked=!!items.length&&count===items.length;el.indeterminate=count>0&&count<items.length;el.onchange=()=>{for(const i of items)el.checked?state.selected.add(i.id):state.selected.delete(i.id);renderList();};});
@@ -342,7 +362,7 @@ function renderList() {
 function renderRail() {
     const top=$('#session-rail').scrollTop;
     const group=g=>{const {limited,expanded,shown}=projectRows(g);return `<section data-rail-project="${esc(g.id)}"><h2 class="rail-heading">${esc(g.name)}</h2>${shown.map(i=>`<button class="rail-row ${state.tree?.id===i.id?'selected':''}" data-rail="${esc(i.id)}" ${state.tree?.id===i.id?'aria-current="true"':''}>${icon(i.kind)}<span class="row-text"><span class="row-title">${esc(i.name)} ${cloudMark(i)}</span><span class="row-meta">${itemMeta(i)} ${sourceTags(i)}</span></span></button>`).join('')}${foldButton(g,limited,expanded)}</section>`;};
-    const all=groups(),older=state.scope===PROJECTS&&!state.query?all.filter(g=>isInactive(g.updatedAt)):[],ids=new Set(older.map(g=>g.id));
+    const all=groups(),older=state.scope===PROJECTS&&!state.query?all.filter(g=>isOlder(g.items)):[],ids=new Set(older.map(g=>g.id));
     $('#rail-content').innerHTML=all.filter(g=>!ids.has(g.id)).map(group).join('')+(older.length?olderToggle(older.length)+(state.olderProjects?older.map(group).join(''):''):'');
     $('#session-rail').scrollTop=top;
     $$('[data-rail]').forEach(el=>el.onclick=()=>openTree(el.dataset.rail));bindProjectFolds();bindOlderProjects();
@@ -401,6 +421,8 @@ function renderDetailActions() {
     const editable = !archived && state.scope !== 'archived';
     const dissolve = state.tree.nodes.some(n => !n.pending && n.chatIds.some(id => state.chats.has(id)));
     $('#detail-actions').innerHTML = state.chats.size ? `<span>${t('{count} selected', { count: state.chats.size })}</span>${editable && state.rangeEnd !== null && canCombine() ? '<button id="combine"></button>' : ''}${editable && state.rangeEnd !== null && dissolve ? '<button id="dissolve"></button>' : ''}<button id="clear-selection"></button>` : node ? `<button id="rename-node"></button>${editable ? '<button id="activate-node"></button>' : ''}${terminal && !p.active ? `${archived ? '<button id="restore-session"></button>' : ''}<button id="archive-path"></button>` : ''}` : '';
+    const nativeInstance=terminal&&p.active&&state.data.instances.find(i=>i.branchId===p.branchId&&i.applied&&!i.missing);
+    if(nativeInstance){const href=nativeInstance.agent==='claude'?'vscode://anthropic.claude-code/open?session='+encodeURIComponent(nativeInstance.nativeId):'vscode://openai.chatgpt/local/'+encodeURIComponent(nativeInstance.nativeId);$('#detail-actions').insertAdjacentHTML('beforeend',`<a class="native-client-link" href="${esc(href)}" title="${esc(t('Open the matching workspace in VS Code first.'))}">${t('Open in VS Code')}</a>`);}
     button('#activate-node', terminal && p.active ? 'Deactivate' : 'Activate', () => terminal && p.active ? run(()=>api('/manage','POST',{action:'deactivate',branchIds:[p.branchId]})) : activateDialog(p));
     button('#combine', 'Combine', combineDialog);
     button('#dissolve', 'Dissolve', () => run(async () => { await saveOrganization('dissolve'); clearRange(); }));
@@ -602,22 +624,22 @@ function revealNode(id) {
     applyCamera();
 }
 async function refresh({ checkCloud = false } = {}) {
-    if (opening) return;
+    if (opening || document.body.classList.contains('session-dragging')) return;
     const id = ++requestId, scope = state.scope;
     if (scope === 'trash') {
         const [trash, status] = await Promise.all([api('/trash'), api('/status')]);
-        if (id !== requestId || scope !== state.scope) return;
+        if (id !== requestId || scope !== state.scope || document.body.classList.contains('session-dragging')) return;
         Object.assign(state.data, trash, status); state.list = { items: [], sessionCount: 0 }; render(); return;
     }
     const [data, list, tree] = await Promise.all([api('/state'), api('/list?scope=' + encodeURIComponent(state.scope) + '&q=' + encodeURIComponent(state.query) + (checkCloud ? '&check=1' : '')), state.tree ? api('/trees/' + encodeURIComponent(state.tree.id) + '?view=' + (state.scope === 'archived' ? 'archived' : 'in-use')) : null]);
-    if (id !== requestId || scope !== state.scope) return;
+    if (id !== requestId || scope !== state.scope || document.body.classList.contains('session-dragging')) return;
     state.data = data; state.list = list;
     state.selected = new Set([...state.selected].filter(id => list.items.some(i => i.id === id)));
     if (tree && tree.view !== (scope === 'archived' ? 'archived' : 'in-use')) return;
     if (tree) {
         state.tree = tree.paths.length ? tree : null;
         if (!state.tree) { clearRange(); render(); return; } if (!route()) state.branchId = tree.paths[0]?.branchId;
-        if (!tree.nodes.some(n => n.id === state.nodeId)) state.nodeId = null;
+        if (!tree.nodes.some(n => n.id === state.nodeId)) state.nodeId = route()?.nodeIds.at(-1) || null;
         state.chats = new Set([...state.chats].filter(id => route()?.messages.some(m => m.id === id)));
     }
     const listTop = $('#session-list').scrollTop, scroll = $('#transcripts').scrollTop, graphTop = $('#graph-scroll').scrollTop, graphLeft = $('#graph-scroll').scrollLeft;
@@ -709,7 +731,7 @@ async function activateDialog(p) {
             if (!checked.complete) return false;
             const result = await api('/node-activation/activate', 'POST', { ...selection, cwd: form.get('cwd'), contextAcknowledgement: checked.fingerprint });
             state.branchId = result.branch.id; state.nodeId = result.nodeId; clearRange();
-            toast(t('Open the active continuation from your agent’s session list.'));
+            toast(t('Session activated. Use Open in VS Code to continue.'));
         }, 'Confirm activation');
         const ticket = modalVersion, cwd = $('[name=cwd]');
         bindDirectoryPicker();
@@ -741,7 +763,7 @@ async function conversionDialog(p, selection = {}, initialCwd = null) {
             const mode=form.get('mode'), cwd=form.get('cwd'), preview=previews[mode];
             if(!preview || checkedCwd!==cwd){await estimate();return false;}
             const result=await api('/convert','POST',{...selection,branchId:p.branchId,target,mode,cwd,fingerprint:preview.fingerprint,contextAcknowledgement:preview.budget.fingerprint});
-            state.scope='active:'+target;state.tree=await api('/trees/'+encodeURIComponent(result.branch.id));state.branchId=result.branch.id;state.nodeId=state.tree.paths.find(path=>path.branchId===result.branch.id)?.nodeIds.at(-1);camera.newView=true;clearRange();toast(t('Open the active continuation from your agent’s session list.'));
+            state.scope='active:'+target;state.tree=await api('/trees/'+encodeURIComponent(result.branch.id));state.branchId=result.branch.id;state.nodeId=state.tree.paths.find(path=>path.branchId===result.branch.id)?.nodeIds.at(-1);camera.newView=true;clearRange();toast(t('Session activated. Use Open in VS Code to continue.'));
         }, 'Activate');
         bindDirectoryPicker();
         const ticket=modalVersion, select=$('[name=mode]'), cwd=$('[name=cwd]');
@@ -777,19 +799,24 @@ async function showSource() {
         modal('Source & revisions', `${d.agent==='claude'?'<p class="dialog-copy">'+t('Native title source')+': '+t(({custom:'Custom title',automatic:'Automatic title','first-prompt':'First prompt'})[d.nativeTitleSource]||'Unknown')+'</p>':''}${d.warnings.map(w => `<p class="warning">${esc(errorText(w))}</p>`).join('')}${d.lineage.map(r => `<div class="source-entry">${esc(r.source.deviceName || t('Unknown device'))} · ${date(r.createdAt)}<br>${esc(r.source.cwd || d.cwd)}<br>${esc(r.source.client || '')}</div>`).join('')}`, null);
     } catch (e) { toast(e.message); }
 }
+function contextSelect(name,value,context,compact=false) {
+    const fallback=compact?context.defaultCompactAt:context.defaultWindow;
+    const values=[...new Set([...(context.windowOptions||[]),value].filter(n=>n>0))].sort((a,b)=>b-a);
+    return `<select name="${name}"><option value="" ${value==null?'selected':''}>${t('Default')} (${fallback?Number(fallback).toLocaleString():t('Model default')})</option>${values.map(n=>`<option value="${n}" ${n===value?'selected':''}>${n.toLocaleString()}${!compact&&n===context.maxWindow?' · '+t('Maximum'):!compact&&n===context.defaultWindow?' · '+t('Client default'):''}</option>`).join('')}</select>`;
+}
 async function settings(options = {}) {
     try {
         const c = await api('/settings'), edit = options.editConnection || !c.verified;
         const p = c.preferences, smart=c.intelligence||{},contexts=c.context||{};
         modal('Settings', `
           <section class="settings-card"><div class="settings-section-heading"><h3>${t('Git repository')}</h3>${!edit ? `<span class="setting-ok">✓ ${t('Connected')}</span><button type="button" id="modify-connection">${t('Modify')}</button>` : ''}</div>
-          <label class="field">${t('Repository address')}<input name="url" type="text" value="${esc(c.url)}" placeholder="git@github.com:owner/repository.git" ${!edit ? 'disabled' : ''}></label>
+          <div class="settings-input-action"><label class="field">${t('Repository address')}<input name="url" type="text" value="${esc(c.url)}" placeholder="git@github.com:owner/repository.git" ${!edit ? 'disabled' : ''}></label>
 
-          ${edit ? `<button type="button" id="verify-connection" class="primary">${t('Verify and connect')}</button>` : ''}
+          ${edit ? `<button type="button" id="verify-connection" class="primary">${t('Verify and connect')}</button>` : ''}</div><p class="settings-error" id="git-settings-error" role="alert"></p>
 </section>
           <section class="settings-card" id="intelligence-settings"><div class="settings-section-heading"><h3>${t('Smart organization')}</h3><span class="context-limit">GPT-6 Luna</span></div>
-          <label class="field">${t('OpenAI API key')}<input type="password" name="intelligenceKey" autocomplete="off" placeholder="${t(smart.hasKey?'Key saved':'Add an API key')}" value="" ${smart.hasKey?'disabled':''}></label>
-          <div class="intelligence-key-actions">${smart.hasKey?`<button type="button" id="remove-intelligence-key">${t('Remove key')}</button>`:`<button type="button" id="save-intelligence-key" disabled>${t('Verify and save')}</button>`}</div>
+          <div class="settings-input-action"><label class="field">${t('OpenAI API key')}<input type="password" name="intelligenceKey" autocomplete="off" placeholder="${t(smart.hasKey?'Key saved':'Add an API key')}" value="" ${smart.hasKey?'disabled':''}></label>
+          ${smart.hasKey?`<button type="button" id="remove-intelligence-key">${t('Remove key')}</button>`:`<button type="button" id="save-intelligence-key" disabled>${t('Verify key')}</button>`}</div><p class="settings-error" id="key-settings-error" role="alert"></p>
           <label class="timer-row"><span>${t('Classify and name new sessions')}</span><input type="checkbox" name="smartClassify" ${smart.classify?'checked':''} ${!smart.hasKey?'disabled':''}></label>
           <label class="timer-row"><span>${t('Name new branch points')}</span><input type="checkbox" name="smartNodes" ${smart.nameNodes?'checked':''} ${!smart.hasKey?'disabled':''}></label>
           <label class="timer-row smart-scheduling"><span>${t('Concurrent requests')}</span><select name="smartConcurrency">${[1,2,3,4].map(n=>`<option value="${n}" ${n===(smart.concurrency??2)?'selected':''}>${n===1?t('1 (serial)'):n}</option>`).join('')}</select></label>
@@ -797,25 +824,36 @@ async function settings(options = {}) {
           <p class="dialog-copy">${t('Selected messages are sent to OpenAI when enabled.')}</p><p id="intelligence-status" role="status"></p><button type="button" id="retry-intelligence" ${!smart.error?'hidden':''}>${t('Retry')}</button>
           </section>
           <section class="settings-card" id="native-context-settings"><h3>${t('Context windows')}</h3>
-          ${['codex','claude'].map(agent=>{const context=contexts[agent]||{};return `<div class="native-context-tool"><strong>${agent==='codex'?'Codex':'Claude Code'}${context.profile?' · '+esc(context.profile):''}</strong>${context.error?`<p class="dialog-copy">${esc(errorText(context.error))}</p>`:`<div class="context-inputs"><label class="field">${t(agent==='codex'?'Context window (tokens)':'Auto-compact window (tokens)')}<input type="number" name="${agent}Window" min="${agent==='claude'?100000:1}" max="${agent==='claude'?1000000:10000000}" step="1" placeholder="${t('Automatic')}" value="${context.window??''}"></label>${agent==='codex'?`<label class="field">${t('Auto-compact at (tokens)')}<input type="number" name="codexCompactAt" min="1" max="10000000" step="1" placeholder="${t('Automatic')}" value="${context.compactAt??''}"></label>`:''}</div>${agent==='codex'&&context.compactScope==='body_after_prefix'?`<p class="dialog-copy">${t('Compaction counts new context after the previous summary.')}</p>`:''}${agent==='claude'&&context.compactPercent?`<p class="dialog-copy">${t('Existing compaction percentage: {count}%',{count:context.compactPercent})}</p>`:''}<button type="button" id="save-context-${agent}">${t(agent==='codex'?'Save Codex':'Save Claude Code')}</button>`}</div>`;}).join('')}
-          <p class="dialog-copy">${t('Empty fields use client defaults. Changes apply to new client sessions; model limits still apply.')}</p><p id="context-settings-status" role="status"></p></section>
-          <section class="settings-card"><h3>${t('Trash')}</h3><label class="field">${t('Local recovery days')}<input type="number" name="trashRetentionDays" min="1" max="365" value="${p.trashRetentionDays}"></label></section><section class="settings-card"><h3>${t('Project contents')}</h3><label class="field">${t('Collapse older sessions')}<select name="projectFoldMode">${[['time','By age'],['count','By count'],['none','Show all']].map(([v,l])=>`<option value="${v}" ${p.projectFoldMode===v?'selected':''}>${t(l)}</option>`).join('')}</select></label>${p.projectFoldMode==='time'?`<label class="field">${t('Keep recent days')}<input type="number" name="projectFoldDays" min="1" max="365" value="${p.projectFoldDays}"></label>`:p.projectFoldMode==='count'?`<label class="field">${t('Visible sessions per project')}<input type="number" name="projectFoldCount" min="1" max="365" value="${p.projectFoldCount}"></label>`:''}</section><section class="settings-card"><h3>${t('Automatic updates')}</h3><div class="timer-row"><label><input type="checkbox" name="showScheduledSessions" ${p.showScheduledSessions?'checked':''}>${t('Show scheduled and background sessions')}</label></div>
-            <label class="timer-row collapse-setting"><span>${t('Collapse projects after')}</span><select name="inactiveProjectDays" aria-label="${t('Collapse projects after')}">${[[7,'One week'],[15,'Half a month'],[30,'One month'],[60,'Two months']].map(([days,label])=>`<option value="${days}" ${days===p.inactiveProjectDays?'selected':''}>${t(label)}</option>`).join('')}</select></label>
+          ${['codex','claude'].map(agent=>{const context=contexts[agent]||{};return `<div class="native-context-tool"><strong>${agent==='codex'?'Codex':'Claude Code'}${context.profile?' · '+esc(context.profile):''}</strong>${context.error?`<p class="dialog-copy">${esc(errorText(context.error))}</p>`:`<div class="context-inputs"><label class="field">${t(agent==='codex'?'Context window (tokens)':'Auto-compact window (tokens)')}${contextSelect(agent+'Window',context.window,context)}</label>${agent==='codex'?`<label class="field">${t('Auto-compact at (tokens)')}${contextSelect('codexCompactAt',context.compactAt,context,true)}</label>`:''}</div>${agent==='codex'&&context.compactScope==='body_after_prefix'?`<p class="dialog-copy">${t('Compaction counts new context after the previous summary.')}</p>`:''}${agent==='claude'&&context.compactPercent?`<p class="dialog-copy">${t('Existing compaction percentage: {count}%',{count:context.compactPercent})}</p>`:''}`}</div>`;}).join('')}
+          <p class="dialog-copy">${t('Changes are saved automatically. Context changes apply to new client sessions; model limits still apply.')}</p><p id="context-settings-status" role="status"></p></section>
+          <section class="settings-card"><h3>${t('Trash')}</h3><label class="field">${t('Local recovery days')}<input type="number" name="trashRetentionDays" min="1" max="365" value="${p.trashRetentionDays}"></label></section><section class="settings-card"><h3>${t('Project contents')}</h3><label class="field">${t('Collapse older sessions')}<select name="projectFoldMode">${[['time','By age'],['count','By count'],['none','Show all']].map(([v,l])=>`<option value="${v}" ${p.projectFoldMode===v?'selected':''}>${t(l)}</option>`).join('')}</select></label><label class="field" data-fold="time" ${p.projectFoldMode==='time'?'':'hidden'}>${t('Keep recent days')}<input type="number" name="projectFoldDays" min="1" max="365" value="${p.projectFoldDays}"></label><label class="field" data-fold="count" ${p.projectFoldMode==='count'?'':'hidden'}>${t('Visible sessions per project')}<input type="number" name="projectFoldCount" min="1" max="365" value="${p.projectFoldCount}"></label></section><section class="settings-card"><h3>${t('Automatic updates')}</h3><div class="timer-row"><label><input type="checkbox" name="showScheduledSessions" ${p.showScheduledSessions?'checked':''}>${t('Show scheduled and background sessions')}</label></div>
+
             ${[['localUpdate', 'Read local sessions', p.localUpdateEnabled, p.localUpdateMinutes], ['autoUpload', 'Automatically upload local changes', p.autoUploadEnabled, p.autoUploadMinutes]].map(([key,label,on,minutes]) => `<div class="timer-row"><label><input type="checkbox" name="${key}Enabled" ${on ? 'checked' : ''}>${t(label)}</label><label class="timer-interval"><input type="number" name="${key}Minutes" value="${minutes}" min="1" max="1440" ${!on ? 'disabled' : ''}><span>${t('minutes')}</span></label></div>`).join('')}
-            <button type="button" id="save-timers" hidden>${t('Save preferences')}</button>
           </section>`, null);
         $('#dialog-cancel').textContent = t('Close');
-        const busy = async (button, fn) => { if (working) return; working = true; button.disabled = true; const original = button.textContent; button.textContent = t(['verify-connection','save-intelligence-key'].includes(button.id)?'Verifying connection…':'Working…'); $('#dialog-error').textContent = '';
-            try { await fn(); } catch(e) { $('#dialog-error').textContent = e.message; } finally { working = false; renderCloudStatus(); if (button.isConnected) { button.disabled = false; button.textContent = original; } } };
-        const saveSmart=async body=>{state.data.intelligence=await api('/settings/intelligence','POST',body);await settings(options);renderCloudStatus();};
-        for(const agent of ['codex','claude']){const button=$('#save-context-'+agent);if(button)button.onclick=e=>busy(e.currentTarget,async()=>{const window=$(`[name=${agent}Window]`),compact=$('[name=codexCompactAt]');for(const input of [window,...(agent==='codex'?[compact]:[])])if(!input.checkValidity()){input.reportValidity();return;}await api('/settings/context','POST',{agent,fingerprint:contexts[agent].fingerprint,window:window.value===''?null:Number(window.value),...(agent==='codex'?{compactAt:compact.value===''?null:Number(compact.value)}:{})});await settings(options);$('#context-settings-status').textContent=t('Context settings saved. Reopen your client session to apply them.');});}
+        const busy = async (button, fn) => { if (working) return; working = true; button.disabled = true; const original = button.textContent; button.textContent = t(['verify-connection','save-intelligence-key'].includes(button.id)?'Verifying connection…':'Working…'); const error=$(['verify-connection'].includes(button.id)?'#git-settings-error':['save-intelligence-key','remove-intelligence-key'].includes(button.id)?'#key-settings-error':'#dialog-error');error.textContent = '';
+            try { await fn(); } catch(e) { error.textContent = e.message; } finally { working = false; renderCloudStatus(); if (button.isConnected) { button.disabled = false; button.textContent = original; } } };
+        const saveSmart=async body=>{state.data.intelligence=await api('/settings/intelligence','POST',body);if('apiKey' in body||body.removeKey)await settings(options);else renderIntelligence();renderCloudStatus();};
+        // Serialize saves so fast edits use the newest fingerprint and never overwrite each other.
+        let saveQueue=Promise.resolve();
+        const dialogError=$('#dialog-error'),contextStatus=$('#context-settings-status');
+        const queueSave=fn=>{saveQueue=saveQueue.then(()=>{dialogError.textContent='';return fn();}).catch(error=>{dialogError.textContent=error.message;});};
+        for(const agent of ['codex','claude'])for(const input of $$(`[name=${agent}Window]${agent==='codex'?', [name=codexCompactAt]':''}`))input.onchange=()=>{
+            const window=$(`[name=${agent}Window]`),compact=$('[name=codexCompactAt]');
+            const values={window:window.value===''?null:Number(window.value),...(agent==='codex'?{compactAt:compact.value===''?null:Number(compact.value)}:{})};
+            queueSave(async()=>{
+                contextStatus.textContent='';
+                try{contexts[agent]=await api('/settings/context','POST',{agent,fingerprint:contexts[agent].fingerprint,...values});contextStatus.textContent=t('Context settings saved. Reopen your client session to apply them.');}
+                catch(error){contextStatus.textContent=error.message;if(window.value===(values.window==null?'':String(values.window)))window.value=contexts[agent].window??'';if(agent==='codex'&&compact.value===(values.compactAt==null?'':String(values.compactAt)))compact.value=contexts[agent].compactAt??'';throw error;}
+            });
+        }
         if($('#save-intelligence-key')){
             $('[name=intelligenceKey]').oninput=e=>{$('#save-intelligence-key').disabled=!e.target.value.trim();};
             $('#save-intelligence-key').onclick=e=>busy(e.currentTarget,()=>saveSmart({apiKey:$('[name=intelligenceKey]').value.trim()}));
         }
         if($('#remove-intelligence-key'))$('#remove-intelligence-key').onclick=e=>busy(e.currentTarget,()=>saveSmart({removeKey:true}));
-        for(const [name,key] of [['smartClassify','classify'],['smartNodes','nameNodes']])$(`[name=${name}]`).onchange=async e=>{const input=e.currentTarget;input.disabled=true;try{await saveSmart({[key]:input.checked});}catch(error){input.checked=!input.checked;input.disabled=false;$('#dialog-error').textContent=error.message;}};
-        for(const [name,key] of [['smartConcurrency','concurrency'],['smartInterval','minIntervalSeconds']])$(`[name=${name}]`).onchange=async e=>{const input=e.currentTarget;if(!input.checkValidity()){input.reportValidity();return;}input.disabled=true;try{await saveSmart({[key]:Number(input.value)});}catch(error){input.disabled=false;$('#dialog-error').textContent=error.message;}};
+        for(const [name,key] of [['smartClassify','classify'],['smartNodes','nameNodes']])$(`[name=${name}]`).onchange=async e=>{const input=e.currentTarget;input.disabled=true;try{await saveSmart({[key]:input.checked});input.disabled=false;}catch(error){input.checked=!input.checked;input.disabled=false;$('#dialog-error').textContent=error.message;}};
+        for(const [name,key] of [['smartConcurrency','concurrency'],['smartInterval','minIntervalSeconds']])$(`[name=${name}]`).onchange=async e=>{const input=e.currentTarget;if(!input.checkValidity()){input.reportValidity();return;}input.disabled=true;try{await saveSmart({[key]:Number(input.value)});input.disabled=false;}catch(error){input.disabled=false;$('#dialog-error').textContent=error.message;}};
         $('#retry-intelligence').onclick=e=>busy(e.currentTarget,async()=>{state.data.intelligence=await api('/intelligence/retry','POST',{});renderIntelligence();});
         state.data.intelligence=smart;renderIntelligence();
         if ($('#modify-connection')) $('#modify-connection').onclick = () => settings({editConnection:true});
@@ -826,13 +864,19 @@ async function settings(options = {}) {
             button.onclick = e => busy(e.currentTarget, async () => { await api('/settings/verify', 'POST', {url: input.value.trim()}); await refresh(); await settings(); });
         }
         enhanceSelect($('[name=projectFoldMode]'));
-        for(const el of $$('[name=projectFoldMode],[name=projectFoldDays],[name=projectFoldCount],[name=trashRetentionDays]'))el.onchange=async()=>{try{await api('/settings/timers','POST',{[el.name]:el.name==='projectFoldMode'?el.value:Number(el.value)});state.expandedProjects.clear();await refresh();await settings(options);}catch(e){$('#dialog-error').textContent=e.message;}};
-        const timers = () => ({inactiveProjectDays:Number($('[name=inactiveProjectDays]').value),showScheduledSessions:$('[name=showScheduledSessions]').checked, ...Object.fromEntries(['localUpdate','autoUpload'].flatMap(k=>[[k+'Enabled',$(`[name=${k}Enabled]`).checked],[k+'Minutes',Number($(`[name=${k}Minutes]`).value)]]))});
-        const validateTimers=()=>{const v=timers();for(const k of ['localUpdate','autoUpload']) $(`[name=${k}Minutes]`).disabled=!v[k+'Enabled'];$('#save-timers').hidden=Object.entries(v).every(([key,value])=>p[key]===value)||Object.entries(v).some(([k,n])=>k.endsWith('Minutes')&&(!Number.isInteger(n)||n<1||n>1440));};
-        enhanceSelect($('[name=inactiveProjectDays]'));
-        for(const el of $$('[name=showScheduledSessions],[name=inactiveProjectDays]')) el.onchange=async()=>{el.disabled=true;try{await api('/settings/timers','POST',el.type==='checkbox'?{showScheduledSessions:el.checked}:{inactiveProjectDays:Number(el.value)});await refresh();await settings(options);}catch(e){$('#dialog-error').textContent=e.message;el.disabled=false;}};
-        $$('.timer-row input').forEach(el=>el.addEventListener('input',validateTimers));validateTimers();
-        $('#save-timers').onclick=e=>busy(e.currentTarget,async()=>{await api('/settings/timers','POST',timers());await refresh();await settings(options);});
+        for(const el of $$('[name=projectFoldMode],[name=projectFoldDays],[name=projectFoldCount],[name=trashRetentionDays]'))el.onchange=()=>{
+            if(!el.checkValidity()){el.reportValidity();return;}
+            const key=el.name,value=key==='projectFoldMode'?el.value:Number(el.value);
+            if(key==='projectFoldMode')for(const label of $$('[data-fold]'))label.hidden=label.dataset.fold!==value;
+            queueSave(async()=>{await api('/settings/timers','POST',{[key]:value});state.expandedProjects.clear();await refresh();});
+        };
+        for(const el of $$('[name=showScheduledSessions],[name=localUpdateEnabled],[name=localUpdateMinutes],[name=autoUploadEnabled],[name=autoUploadMinutes]'))el.onchange=()=>{
+            if(!el.checkValidity()){el.reportValidity();return;}
+            const value=el.type==='checkbox'?el.checked:Number(el.value),key=el.name;
+            for(const name of ['localUpdate','autoUpload'])$(`[name=${name}Minutes]`).disabled=!$(`[name=${name}Enabled]`).checked;
+            queueSave(async()=>{await api('/settings/timers','POST',{[key]:value});await refresh();});
+        }
+
     } catch(e) { toast(e.message); }
 }
 function information() {
@@ -855,7 +899,7 @@ async function sync(direction = 'pull'){
 $('#language-toggle').onclick=()=>{setLocale(locale()==='zh'?'en':'zh');render();};
 $('#about').onclick=about;$('#information').onclick=information;$('#sync').onclick=()=>sync('pull');$('#upload').onclick=()=>sync('push');$('#settings').onclick=()=>settings();
 $('#push-zone').onmouseenter=$('#push-zone').onfocusin=showPendingUploads;
-$('#push-zone').onmouseleave=$('#push-zone').onfocusout=e=>{if(!$('#push-zone').contains(e.relatedTarget))pendingTimer=setTimeout(()=>{pendingTicket++;hideSyncPanel($('#pending-uploads'));},180);};
+$('#push-zone').onmouseleave=$('#push-zone').onfocusout=e=>{if(!$('#push-zone').contains(e.relatedTarget)&&!pendingSelection.size&&!working)pendingTimer=setTimeout(()=>{if(pendingSelection.size||working)return;pendingTicket++;hideSyncPanel($('#pending-uploads'));},180);};
 document.addEventListener('keydown',e=>{if(e.key==='Escape'){hideSyncPanel($('#pending-uploads'));$('#sync-details').setAttribute('aria-expanded','false');}});
 window.addEventListener('resize',()=>{for(const [panel,anchor]of [['pending-uploads','push-zone']])if(!$('#'+panel).hidden)positionSyncPanel($('#'+panel),$('#'+anchor));});
 
@@ -913,3 +957,10 @@ try {
         } catch { /* Explicit Update reports connection errors. */ }
     }, 5000);
 } catch (e) { toast(e.message); }
+
+installSessionDrag({
+    canDrag:()=>state.scope===PROJECTS&&!state.tree&&!working&&state.connected!==false,
+    items:()=>state.list.items,selected:()=>state.selected,projects:()=>state.data.projects,
+    expandOlder:()=>{state.olderProjects=true;renderNavigation();},
+    move:(itemIds,projectId)=>run(async()=>{await api('/move','POST',{itemIds,projectId});state.selected.clear();state.projectFocus=projectId;state.expandedProjects.add(projectId);})
+});

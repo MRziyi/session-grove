@@ -287,7 +287,9 @@ export class Store {
         for (const n of nodes)
             visit(n.revisionId);
         const graph = { schema: 3, layouts: this.all('layout').filter(l => branchIds.has(l.rootId)), projects: [...this.all('project'), ...(branches.some(b => b.projectId === INBOX_ID) ? [inboxProject()] : [])], branches, nodes, revisions: [...revisions.values()] };
-        return this.local('trashState')||this.local('trashPending')?.length ? retainedGraph(withForkMetadata(graph,h=>this.objectStatement.get(h)?.body,claudeFork,deletedIds(this,graph)),deletedIds(this,graph)) : graph;
+        const removed=deletedIds(this,graph);
+        if(this.localArchivesOnly)for(const b of graph.branches)if(b.archived||b.projectId&&this.find('project',b.projectId)?.archived)removed.add(b.id);
+        return removed.size ? retainedGraph(withForkMetadata(graph,h=>this.objectStatement.get(h)?.body,claudeFork,removed),removed) : graph;
     }
     merge(graph, objects, { latest = false, protectedIds = new Set() } = {}) {
         assert([1, 2, 3].includes(graph?.schema) && Array.isArray(graph.projects) && Array.isArray(graph.branches) && Array.isArray(graph.revisions), '不兼容的同步格式');

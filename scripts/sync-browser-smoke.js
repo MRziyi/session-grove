@@ -5,6 +5,7 @@ import {createApp} from '../src/server.js';import {codexSample} from '../src/dem
 const root=fs.mkdtempSync(path.join(os.tmpdir(),'grove-sync-browser-')),app=createApp({root:path.join(root,'app'),roots:{codex:path.join(root,'codex'),claude:path.join(root,'claude')},guard:()=>{}});
 const b=app.store.branch(null,'Active local session','codex',codexSample(root,[['Context','Ready']])),queued=app.store.branch(null,'Waiting upload','codex',codexSample(root,[['Other context','Other answer']]));app.native.setActive(b.id,root,true);app.native.apply([b.id]);
 app.autoSync.readConfig=()=>({url:'https://example.invalid/isolated-test'});app.autoSync.unlock('isolated-browser-key');
+const mistake=app.store.branch(null,'Discard this accidental session','codex',codexSample(root,[['Accidental','Draft']]));
 const pull=Promise.withResolvers(),push=Promise.withResolvers();let failPull=false,unchangedPull=false;
 app.autoSync.run=async(store,config,key,direction,ids)=>{
  const metrics=app.autoSync.cloud.metrics;metrics.requests+=3;metrics.bytesReceived+=4096;
@@ -30,6 +31,14 @@ try{
  assert.ok(await evaluate('!!document.querySelector(".session-state.active-state")&&!!document.querySelector(".session-state.modified-state")'));
  assert.ok(await evaluate('(()=>{const a=document.querySelector("#sync").getBoundingClientRect(),b=document.querySelector("#upload").getBoundingClientRect();return Math.abs(a.right-b.left)<=2&&Math.abs(a.height-b.height)<1})()'));
  await hover('#push-zone');await wait('document.querySelector("#pending-uploads").textContent.includes("Waiting upload")');await fits('#pending-uploads');
+ await evaluate(`document.querySelector('[data-pending-select="${mistake.id}"]').click()`);
+ assert.equal(await evaluate('document.querySelector("#pending-actions").hidden'),false);
+ await call('Input.dispatchMouseEvent',{type:'mouseMoved',x:15,y:400});await new Promise(r=>setTimeout(r,250));
+ assert.equal(await evaluate('document.querySelector("#pending-uploads").hidden'),false,'selection keeps the pending panel open');
+ await evaluate('document.querySelector("#pending-actions summary").click();document.querySelector("#discard-pending").click()');
+ await wait(`!document.querySelector('[data-pending-select="${mistake.id}"]')&&document.querySelector('#pending-uploads').textContent.includes('Waiting upload')`);
+ assert.ok(!app.store.find('branch',mistake.id));assert.ok((app.store.local('trashEntries')||[]).some(e=>e.rescueFor==='discard-pending'));
+
  await evaluate('document.querySelector("#upload").click()');await wait('document.querySelector("#sync").dataset.operation==="running"');
  assert.equal(await evaluate('document.querySelector("#upload").disabled'),true);assert.equal(await evaluate('document.querySelector("#upload").dataset.operation'), '');
  assert.ok(await evaluate('document.querySelector("#sync-substatus").textContent.includes("40%")'));await fits('#sync-control');await fits('#cloud-status');

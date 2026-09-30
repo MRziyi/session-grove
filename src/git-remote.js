@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import os from 'node:os';
 import { spawn } from 'node:child_process';
 import { assert } from './util.js';
 
@@ -16,16 +17,16 @@ export class GitRemote {
         this.directory = directory; this.url = url; this.onProgress = onProgress;
         this.controller = new AbortController();
     }
-    async run(args, { accepted = [0], progress = false, input = null } = {}) {
+    async run(args, { accepted = [0], progress = false, input = null, env = {}, timeout = 10 * 60 * 1000 } = {}) {
         this.controller.signal.throwIfAborted();
         return new Promise((resolve, reject) => {
             const child = spawn('git', ['-c', 'core.hooksPath=/dev/null', '-c', 'commit.gpgsign=false', '-c', 'core.quotePath=false', '-c', 'core.pager=cat', ...args], {
-                cwd: this.directory, env: { ...process.env, GIT_TERMINAL_PROMPT: '0', GIT_SSH_COMMAND: 'ssh -o BatchMode=yes -o ConnectTimeout=15', GIT_CONFIG_NOSYSTEM: '1' },
+                cwd: this.directory, env: { ...process.env, GIT_TERMINAL_PROMPT: '0', GIT_SSH_COMMAND: 'ssh -o BatchMode=yes -o ConnectTimeout=15', GIT_CONFIG_NOSYSTEM: '1', ...env },
                 windowsHide: true, stdio: [input === null ? 'ignore' : 'pipe', 'pipe', 'pipe'], signal: this.controller.signal,
             });
             if (input !== null) { child.stdin.on('error', () => {}); child.stdin.end(input); }
             let stdout = '', stderr = '', progressBuffer = '', settled = false, phase = '', phaseStarted = Date.now();
-            const timer = setTimeout(() => child.kill('SIGTERM'), 10 * 60 * 1000); timer.unref();
+            const timer = setTimeout(() => child.kill('SIGTERM'), timeout); timer.unref();
             child.stdout.on('data', chunk => { stdout += chunk; if (stdout.length > 32 * 1024 * 1024) child.kill(); });
             child.stderr.on('data', chunk => {
                 stderr = (stderr + chunk).slice(-16384);
@@ -44,7 +45,7 @@ export class GitRemote {
                 }
             });
             child.on('error', e => { settled = true; clearTimeout(timer); reject(e); });
-            child.on('close', code => { clearTimeout(timer); if (settled) return; if (accepted.includes(code)) resolve({ stdout: stdout.trim(), code }); else reject(Object.assign(new Error('Git ' + args[0] + ' failed: ' + (stderr.trim() || 'process interrupted')), { gitExitCode: code })); });
+            child.on('close', code => { clearTimeout(timer); if (settled) return; if (accepted.includes(code)) resolve({ stdout: stdout.trim(), stderr, code }); else reject(Object.assign(new Error('Git ' + args[0] + ' failed: ' + (stderr.trim() || 'process interrupted')), { gitExitCode: code })); });
         });
     }
     async init() {
@@ -54,6 +55,28 @@ export class GitRemote {
         await this.run(['config', 'user.email', 'grove@localhost']);
         await this.run(['config', 'core.autocrlf', 'false']);
         await this.run(['config', 'remote.origin.url', this.url]);
+    }
+    async verify() {
+        // A disposable partial repository keeps shallow verification out of the sync cache.
+        const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'grove-git-verify-'));
+        const probe = new GitRemote(directory, this.url);
+        probe.controller = this.controller;
+        try {
+            await probe.init();
+            const refs = await probe.run(['-c', 'protocol.version=2', 'ls-remote', 'origin'], {env:{GIT_TRACE_PACKET:'1'},timeout:30000});
+            if (!refs.stdout) return;
+            assert(refs.stdout.split('\n').some(line => line.endsWith('\trefs/heads/main')), 'Data repository must be empty or use a Grove main branch.');
+            // Git otherwise silently ignores an unsupported filter and downloads everything.
+            assert(/fetch=[^\r\n]*\bfilter\b/.test(refs.stderr), 'This Git server does not support lightweight verification (partial clone).');
+            await probe.run(['-c', 'protocol.version=2', 'fetch', '--depth=1', '--filter=tree:0', '--no-tags', 'origin', 'refs/heads/main'], {timeout:30000});
+            const files = await probe.run(['ls-tree', 'FETCH_HEAD'], {timeout:30000});
+            const rows = files.stdout.split('\n');
+            assert(rows.every(line => /^(?:100644 blob [a-f0-9]+\t(?:grove\.json|trash\.json)|040000 tree [a-f0-9]+\ttrees)$/.test(line)), 'Unexpected file or link in Git data repository.');
+            assert(rows.some(line => line.endsWith('\tgrove.json')), 'This repository is not a Grove data repository.');
+            const marker = await probe.run(['show', 'FETCH_HEAD:grove.json'], {timeout:30000});
+            const format = JSON.parse(marker.stdout);
+            assert(format.format === 'session-grove-git' && format.schema === 1, 'This repository is not a Grove data repository.');
+        } finally { fs.rmSync(directory, {recursive:true,force:true}); }
     }
     async fetch() {
         // Exit 2 means there is no main branch, not a connection/authentication failure.

@@ -92,6 +92,8 @@ test('activate an internal node includes it, preserves suffixes, labels native t
     assert.deepEqual(route.messages.map(m => m.text), ['Setup', 'Ready', 'New continuation', 'New response']);
     assert.equal(route.nodeIds[0], node.id); assert.equal(store.raw(store.get('branch', b.id).head), sourceRaw);
     assert.equal(graph.nodes.find(n => n.id === route.nodeIds.at(-1)).name, 'Next work');
+    assert.equal((await api('manage',{action:'deactivate',branchIds:[child.id]})).status,200);
+    assert.ok(store.treeGraph(b.id).nodes.some(n=>n.id===route.nodeIds.at(-1)&&n.count===2),'a continuation with new chats survives deactivation');
     assert.equal((await api('trash', { branchIds: [b.id], nodeId: node.id, version: graph.version })).status, 409);
 });
 test('terminal activation forks without changing the source and Claude receives the exact title', async t => {
@@ -164,4 +166,22 @@ test('Claude intermediate nodes materialize their prefix without the later reply
     const result=await api('node-activation/activate',{...selection,contextAcknowledgement:check.fingerprint});assert.equal(result.status,201,JSON.stringify(result.value));
     const instance=store.instances().find(i=>i.branchId===result.value.branch.id);
     const raw=fs.readFileSync(instance.file,'utf8');assert.match(raw,/Intermediate/);assert.doesNotMatch(raw,/Later question|Later reply/);
+});
+
+test('deactivation removes only the empty activation placeholder and preserves explicit forks',async t=>{
+    const {app,root,api}=await setup(t),store=app.store;
+    for(const agent of ['codex','claude']){
+        const b=store.branch(null,'Placeholder '+agent,agent,(agent==='codex'?codexSample:claudeSample)(root,[['Question','Answer']]));
+        const graph=store.treeGraph(b.id),target={branchId:b.id,nodeId:graph.nodes.at(-1).id,version:graph.version,cwd:root};
+        const preview=(await api('node-activation/check',target)).value;
+        const activated=await api('node-activation/activate',{...target,contextAcknowledgement:preview.fingerprint});
+        assert.equal(activated.status,201);const child=activated.value.branch,empty='empty-'+child.id;
+        assert.ok(store.treeGraph(b.id).nodes.some(n=>n.id===empty));
+        const deactivated=await api('manage',{action:'deactivate',branchIds:[child.id]});assert.equal(deactivated.status,200);
+        assert.ok(!store.treeGraph(b.id).nodes.some(n=>n.id===empty));
+        assert.equal(store.treeGraph(b.id).chatCount,2);
+        // Explicit, unactivated forks still have their editable endpoint.
+        const fork=store.fork(b.id,{name:'Deliberate fork',end:store.parsed(b.head,agent).checkpoints.at(-1).end});
+        assert.ok(store.treeGraph(b.id).nodes.some(n=>n.id==='empty-'+fork.id));
+    }
 });

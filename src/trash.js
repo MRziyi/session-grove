@@ -29,6 +29,7 @@ export function isTrashed(store, branchId) {
 }
 export function nativeSuppressed(store, agent, nativeId) {
     if (!nativeId) return false;
+    if(store.memo('discarded-native-identities',()=>new Set((store.local('discardedNative')||[]).map(i=>i.agent+':'+i.nativeId))).has(agent+':'+nativeId))return true;
     const kept = store.memo(
         'trash-kept-native-identities',
         () =>
@@ -325,6 +326,13 @@ export function cleanupLocal(store) {
             removed,
         ),
         refs = new Set(bodyRefs(kept));
+    // Live trees keep their last acknowledged bodies available for local Discard.
+    // Removed trees recover from Trash instead, so their body reclamation still works.
+    for(const row of store.db.prepare("SELECT key,body FROM local WHERE key LIKE 'git-undo:%'").all()){
+        const rootId=row.key.split(':').at(-1);
+        if(removed.has(rootId)||!store.find('branch',rootId))continue;
+        const baseline=JSON.parse(row.body);if(baseline?.graph)for(const ref of bodyRefs(baseline.graph))refs.add(ref);
+    }
     store.transaction(() => {
         for (const r of kept.revisions)
             if (!store.getStatement.get('revision', r.id)) store.put('revision', r);

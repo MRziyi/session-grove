@@ -25,7 +25,7 @@ function tomlLines(raw){
 }
 function scalars(raw,section=''){
     const result={};
-    for(const row of tomlLines(raw))if(row.editable&&row.section===section){const m=row.line.match(/^\s*(profile|model_context_window|model_auto_compact_token_limit|model_auto_compact_token_limit_scope)\s*=\s*("[^"\n]*"|'[^'\n]*'|[\d_]+)\s*(?:#.*)?$/);if(m)result[m[1]]=/^\d/.test(m[2])?Number(m[2].replaceAll('_','')):m[2].slice(1,-1);}
+    for(const row of tomlLines(raw))if(row.editable&&row.section===section){const m=row.line.match(/^\s*(model|profile|model_context_window|model_auto_compact_token_limit|model_auto_compact_token_limit_scope)\s*=\s*("[^"\n]*"|'[^'\n]*'|[\d_]+)\s*(?:#.*)?$/);if(m)result[m[1]]=/^\d/.test(m[2])?Number(m[2].replaceAll('_','')):m[2].slice(1,-1);}
     return result;
 }
 export function patchContextToml(raw,values){
@@ -55,9 +55,39 @@ export class NativeContextSettings{
         assert(settings&&typeof settings==='object'&&!Array.isArray(settings)&&(!settings.env||typeof settings.env==='object'&&!Array.isArray(settings.env)),'Claude settings.json must contain an object.');
         return {file,raw,settings,fingerprint:hash(raw)};
     }
+    presets(agent,source){
+        const positive=v=>Number.isSafeInteger(Number(v))&&Number(v)>0?Number(v):null;
+        let defaultWindow=null,maxWindow=null,defaultCompactAt=null;
+        if(agent==='codex'){
+            // https://developers.openai.com/codex/config-reference/
+            // API capacity is not necessarily the window exposed by the installed client.
+            let models=[];try{models=JSON.parse(read(path.join(this.roots.codex,'models_cache.json'))).models||[];}catch{}
+            const model=Array.isArray(models)?models.find(m=>(m.slug||m.id)===source.values.model):null;
+            defaultWindow=positive(model?.context_window);
+            maxWindow=positive(model?.max_context_window)||defaultWindow;
+            defaultCompactAt=positive(model?.auto_compact_token_limit);
+            if(source.scope){
+                const base=read(path.join(this.roots.codex,'config.toml')),inherited={...scalars(base),...scalars(base,'[profiles.'+source.scope+']')};
+                defaultWindow=positive(inherited.model_context_window)||defaultWindow;
+                defaultCompactAt=positive(inherited.model_auto_compact_token_limit)||defaultCompactAt;
+            }
+        }else{
+            // https://code.claude.com/docs/en/model-config#extended-context
+            const env=source.settings.env||{},model=source.settings.model||'';
+            const disabled=env.CLAUDE_CODE_DISABLE_1M_CONTEXT==='1';
+            const extended=/\[1m\]|(?:opus|sonnet)[- ](?:4[-.][789]|5)|fable/i.test(model);
+            const standard=/haiku|(?:opus|sonnet)[- ]4/.test(model);
+            const modelWindow=disabled?200000:extended?1000000:standard?200000:null;
+            defaultWindow=positive(source.settings.autoCompactWindow)||modelWindow;
+            maxWindow=modelWindow||1000000;
+        }
+        const windowOptions=[...new Set([maxWindow,defaultWindow,1000000,900000,800000,500000,400000,272000,200000,128000,100000].filter(n=>n&&(!maxWindow||n<=maxWindow)))].sort((a,b)=>b-a);
+        return {defaultWindow,defaultCompactAt,maxWindow,windowOptions};
+    }
     read(agent){
         const source=this.source(agent),positive=value=>Number.isSafeInteger(Number(value))&&Number(value)>0?Number(value):null;
-        return agent==='codex'?{agent,fingerprint:source.fingerprint,profile:source.scope,window:positive(source.values.model_context_window),compactAt:positive(source.values.model_auto_compact_token_limit),compactScope:source.values.model_auto_compact_token_limit_scope||'total'}:{agent,fingerprint:source.fingerprint,window:positive(source.settings.env?.CLAUDE_CODE_AUTO_COMPACT_WINDOW),compactPercent:positive(source.settings.env?.CLAUDE_AUTOCOMPACT_PCT_OVERRIDE)};
+        const presets=this.presets(agent,source);
+        return agent==='codex'?{...presets,agent,fingerprint:source.fingerprint,profile:source.scope,window:positive(source.values.model_context_window),compactAt:positive(source.values.model_auto_compact_token_limit),compactScope:source.values.model_auto_compact_token_limit_scope||'total'}:{...presets,agent,fingerprint:source.fingerprint,window:positive(source.settings.env?.CLAUDE_CODE_AUTO_COMPACT_WINDOW),compactPercent:positive(source.settings.env?.CLAUDE_AUTOCOMPACT_PCT_OVERRIDE)};
     }
     status(){return Object.fromEntries(['codex','claude'].map(agent=>{try{return [agent,this.read(agent)];}catch(error){return [agent,{agent,error:error.message}];}}));}
     save(body){

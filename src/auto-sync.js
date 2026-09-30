@@ -62,7 +62,7 @@ export class AutoSync {
         if(this.progressPhase!==value.phase || value.completed===value.total || at-(this.progressAt||0)>=200) { this.progressAt=at;this.progressPhase=value.phase;this.onOperation?.(this.operation); }
     }
     async fallback() {
-        if (this.store.local('syncStarted') === false || !preferences(this.store).autoUploadEnabled || this.running || this.closed || !this.readConfig()?.url || this.passphrase === null || this.retryAt > Date.now()) return;
+        if (this.migrating || this.store.local('syncStarted') === false || !preferences(this.store).autoUploadEnabled || this.running || this.closed || !this.readConfig()?.url || this.passphrase === null || this.retryAt > Date.now()) return;
         if (this.needsReview) return;
         await this.beforeUpload?.();
         if (!this.cloud.dirtyIds().length && !this.trashPending()) return;
@@ -119,7 +119,7 @@ export class AutoSync {
             const ids = this.cloud.dirtyIds();
             // Cleanup has already published a frozen snapshot of all surviving data.
             // New local changes stay queued instead of triggering a second upload pass.
-            const result = cleanup?.rebuilt ? cleanup : this.run ? await this.run(this.store, this.readConfig(), this.passphrase, 'push', ids) : (ids.length || this.trashPending()) ? await this.cloud.publish(ids, this.passphrase, { catalogFresh: true }) : { uploaded: 0, published: 0 };
+            const result = cleanup?.rebuilt ? cleanup : this.run ? await this.run(this.store, this.readConfig(), this.passphrase, 'push', ids) : (ids.length || this.trashPending() || this.cloud.archiveCleanupNeeded?.()) ? await this.cloud.publish(ids, this.passphrase, { catalogFresh: true }) : { uploaded: 0, published: 0 };
             if (cleanup?.rebuilt) { const cache = this.cloud.cache(); cache.lastUpload = now(); this.cloud.save(cache); }
             this.queue = new Set(this.cloud.dirtyIds()); this.store.local('uploadQueue', [...this.queue]);
             this.store.local('lastSync', { at: now(), ...result }); this.needsReview = null;

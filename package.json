@@ -1,6 +1,6 @@
 {
   "name": "session-grove",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "private": true,
   "description": "A project-centered workspace for branching and managing agent sessions.",
   "type": "module",
@@ -18,7 +18,7 @@
     "test:conversion": "node scripts/conversion-smoke.js",
     "test:codex": "node scripts/codex-smoke.js",
     "test:codex-fork": "node scripts/codex-fork-smoke.js",
-    "test:browser": "node scripts/node-browser-smoke.js && node scripts/sync-browser-smoke.js",
+    "test:browser": "node scripts/node-browser-smoke.js && node scripts/sync-browser-smoke.js && node scripts/session-drag-browser-smoke.js",
     "test:node-browser": "node scripts/node-browser-smoke.js",
     "test:sync-browser": "node scripts/sync-browser-smoke.js",
     "bench:sync": "node --expose-gc scripts/sync-benchmark.js",

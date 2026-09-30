@@ -22,6 +22,11 @@ try{
  const wait=async expression=>{for(let i=0;i<100;i++){if(await evaluate(expression))return;await new Promise(r=>setTimeout(r,100));}throw Error('Timeout '+expression+' '+JSON.stringify(await evaluate('({hidden:document.hidden,dialog:document.querySelector("#dialog")?.open,toast:document.querySelector("#toast")?.textContent,rows:document.querySelectorAll("[data-trash-select]").length})'))) ;};
  await call('Emulation.setFocusEmulationEnabled',{enabled:true});await call('Page.bringToFront');await call('Runtime.enable');await call('Emulation.setDeviceMetricsOverride',{width:1512,height:982,deviceScaleFactor:1,mobile:false});await wait('document.querySelector("[data-open]")');await evaluate('document.querySelector("[data-open]").click()');await wait('document.querySelectorAll("[data-node]").length>10');
  assert.equal(await evaluate(`document.querySelector('[data-scope="active:codex"]').classList.contains('selected')`),true);
+ for(const toggle of ['#toggle-rail','#toggle-rail','#toggle-navigation','#toggle-navigation']){
+  await evaluate(`document.querySelector('${toggle}').click()`);
+  assert.ok(await evaluate('(()=>{const nav=document.querySelector(".navigation"),footer=document.querySelector(".nav-footer");return getComputedStyle(footer).display==="none"?parseFloat(getComputedStyle(nav).paddingBottom)===0:Math.abs(nav.getBoundingClientRect().bottom-footer.getBoundingClientRect().bottom)<1})()'),'sidebar footer has no bottom gap in either pane layout');
+ }
+
  assert.ok(await evaluate('(()=>{const a=document.querySelector(".transcript-panel").getBoundingClientRect(),b=document.querySelector(".graph-panel").getBoundingClientRect(),p=parseFloat(getComputedStyle(document.querySelector("#editor")).paddingLeft);return Math.abs(b.left-a.right-p)<1})()'));
  const dividerStart=await evaluate('(()=>{const r=document.querySelector("#ribbon-lane").getBoundingClientRect();return{x:r.x+r.width/2,y:r.y+r.height/2}})()');
  await call('Input.dispatchMouseEvent',{type:'mousePressed',button:'left',clickCount:1,...dividerStart});await call('Input.dispatchMouseEvent',{type:'mouseMoved',x:dividerStart.x+75,y:dividerStart.y,button:'left',buttons:1});
@@ -65,7 +70,8 @@ try{
   const active=store.instances().find(i=>i.applied&&i.title===title),fresh=store.treeGraph(parent.id),endpoint=fresh.paths.find(p=>p.branchId===active.branchId).nodeIds.at(-1);
   await clickNode(endpoint);assert.equal(await evaluate('document.querySelector("#activate-node").textContent'),'Deactivate');
   await evaluate('document.querySelector("#activate-node").click()');await wait('document.querySelector("#activate-node")?.textContent==="Activate"');
-  const pendingName=await evaluate(`document.querySelector('[data-node="${endpoint}"] .node-title').textContent`);
+  assert.equal(await evaluate(`!!document.querySelector('[data-node="${endpoint}"]')`),false,'empty continuation disappears after deactivation');
+  const pendingName=await evaluate('document.querySelector(".graph-node.selected .node-title").textContent');
   await evaluate('document.querySelector("#activate-node").click()');await wait('document.querySelector("#dialog").open&&document.querySelector("#activation-title")?.textContent.length&&!document.querySelector("#dialog-submit").disabled');
   assert.ok((await evaluate('document.querySelector("#activation-title").textContent')).endsWith(pendingName));
   await evaluate('document.querySelector("#dialog-close").click()');
@@ -75,7 +81,7 @@ try{
  fs.writeFileSync(path.join(root,'app','git-sync.json'),JSON.stringify({provider:'git',url:'git@example.invalid:owner/data.git',verified:true}));
  for(const selector of ['#about','#settings','#information']){
   await evaluate(`document.querySelector('${selector}').click()`);await wait('document.querySelector("#dialog").open');
-  if(selector==='#settings')assert.ok(await evaluate('(()=>{const row=document.querySelector(".collapse-setting"),s=row.querySelector(".select-control").getBoundingClientRect(),l=row.querySelector("span").getBoundingClientRect();return l.right<=s.left&&Math.abs(l.y+l.height/2-s.y-s.height/2)<2})()'));
+  if(selector==='#settings')assert.equal(await evaluate('document.querySelector("[name=codexWindow]").tagName'),'SELECT');
   assert.equal(await evaluate('document.querySelector(".dialog-actions").hidden'),true);
   if(selector==='#settings'){
    assert.equal(await evaluate('document.querySelector("[name=smartClassify]").disabled&&document.querySelector("[name=smartNodes]").disabled'),true);
@@ -90,15 +96,23 @@ try{
    assert.equal(await evaluate('document.querySelector("[name=intelligenceKey]").value'),'');
    assert.equal(await evaluate('document.querySelector("[name=intelligenceKey]").disabled&&!document.querySelector("#save-intelligence-key")'),true);
    assert.ok(!(await evaluate('document.querySelector("#dialog").innerHTML')).includes('browser-test-secret'));
+   assert.equal(await evaluate('document.querySelector("[name=smartClassify]").checked&&document.querySelector("[name=smartNodes]").checked'),true,'verified keys enable both smart features');
+   await evaluate('document.querySelector("[name=smartNodes]").click()');await wait('!document.querySelector("[name=smartNodes]").checked&&!document.querySelector("[name=smartNodes]").disabled');
    await evaluate('document.querySelector("[name=smartNodes]").click()');await wait('document.querySelector("[name=smartNodes]").checked&&!document.querySelector("[name=smartNodes]").disabled');
    assert.equal(app.intelligence.status().nameNodes,true);
    await evaluate('document.querySelector("#remove-intelligence-key").click()');await wait('document.querySelector("[name=smartNodes]").disabled&&!document.querySelector("#remove-intelligence-key")');
    assert.equal(app.intelligence.status().hasKey,false);
-   await evaluate('document.querySelector("[name=codexWindow]").value="1000000";document.querySelector("[name=codexCompactAt]").value="900000";document.querySelector("#save-context-codex").click()');
+   await evaluate('document.querySelector("[name=codexWindow]").value="1000000";document.querySelector("[name=codexCompactAt]").value="900000";document.querySelector("[name=codexWindow]").dispatchEvent(new Event("change",{bubbles:true}))');
    await wait('document.querySelector("#context-settings-status")?.textContent.includes("saved")');assert.match(fs.readFileSync(path.join(app.native.roots.codex,'config.toml'),'utf8'),/model_context_window = 1000000/);
-   await evaluate('document.querySelector("[name=claudeWindow]").value="500000";document.querySelector("#save-context-claude").click()');
-   await wait('document.querySelector("#context-settings-status")?.textContent.includes("saved")&&!document.querySelector("#save-context-claude").disabled');assert.equal(JSON.parse(fs.readFileSync(path.join(app.native.roots.claude,'settings.json'))).env.CLAUDE_CODE_AUTO_COMPACT_WINDOW,'500000');
+   await evaluate('document.querySelector("[name=claudeWindow]").value="500000";document.querySelector("[name=claudeWindow]").dispatchEvent(new Event("change",{bubbles:true}))');
+   await wait('document.querySelector("#context-settings-status")?.textContent.includes("saved")');assert.equal(JSON.parse(fs.readFileSync(path.join(app.native.roots.claude,'settings.json'))).env.CLAUDE_CODE_AUTO_COMPACT_WINDOW,'500000');
    assert.equal(await evaluate('!document.querySelector("[name=intelligenceKey]").disabled&&document.querySelector("#save-intelligence-key").disabled'),true);
+   assert.equal(await evaluate('!!document.querySelector("#save-timers, #save-context-codex, #save-context-claude")'),false);
+   assert.equal(await evaluate('document.querySelector("[name=codexWindow]").tagName'),'SELECT');
+   await evaluate('document.querySelector("[name=localUpdateMinutes]").value="7";document.querySelector("[name=localUpdateMinutes]").dispatchEvent(new Event("change",{bubbles:true}))');
+   for(let i=0;i<100&&app.settings.status().preferences.localUpdateMinutes!==7;i++)await new Promise(r=>setTimeout(r,20));
+   assert.equal(app.settings.status().preferences.localUpdateMinutes,7);
+   assert.ok(await evaluate('(()=>{const a=document.querySelector("[name=intelligenceKey]").getBoundingClientRect(),b=document.querySelector("#save-intelligence-key").getBoundingClientRect();return b.left>=a.right&&Math.abs(a.bottom-b.bottom)<2})()'));
    assert.equal(await evaluate('!!document.querySelector("#language")'),false);
    assert.ok(await evaluate('(()=>{const h=document.querySelector(".settings-section-heading h3").getBoundingClientRect(),b=document.querySelector("#modify-connection").getBoundingClientRect();return b.left>h.right&&Math.abs(h.y+h.height/2-b.y-b.height/2)<2})()'));
    assert.ok(await evaluate('[...document.querySelectorAll(".settings-card")].every(c=>{const style=getComputedStyle(c),h=c.querySelector("h3");return style.paddingTop===style.paddingBottom&&style.paddingTop===style.paddingLeft&&getComputedStyle(h).marginTop==="0px"})'));
