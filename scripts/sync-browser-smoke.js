@@ -1,4 +1,4 @@
-import {browserBinary} from './browser-runtime.js';
+import {browserBinary,closeBrowser} from './browser-runtime.js';
 // Synthetic white-box sync UI regression. No real cloud or native sessions are touched.
 import fs from 'node:fs';import os from 'node:os';import path from 'node:path';import {spawn} from 'node:child_process';import {once} from 'node:events';import assert from 'node:assert/strict';
 import {createApp} from '../src/server.js';import {codexSample} from '../src/demo.js';import {treeSnapshot} from '../src/cloud.js';import {hash} from '../src/util.js';
@@ -71,4 +71,4 @@ try{
  await wait('document.querySelector("#sync").dataset.operation!=="success"');
  assert.equal(await evaluate('Number(document.querySelector("#sync").style.getPropertyValue("--transfer-fill"))'),0);
  assert.deepEqual(errors,[]);console.log('Browser passed: button-fill Pull/Push sequencing and Git SSH settings, concrete inline progress, pending hover, local Activate/Trash during transfer, post-snapshot queue, bounded long error on desktop/mobile, manual defaults.');
-}finally{pull.resolve();push.resolve();await app.autoSync.syncJob?.catch(()=>{});ws?.close();chrome.kill();await once(chrome,'exit');await new Promise(r=>app.close(r));fs.rmSync(root,{recursive:true,force:true});}
+}finally{pull.resolve();push.resolve();await app.autoSync.syncJob?.catch(()=>{});await closeBrowser(chrome,ws);await new Promise(r=>app.close(r));fs.rmSync(root,{recursive:true,force:true,maxRetries:10,retryDelay:100});}

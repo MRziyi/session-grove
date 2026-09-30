@@ -1,5 +1,12 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import {once} from 'node:events';
+export async function closeBrowser(child,socket){
+    if(child.exitCode!==null||child.signalCode!==null)return;
+    const exited=once(child,'exit'),timer=setTimeout(()=>child.kill(),2000);
+    try{if(socket?.readyState===WebSocket.OPEN)socket.send(JSON.stringify({id:0,method:'Browser.close'}));else child.kill();await exited;}
+    finally{clearTimeout(timer);socket?.close();}
+}
 export function browserBinary() {
     if(process.env.CHROME)return process.env.CHROME;
     const candidates=process.platform==='win32'

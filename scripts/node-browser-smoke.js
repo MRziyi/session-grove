@@ -1,4 +1,4 @@
-import {browserBinary} from './browser-runtime.js';
+import {browserBinary,closeBrowser} from './browser-runtime.js';
 // Isolated Chrome/CDP regression for cross-branch selection and node activation.
 import fs from 'node:fs';import os from 'node:os';import path from 'node:path';import {spawn} from 'node:child_process';import {once} from 'node:events';import {pathToFileURL,fileURLToPath} from 'node:url';import assert from 'node:assert/strict';
 const source=path.resolve(process.argv[2]||fileURLToPath(new URL('..',import.meta.url)));
@@ -160,4 +160,4 @@ try{
  const nb=store.branch(null,'Move client copy','codex',codexSample(root,[['Client copy','Preserve']]));app.native.setActive(nb.id,root,true);app.native.apply([nb.id]);const ni=store.instances().find(i=>i.branchId===nb.id);store.edit(nb.id,{archived:true});
  await wait(`document.querySelector('[data-trash-select="native:${ni.id}"]')`);await evaluate(`document.querySelector('[data-trash-select="native:${ni.id}"]').click();document.querySelector('#trash-move-selected').click()`);await wait(`!document.querySelector('[data-trash-select="native:${ni.id}"]')`);assert.equal(fs.existsSync(ni.file),false);assert.ok(store.local('trashEntries').some(e=>e.nativeInstanceId===ni.id));
  assert.deepEqual(errors,[]);console.log('Browser passed: one-click cross-tool branch positioning, stable graph camera, unified activation preview/title, conversion panel, prefix continuation, lightweight Trash.');
-}finally{ws?.close();chrome.kill();await once(chrome,'exit');await new Promise(r=>app.close(r));fs.rmSync(root,{recursive:true,force:true});}
+}finally{await closeBrowser(chrome,ws);await new Promise(r=>app.close(r));fs.rmSync(root,{recursive:true,force:true,maxRetries:10,retryDelay:100});}

@@ -1,6 +1,6 @@
 // Render public documentation images from synthetic sessions in the real UI.
 import fs from 'node:fs';import os from 'node:os';import path from 'node:path';import {spawn} from 'node:child_process';import {once} from 'node:events';
-import {createApp} from '../src/server.js';import {codexSample,codexTurn,claudeSample} from '../src/demo.js';import {browserBinary} from './browser-runtime.js';
+import {createApp} from '../src/server.js';import {codexSample,codexTurn,claudeSample} from '../src/demo.js';import {browserBinary,closeBrowser} from './browser-runtime.js';
 const root=fs.mkdtempSync(path.join(os.tmpdir(),'grove-showcase-')),work=path.resolve('.grove/showcase/Fieldnotes');fs.mkdirSync(work,{recursive:true});
 const app=createApp({root:path.join(root,'library'),roots:{codex:path.join(root,'codex'),claude:path.join(root,'claude')},demo:true,guard:()=>{}}),store=app.store;
 const project=store.project('Fieldnotes'),other=store.project('Weekend Atlas');
@@ -42,4 +42,4 @@ try{
     await evaluate(`document.querySelector('[data-segment="${selected}"] [data-expand]')?.click();document.querySelector('[data-node="${selected}"]').click()`);await capture('workspace');
     const internal=graph.nodes.find(n=>n.name==='Spatial canvas');await evaluate(`document.querySelector('[data-node="${internal.id}"]').click();document.querySelector('#activate-node').click()`);await wait('document.querySelector("#activation-title")?.textContent.startsWith("[Grove]")');await capture('activation');
     console.log('Saved synthetic library, workspace and activation screenshots.');
-}finally{ws?.close();const exited=once(chrome,'exit');chrome.kill();await exited;await new Promise(r=>app.close(r));fs.rmSync(root,{recursive:true,force:true,maxRetries:10,retryDelay:100});}
+}finally{await closeBrowser(chrome,ws);await new Promise(r=>app.close(r));fs.rmSync(root,{recursive:true,force:true,maxRetries:10,retryDelay:100});}

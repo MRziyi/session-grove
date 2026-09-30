@@ -22,7 +22,7 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: node scripts/ci-test.js
       - if: runner.os == 'Windows'
-        run: pnpm test:browser
+        run: node scripts/ci-test.js --browser
   release:
     if: startsWith(github.ref, 'refs/tags/v')
     needs: test
