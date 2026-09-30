@@ -69,7 +69,6 @@ let submitAction, toastTimer, searchTimer, requestId = 0, working = false, openi
 const camera = { x: 0, y: 0, zoom: 1, width: 0, height: 0, rootX: 0, newView: true };
 const compactNumber = n => new Intl.NumberFormat(locale() === 'zh' ? 'zh-CN' : 'en-US', { notation: 'compact', maximumFractionDigits: 1 }).format(n);
 const tokenLabel = n => t('≈ {count} tokens', { count: compactNumber(n.tokens?.recordedEstimate ?? n.tokens?.estimate ?? 0) });
-const tokenHint = () => t('Rough estimate of recorded message and tool text. Excludes hidden instructions, encrypted content and images; not live context usage.');
 const cloudMark = item => {
     const badge = (kind, glyph, label) => `<span class="cloud-mark session-state ${kind}" title="${esc(t(label))}" aria-label="${esc(t(label))}">${glyph}</span>`;
     return ''
@@ -100,6 +99,7 @@ async function api(path, method = 'GET', body, retried = false) {
 }
 function modal(title, html, action, label = 'Save') {
     modalVersion++;
+    $$('[data-modal-action]').forEach(el=>el.remove());
     $('#dialog').dataset.kind = title === 'About' ? 'about' : 'normal'; $('#dialog-title').textContent = t(title); $('#dialog-content').innerHTML = html; $('#dialog-error').textContent = '';
     $('#dialog-submit').textContent = t(label); $('#dialog-submit').hidden = !action; $('#dialog-submit').disabled = false;
     $('#dialog-cancel').textContent = t(action ? 'Cancel' : 'Close'); submitAction = action;
@@ -149,65 +149,81 @@ function renderNavigation() {
     renderCloudStatus();
 }
 
-let syncPinned = false, pendingTimer, pendingTicket = 0, transferSamples = [], sampledOperation = null;
+let pendingTimer, pendingTicket = 0, completionTimer, fillOperation = null, fillState = {pull:0,push:0};
 const bytesLabel = bytes => bytes < 1024 ? `${bytes || 0} B` : bytes < 1048576 ? `${(bytes / 1024).toFixed(1)} KiB` : `${(bytes / 1048576).toFixed(1)} MiB`;
 function positionSyncPanel(panel, anchor) {
     const rect = anchor.getBoundingClientRect(), width = Math.min(420, innerWidth - 20), top = Math.min(Math.max(rect.bottom, $('.banner').getBoundingClientRect().bottom) + 8, innerHeight - 80);
     Object.assign(panel.style, { width: width + 'px', left: Math.max(10, Math.min(rect.right - width, innerWidth - width - 10)) + 'px', top: top + 'px', maxHeight: Math.max(60, innerHeight - top - 12) + 'px' });
 }
-function showSyncPanel(panel, anchor) { if(panel.id==='pending-uploads'){syncPinned=false;hideSyncPanel($('#transfer-progress'));$('#sync-details').setAttribute('aria-expanded','false');}else{hideSyncPanel($('#pending-uploads'));pendingTicket++;} panel.hidden = false; panel.showPopover?.(); positionSyncPanel(panel, anchor); }
+function showSyncPanel(panel, anchor) { panel.hidden = false; panel.showPopover?.(); positionSyncPanel(panel, anchor); }
 function hideSyncPanel(panel) { panel.hidePopover?.(); panel.hidden = true; }
-const transferPhaseNames={'Receiving objects':'Receiving changes','Writing objects':'Sending changes','Counting objects':'Counting changes','Compressing objects':'Compressing changes','Resolving deltas':'Applying differences','Downloading records':'Pulling changes','Uploading records':'Pushing changes','Applying downloaded changes':'Updating sessions','Updating downloaded sessions':'Updating sessions','Checking cloud directory':'Checking for changes','Reading cloud session manifests':'Checking shared history','Publishing project indexes':'Saving changes','Publishing cloud directory':'Finishing push','Download complete':'Pull complete','Preparing upload snapshot':'Preparing changes to push','Preparing shared history':'Preparing remaining sessions','Reclaiming cloud space':'Cleaning up removed sessions'};
+const transferPhaseNames={'Fetching Git changes':'Checking for updates','Importing session from Git cache':'Updating local sessions','Pulling sessions':'Updating local sessions','Preparing Git commit':'Preparing changes','Pushing Git commit':'Sending changes','Receiving objects':'Receiving changes','Writing objects':'Sending changes','Counting objects':'Counting changes','Compressing objects':'Compressing changes','Resolving deltas':'Applying differences','Downloading records':'Pulling changes','Uploading records':'Pushing changes','Applying downloaded changes':'Updating sessions','Updating downloaded sessions':'Updating sessions','Checking cloud directory':'Checking for changes','Reading cloud session manifests':'Checking shared history','Publishing project indexes':'Saving changes','Publishing cloud directory':'Finishing push','Download complete':'Pull complete','Preparing upload snapshot':'Preparing changes to push','Preparing shared history':'Preparing remaining sessions','Reclaiming cloud space':'Cleaning up removed sessions'};
 function renderCloudStatus(){
     const d=state.data;if(!d)return;
     const offline=state.connected===false, operation=d.cloud.operation || operations.sync, busy=operation?.state==='running'||['syncing','migrating'].includes(d.cloud.phase), step=operation?.step || 'pull';
     const phase=operation?.progress?.phase;
     $('#cloud-status').textContent=t(offline?'Service disconnected':busy?(transferPhaseNames[phase] || phase || (step==='pull'?'Pulling changes':'Pushing changes')):d.cloud.needsReview&&operation?.state==='error'?'Review sync':operation?.state==='error'?'Sync failed':d.cloud.dirty?'Local changes':d.cloud.started?'Up to date':'Ready to sync');
     $('#sync-details').classList.toggle('has-error',operation?.state==='error');
-    $('#sync-details').title=t('Transfer details');
+    $('#sync-details').title=operation?.progress?.detail || '';
     const stages=transferStages(operation), appearance={running:'running',complete:'success',failed:'error',paused:'paused',pending:''};
     $('#sync').dataset.operation=appearance[stages.pull]; $('#upload').dataset.operation=appearance[stages.push];
+    $('#upload').classList.toggle('has-pending',!!d.cloud.dirty);
+    if (!busy && d.cloud.dirty && stages.push === 'complete') $('#upload').dataset.operation = '';
+    $('#upload').setAttribute('aria-label',t(d.cloud.dirty?'Push · local changes waiting':'Push'));
     for(const id of ['sync','upload']) { $('#'+id).disabled=offline||busy||!!state.syncPreparing; $('#'+id).setAttribute('aria-busy',String(busy&&(id==='sync'?step==='pull':step==='push'))); }
-    const mini=$('#sync-mini'), progress=operation?.stageProgress; mini.hidden=!busy;
-    if(progress?.total>0){mini.max=progress.total;mini.value=progress.completed||0;}else mini.removeAttribute('value');
     const updating=operations.update?.state==='running'||state.uiBusy==='update';$('#collect').dataset.operation=updating?'running':'';$('#collect').disabled=offline||working||updating;
     $('#collect .button-label').textContent=t(updating?'Updating…':'Update');
     $$('.actions button,button[data-compaction],[data-trash-restore],[data-trash-native]').forEach(el=>el.disabled=actionDisabled(el));
     renderTransfer();renderCountdowns();
     const ticking=!document.hidden&&!offline&&(d.update?.nextRunAt||d.cloud?.nextRunAt||busy);
-    if(ticking&&!clockTimer)clockTimer=setInterval(()=>{renderCountdowns();if(!$('#transfer-progress').hidden)renderTransfer();},1000);if(!ticking&&clockTimer){clearInterval(clockTimer);clockTimer=null;}
+    if(ticking&&!clockTimer)clockTimer=setInterval(()=>{renderCountdowns();renderTransfer();},1000);if(!ticking&&clockTimer){clearInterval(clockTimer);clockTimer=null;}
 }
-function transferHtml(value) {
-    const p=value?.progress, stages=transferStages(value), running=value?.state==='running', failed=value?.state==='error', paused=value?.state==='interrupted';
-    const progress=value?.stageProgress, total=progress?.total, count=progress?.completed||0;
-    const remaining=p?.etaSeconds;
-    const eta=remaining==null?t('Estimating time…'):t('About {time} left',{time:Math.floor(remaining/60)+':'+String(remaining%60).padStart(2,'0')});
-    const stage=key=>`<span class="sync-step" data-step="${key}" data-state="${stages[key]}">${icon(key==='pull'?'download':'upload')}<span>${key==='pull'?'Pull':'Push'}</span>${stages[key]==='complete'?'<span class="stage-check" aria-label="'+esc(t('Complete'))+'">✓</span>':''}</span>`;
-    if (!value) return `<div class="transfer-steps">${stage('pull')}<span class="stage-connector" aria-hidden="true">→</span>${stage('push')}</div><p class="dialog-copy">${t('Pull brings in cloud changes. Push pulls first, then sends your local changes.')}</p>`;
-    const percent=total>0?Math.min(100,Math.floor(count/total*100)):null;
-    const rate=state.data.cloud.provider==='git'?p?.rateBytesPerSecond:transferSamples.at(-1)?.rate;
-
-    const phase=paused?'Transfer paused':!running&&value?.state==='success'?(value.direction==='push'?'Push complete':'Pull complete'):transferPhaseNames[p?.phase]||p?.phase||'Ready to sync';
-    const error=failed?value.error:paused?t('Transfer paused. Pull or Push when ready.'):null;
-    return `<div class="transfer-steps">${stage('pull')}<span class="stage-connector" aria-hidden="true">→</span>${stage('push')}</div><div class="transfer-heading"><strong>${esc(t(phase))}</strong>${running&&!error?`<span class="transfer-eta">${eta}</span>`:''}</div>${p?.detail&&!error?`<p class="transfer-item">${esc(p.detail)}</p>`:''}${error?`<div class="transfer-error ${paused?'is-paused':''}" role="alert">${esc(error)}</div>`:`<progress ${total>0?'max="'+total+'" value="'+count+'"':value?.state==='success'?'max="1" value="1"':''}></progress><div class="transfer-footer"><span>${percent===null?(running?t('Preparing…'):t('Complete')):percent+'%'}</span><span class="transfer-speed">${running?(rate==null?t('Measuring speed…'):bytesLabel(rate)+'/s · '+t(value?.step==='push'?'up':'down')):''}</span></div>`}`;
-}
+// The fill communicates workflow stages; the number beside it is the measured
+// current phase percentage. Unknown work remains animated, never a fake ETA.
 function renderTransfer() {
-    const cloud=state.data.cloud,value=cloud.operation||operations.sync,box=$('#transfer-progress'),running=value?.state==='running';
-    if(value?.id!==sampledOperation){sampledOperation=value?.id;transferSamples=[];}
-    if(running&&value.network){const at=value.network.sampledAt||Date.now(),bytes=value.network.bytesReceived||0,last=transferSamples.at(-1);if(!last||at-last.at>=1000){transferSamples.push({at,bytes,rate:last?Math.max(0,(bytes-last.bytes)*1000/(at-last.at)):0});if(transferSamples.length>2)transferSamples.shift();}}
-    if(!box.hidden){
-        box.innerHTML=`<div class="sync-panel-heading"><strong>${t('Transfer details')}</strong><button type="button" id="close-transfer" aria-label="${esc(t('Close'))}">×</button></div>${transferHtml(value)}`;
-        $('#close-transfer').onclick=()=>{syncPinned=false;hideSyncPanel(box);$('#sync-details').setAttribute('aria-expanded','false');};positionSyncPanel(box,$('#sync-details'));
+    const cloud=state.data.cloud, op=cloud.operation||operations.sync, p=op?.progress;
+    const running=op?.state==='running', step=op?.step || 'pull', stages=transferStages(op);
+    if (fillOperation!==op?.id) { fillOperation=op?.id;fillState={pull:0,push:0}; }
+    const measurement=step==='pull' && /session/i.test(p?.phase || '') && op?.stageProgress?.total>0 ? op.stageProgress : p;
+    const fraction=measurement?.total>0?Math.min(1,(measurement.completed||0)/measurement.total):null;
+    const sequences=step==='pull'
+        ? {'Receiving objects':[0,.65],'Resolving deltas':[.65,.75],'Updating project lists':[.75,.8],'Updating downloaded sessions':[.8,.99],'Pulling sessions':[.8,.99],'Importing session from Git cache':[.8,.99]}
+        : {'Preparing Git commit':[0,.2],'Counting objects':[.2,.25],'Compressing objects':[.25,.4],'Writing objects':[.4,.95],'Resolving deltas':[.95,.99]};
+    if (running && sequences[p?.phase] && fraction!==null) {
+        const [start,end]=sequences[p.phase];
+        const amount=step==='pull' && op.stageProgress?.total>0 && /session/i.test(p.phase)?op.stageProgress.completed/op.stageProgress.total:fraction;
+        fillState[step]=Math.max(fillState[step],start+(end-start)*amount);
     }
+    const recent=op?.state==='success' && Date.now()-(op.finishedAt||0)<2400;
+    for (const [key,id] of [['pull','sync'],['push','upload']]) {
+        const el=$('#'+id), complete=stages[key]==='complete', dirty=key==='push'&&cloud.dirty&&!running;
+        if (complete) fillState[key]=1;
+        el.style.setProperty('--transfer-fill',String((running||recent)&&!dirty?fillState[key]:0));
+        el.classList.toggle('transfer-unknown',running&&step===key&&fraction===null&&fillState[key]===0);
+        if (complete&&!running&&(!recent||dirty)) el.dataset.operation='';
+    }
+    clearTimeout(completionTimer);
+    if (recent) completionTimer=setTimeout(()=>{if(state.data)renderCloudStatus();},Math.max(20,2420-(Date.now()-op.finishedAt)));
+    const metrics=[];
+    if(running&&fraction!==null)metrics.push(Math.floor(fraction*100)+'%');
+    if(running&&p?.rateBytesPerSecond>0)metrics.push(bytesLabel(p.rateBytesPerSecond)+'/s');
+    if(running&&p?.etaSeconds>0)metrics.push(t('This stage: about {time} left',{time:Math.floor(p.etaSeconds/60)+':'+String(p.etaSeconds%60).padStart(2,'0')}));
+    $('#sync-substatus').textContent=metrics.join(' · ');
+    const error=op?.state==='error'?op.error:null,box=$('#sync-error');
+    box.hidden=!error;
+    if(error){box.querySelector('summary').textContent=error.length>100?error.slice(0,100)+'…':error;box.querySelector('div').textContent=error;}
+    else box.open=false;
+    if(!running&&op?.state==='success'&&op.direction==='pull'&&op.summary?.unchanged&&!cloud.dirty)$('#cloud-status').textContent=t('Already up to date');
     if(state.syncOperation&&cloud.manualOperation?.id===state.syncOperation&&cloud.manualOperation.state!=='running'){
-        const done=cloud.manualOperation;state.syncOperation=null;toast(t(done.state==='error'?'Sync failed':done.direction==='pull'?'Pull complete':'Push complete'));
+        const done=cloud.manualOperation;state.syncOperation=null;
+        toast(t(done.state==='error'?'Sync failed':done.direction==='pull'?(done.summary?.unchanged?'Already up to date':'Pull complete'):'Push complete'));
         if(!$('#dialog').open&&!working)queueMicrotask(()=>refresh().catch(e=>toast(e.message)));
     }
 }
 async function showPendingUploads(){
     clearTimeout(pendingTimer); const box=$('#pending-uploads'),ticket=++pendingTicket;
     showSyncPanel(box,$('#push-zone'));box.innerHTML=`<strong>${t('Pending uploads')}</strong><p>${t('Reading local changes…')}</p>`;
-    try{const data=await api('/synchronize/pending');if(ticket!==pendingTicket||box.hidden)return;box.innerHTML=`<strong>${t('Pending uploads')} · ${data.items.length}</strong>${data.items.length?`<ul>${data.items.map(i=>`<li><span>${esc(i.name)}</span><small>${t(i.action==='remove'?'Move to Trash':'Modified')} · ${esc(date(i.updatedAt))}</small></li>`).join('')}</ul>`:`<p>${t('No local changes waiting to upload.')}</p>`}<p class="dialog-copy">${t('Changes made during upload remain queued for the next upload.')}</p>`;positionSyncPanel(box,$('#push-zone'));}catch(e){if(ticket===pendingTicket)box.textContent=e.message;}
+    try{const data=await api('/synchronize/pending');if(ticket!==pendingTicket||box.hidden)return;box.innerHTML=`<strong>${t('Pending uploads')} · ${data.items.length}</strong>${data.items.length?`<ul>${data.items.map(i=>`<li><span>${esc(i.name)}</span>${i.project?`<small>${esc(i.project)}</small>`:''}${i.changes?.length?`<ul class="pending-changes">${i.changes.map(c=>`<li>${c.session&&c.session!==i.name?esc(c.session)+': ':''}${esc(t(c.label,c))}</li>`).join('')}</ul>`:''}<small>${esc(date(i.updatedAt))}</small></li>`).join('')}</ul>`:`<p>${t('No local changes waiting to upload.')}</p>`}`;positionSyncPanel(box,$('#push-zone'));}catch(e){if(ticket===pendingTicket)box.textContent=e.message;}
 }
 function renderCountdowns(){
     if(!state.data||document.hidden)return;
@@ -259,7 +275,7 @@ function groups() {
 }
 function itemMeta(item) {
     if (item.kind === 'tree') return t('{count} branches', { count: item.sessions.length });
-    return item.sessions[0]?.chats == null ? t('Transcript in Git cache') : t('{count} chats', { count: item.sessions[0].chats });
+    return item.sessions[0]?.chats == null ? t('Session') : t('{count} chats', { count: item.sessions[0].chats });
 }
 function renderList() {
     if(state.scope==='trash'){renderTrash();return;}
@@ -344,7 +360,7 @@ function renderDetailActions() {
     const editable = !archived && state.scope !== 'archived';
     const dissolve = state.tree.nodes.some(n => !n.pending && n.chatIds.some(id => state.chats.has(id)));
     $('#detail-actions').innerHTML = state.chats.size ? `<span>${t('{count} selected', { count: state.chats.size })}</span>${editable && state.rangeEnd !== null && canCombine() ? '<button id="combine"></button>' : ''}${editable && state.rangeEnd !== null && dissolve ? '<button id="dissolve"></button>' : ''}<button id="clear-selection"></button>` : node ? `<button id="rename-node"></button>${editable ? '<button id="activate-node"></button>' : ''}${terminal ? `${archived ? '<button id="restore-session"></button>' : ''}<button id="archive-path"></button>` : ''}` : '';
-    button('#activate-node', 'Activate', () => activateDialog(p));
+    button('#activate-node', terminal && p.active ? 'Deactivate' : 'Activate', () => terminal && p.active ? run(()=>api('/manage','POST',{action:'deactivate',branchIds:[p.branchId]})) : activateDialog(p));
     button('#combine', 'Combine', combineDialog);
     button('#dissolve', 'Dissolve', () => run(async () => { await saveOrganization('dissolve'); clearRange(); }));
     button('#clear-selection', 'Clear', () => { clearRange(); updateRangeSelection(); renderDetailActions(); renderGraph(); });
@@ -359,7 +375,7 @@ function excerpt(text, expanded) {
     return `<div class="markdown">${markdown(shortened)}</div>`;
 }
 function activityEntries(entries,p) {
-    return entries.map(e=>`<div class="activity-entry"><button type="button" data-record="${e.line}" data-head="${esc(p.head)}">${esc(e.label)} <span>${t(e.kind)}</span></button>${e.unreadable?`<p class="dialog-copy">${t('Encrypted reasoning · no readable summary. Original preserved.')}</p>`:''}${e.files?.length?`<div class="file-tags">${e.files.map(f=>`<code>${esc(f)}</code>`).join('')}</div>`:''}<span class="activity-cost">${e.opaque?t('Opaque or non-text; token size unknown'):'≈ '+compactNumber(e.tokens)+' tokens'}</span>${e.preview?.trim()?`<pre>${esc(e.preview)}</pre>`:''}</div>`).join('');
+    return entries.map(e=>`<div class="activity-entry"><button type="button" data-record="${e.line}" data-head="${esc(p.head)}">${esc(e.label)} <span>${t(e.kind)}</span></button>${e.unreadable?`<p class="dialog-copy">${t('No readable summary')}</p>`:''}${e.files?.length?`<div class="file-tags">${e.files.map(f=>`<code>${esc(f)}</code>`).join('')}</div>`:''}<span class="activity-cost">${e.opaque?t('Opaque or non-text; token size unknown'):'≈ '+compactNumber(e.tokens)+' tokens'}</span>${e.preview?.trim()?`<pre>${esc(e.preview)}</pre>`:''}</div>`).join('');
 }
 function activityHtml(entries, p) {
     if(!entries?.length) return '';
@@ -370,7 +386,7 @@ function contextBreakdown(p) {
     const ledger=p.context?.ledger;if(!ledger)return '';
     const fidelity = !p.canRewriteContext ? `<p class="fidelity-note">${t('Some native history is missing or unsupported. Update to read the referenced segments before changing context.')}</p>` : '';
     const labels={'tool-call':'Tool inputs','tool-result':'Tool results',reasoning:'Readable reasoning',instructions:'Recorded instructions'};
-    return fidelity + `<details class="context-breakdown"><summary>${t('Recorded context')} · ${t('Tool activity')}: ≈ ${compactNumber((ledger.totals['tool-call']||0)+(ledger.totals['tool-result']||0))} tokens${p.context.lastUsage?` · ${t('Last native input')}: ${compactNumber(p.context.lastUsage.input)}`:''}</summary><div class="token-breakdown">${Object.entries(ledger.totals).filter(([,n])=>n).map(([k,n])=>`<span>${t(labels[k])}<b>≈ ${compactNumber(n)}</b></span>`).join('')}</div><p>${t('Recorded history is not the live model request. Hidden instructions, encrypted reasoning, images and compaction can prevent a complete token breakdown.')}</p>${activityHtml(ledger.entries.filter(e=>e.chatLine===null),p)}</details>`;
+    return fidelity + `<details class="context-breakdown"><summary>${t('Recorded context')} · ${t('Tool activity')}: ≈ ${compactNumber((ledger.totals['tool-call']||0)+(ledger.totals['tool-result']||0))} tokens${p.context.lastUsage?` · ${t('Last native input')}: ${compactNumber(p.context.lastUsage.input)}`:''}</summary><div class="token-breakdown">${Object.entries(ledger.totals).filter(([,n])=>n).map(([k,n])=>`<span>${t(labels[k])}<b>≈ ${compactNumber(n)}</b></span>`).join('')}</div>${activityHtml(ledger.entries.filter(e=>e.chatLine===null),p)}</details>`;
 }
 function compactionsAt(n, p) { return (p.context?.compactions || []).filter(e => n.chatIds.includes(p.messages.find(m => m.line > e.line)?.id)); }
 function mutedNode(n, p) {
@@ -394,7 +410,7 @@ function renderTranscript() {
     const p = route();
     $('#transcripts').innerHTML = contextBreakdown(p) + p.nodeIds.map(id => {
         const n = state.tree.nodes.find(n => n.id === id), messages = p.messages.filter(m => n.chatIds.includes(m.id));
-        return `${compactionsAt(n, p).map(e => `<div class="compaction-marker">${t('Context compacted here')}${compactionButton(e)}</div>`).join('')}<section class="transcript-segment ${mutedNode(n, p) ? 'context-muted' : ''} ${n.pending ? 'pending' : ''}" data-segment="${esc(n.id)}" style="${style(n)}"><div class="segment-caption"><button data-focus-node="${esc(n.id)}">${esc(nodeName(n))} · ${t('{count} chats', { count: messages.length })}</button><span class="token-estimate" title="${esc(tokenHint())}">${tokenLabel(n)}</span></div>${messages.map(m => `<article class="chat ${m.role} ${state.chats.has(m.id) ? 'checked' : ''}">${state.scope === 'archived' ? '' : `<input type="checkbox" data-chat="${esc(m.id)}" aria-label="${esc(t('Select chat {number}', { number: p.messages.findIndex(x => x.id === m.id) + 1 }))}" ${state.chats.has(m.id) ? 'checked' : ''}>`}<div class="bubble"><span class="speaker">${m.role === 'user' ? t('You') : p.agent === 'codex' ? 'Codex' : 'Claude'}</span>${excerpt(m.text, state.expanded.has(m.id))}${activityHtml(m.activity,p)}${m.text.length >= 380 ? `<button class="expand-chat" data-expand="${esc(m.id)}">${t(state.expanded.has(m.id) ? 'Collapse' : 'Expand')}</button>` : ''}</div></article>`).join('')}</section>`;
+        return `${compactionsAt(n, p).map(e => `<div class="compaction-marker">${t('Context compacted here')}${compactionButton(e)}</div>`).join('')}<section class="transcript-segment ${mutedNode(n, p) ? 'context-muted' : ''} ${n.pending ? 'pending' : ''}" data-segment="${esc(n.id)}" style="${style(n)}"><div class="segment-caption"><button data-focus-node="${esc(n.id)}">${esc(nodeName(n))} · ${t('{count} chats', { count: messages.length })}</button><span class="token-estimate">${tokenLabel(n)}</span></div>${messages.map(m => `<article class="chat ${m.role} ${state.chats.has(m.id) ? 'checked' : ''}">${state.scope === 'archived' ? '' : `<input type="checkbox" data-chat="${esc(m.id)}" aria-label="${esc(t('Select chat {number}', { number: p.messages.findIndex(x => x.id === m.id) + 1 }))}" ${state.chats.has(m.id) ? 'checked' : ''}>`}<div class="bubble"><span class="speaker">${m.role === 'user' ? t('You') : p.agent === 'codex' ? 'Codex' : 'Claude'}</span>${excerpt(m.text, state.expanded.has(m.id))}${activityHtml(m.activity,p)}${m.text.length >= 380 ? `<button class="expand-chat" data-expand="${esc(m.id)}">${t(state.expanded.has(m.id) ? 'Collapse' : 'Expand')}</button>` : ''}</div></article>`).join('')}</section>`;
     }).join('') || `<p class="empty">${t('No chats yet.')}</p>`;
     const trailing = (p.context?.compactions || []).filter(e => !p.messages.some(m => m.line > e.line));
     $('#transcripts').insertAdjacentHTML('beforeend', trailing.map(e => `<div class="compaction-marker">${t('Context compacted here')}${compactionButton(e)}</div>`).join(''));
@@ -407,7 +423,7 @@ function renderTranscript() {
         async function load(){
             try { const r=await api('/branches/'+branchId+'/records/'+el.dataset.record+'?head='+encodeURIComponent(head)+'&offset='+offset);
                 if(ticket!==modalVersion || !box.isConnected || !$('#dialog').open)return;
-                box.innerHTML=`${r.opaque?`<p class="dialog-copy">${t('Encrypted reasoning is preserved in the session; only its readable summary can be displayed.')}</p>`:''}<pre class="record-detail"></pre><div class="record-pages">${offset?'<button type="button" id="record-previous">'+t('Previous')+'</button>':''}<span>${offset+1}–${offset+r.text.length} / ${r.total}</span>${r.next!==null?'<button type="button" id="record-next">'+t('Next')+'</button>':''}</div>`;
+                box.innerHTML=`${r.opaque?`<p class="dialog-copy">${t('No readable text')}</p>`:''}<pre class="record-detail"></pre><div class="record-pages">${offset?'<button type="button" id="record-previous">'+t('Previous')+'</button>':''}<span>${offset+1}–${offset+r.text.length} / ${r.total}</span>${r.next!==null?'<button type="button" id="record-next">'+t('Next')+'</button>':''}</div>`;
                 $('.record-detail').textContent=r.text;
                 if($('#record-next'))$('#record-next').onclick=()=>{offset=r.next;load();};
                 if($('#record-previous'))$('#record-previous').onclick=()=>{offset=Math.max(0,offset-r.pageSize);load();};
@@ -458,7 +474,7 @@ function renderGraph() {
     if (camera.newView) { const view = $('#graph-scroll'); camera.zoom = Math.max(.02, Math.min(1, (view.clientWidth-32)/width, (view.clientHeight-32)/height)); camera.x = (view.clientWidth-width*camera.zoom)/2; camera.y = (view.clientHeight-height*camera.zoom)/2; camera.newView = false; }
     $('#graph').style.width = `${width}px`; $('#graph').style.height = `${height}px`;
     if (drawnTree !== state.tree) {
-    $('#graph').innerHTML = `<svg class="graph-edges" width="${width}" height="${height}" aria-hidden="true">${state.tree.edges.map(e => { const a = positions.get(e.from), b = positions.get(e.to), n = byNode.get(e.to), color = palette[n.color][0]; return `<path d="M${a.x + 74},${a.y + 80} C${a.x + 74},${a.y + 102} ${b.x + 74},${b.y - 25} ${b.x + 74},${b.y}" fill="none" stroke="${color}" stroke-width="2" ${n.pending ? 'stroke-dasharray="4 4"' : ''}/>`; }).join('')}</svg>${nodes.map(n => { const pos = positions.get(n.id); return `<button class="graph-node ${mutedNode(n, p) ? 'context-muted' : ''} ${n.pending ? 'pending' : ''} ${n.id === state.nodeId ? 'selected' : ''} ${p.nodeIds.includes(n.id) ? '' : 'dimmed'}" data-node="${esc(n.id)}" style="${style(n)};left:${pos.x}px;top:${pos.y}px" aria-pressed="${n.id === state.nodeId}"><span class="node-tools">${toolTags(n.agents || [p.agent],true)}</span><span class="node-title">${esc(nodeName(n))}</span><span class="node-meta">${t('{count} chats', { count: n.count })} · <span title="${esc(tokenHint())}">${tokenLabel(n)}</span></span>${n.endBranchIds.some(id => state.tree.paths.find(p => p.branchId === id)?.active) ? `<span class="end-label">${t('Active')}</span>` : ''}</button>`; }).join('')}`;
+    $('#graph').innerHTML = `<svg class="graph-edges" width="${width}" height="${height}" aria-hidden="true">${state.tree.edges.map(e => { const a = positions.get(e.from), b = positions.get(e.to), n = byNode.get(e.to), color = palette[n.color][0]; return `<path d="M${a.x + 74},${a.y + 80} C${a.x + 74},${a.y + 102} ${b.x + 74},${b.y - 25} ${b.x + 74},${b.y}" fill="none" stroke="${color}" stroke-width="2" ${n.pending ? 'stroke-dasharray="4 4"' : ''}/>`; }).join('')}</svg>${nodes.map(n => { const pos = positions.get(n.id); return `<button class="graph-node ${mutedNode(n, p) ? 'context-muted' : ''} ${n.pending ? 'pending' : ''} ${n.id === state.nodeId ? 'selected' : ''} ${p.nodeIds.includes(n.id) ? '' : 'dimmed'}" data-node="${esc(n.id)}" style="${style(n)};left:${pos.x}px;top:${pos.y}px" aria-pressed="${n.id === state.nodeId}"><span class="node-tools">${toolTags(n.agents || [p.agent],true)}</span><span class="node-title">${esc(nodeName(n))}</span><span class="node-meta">${t('{count} chats', { count: n.count })} · <span>${tokenLabel(n)}</span></span>${n.endBranchIds.some(id => state.tree.paths.find(p => p.branchId === id)?.active) ? `<span class="active-node-dot" aria-label="${t('Active on this device')}" title="${t('Active on this device')}"></span>` : ''}</button>`; }).join('')}`;
         drawnTree = state.tree;
     } else {
         for (const el of $$('[data-node]')) {
@@ -495,7 +511,9 @@ function selectNode(id, scrollTranscript = true) {
     if(scrollTranscript){
         const pane=$('#transcripts'), branchId=state.branchId;
         const align=()=>{if(state.nodeId!==id||state.branchId!==branchId)return;const target=$(`[data-segment="${id}"]`);if(target)pane.scrollTo({top:pane.scrollTop+target.getBoundingClientRect().top-pane.getBoundingClientRect().top,behavior:'instant'});};
-        align();requestAnimationFrame(()=>{align();scheduleRibbons();});
+        pane.classList.add('positioning-node');
+        align();
+        requestAnimationFrame(()=>{align();requestAnimationFrame(()=>{align();pane.classList.remove('positioning-node');scheduleRibbons();});});
     }else revealNode(id);
     scheduleRibbons();
 }
@@ -596,7 +614,7 @@ function renameNode() {
 }
 function trashDialog(target,count=1){
     const days=state.data.preferences?.trashRetentionDays||30;
-    modal('Move to Trash',`<p>${t('Discard {count} complete paths or trees?',{count})}</p><p class="dialog-copy">${t('Push removes these sessions from the current version. Git history keeps earlier content. Local recovery lasts {days} days.',{days})}</p>`,async()=>{await api('/trash','POST',target);state.tree=null;state.selected.clear();clearRange();},'Move to Trash');
+    modal('Move to Trash',`<p>${t('Discard {count} complete paths or trees?',{count})}</p><p class="dialog-copy">${t('Recoverable on this device for {days} days.',{days})}</p>`,async()=>{await api('/trash','POST',target);state.tree=null;state.selected.clear();clearRange();},'Move to Trash');
 }
 function archivePath(){const p=route(),node=selectedNode();if(!node?.endBranchIds.includes(p.branchId))return;trashDialog({branchIds:[p.branchId],nodeId:node.id,version:state.tree.version});}
 function renderTrash(){
@@ -604,7 +622,7 @@ function renderTrash(){
     const trashDate = new Intl.DateTimeFormat(locale()==='zh'?'zh-CN':'en-US',{dateStyle:'medium',timeStyle:'short'});
     const query=state.query.toLocaleLowerCase(),entries=(state.data.trashEntries||[]).filter(e=>!e.restoredAt&&(!query||e.names.some(n=>n.toLocaleLowerCase().includes(query)))),native=(state.data.trashNative||[]).filter(i=>!query||(i.title||i.agent).toLocaleLowerCase().includes(query));
     $('#list-count').textContent=t('Recovery copies on this device');$('#search').placeholder=t('Search discarded titles…');
-    $('#session-list').innerHTML=`<p class="trash-note">${t('Trash is for discarded work. Useful history belongs in Projects.')}</p>`+entries.filter(e=>!e.restoredAt).map(e=>`<article class="trash-row"><div><strong>${esc(e.names.join(', '))}</strong><small>${t(({pending:'Waiting for Sync',removed:'Removed from current version',cleaned:'Removed from current version'})[e.state]||'Waiting for Sync')} · ${e.expired?t('Recovery expired'):t('Local recovery until {date}',{date:trashDate.format(new Date(e.expiresAt))})}</small></div>${!e.expired?`<button data-trash-restore="${esc(e.id)}">${t('Restore as a new session')}</button>`:''}</article>`).join('')+(!entries.length?`<p class="empty">${t('No local recovery copies.')}</p>`:'')+(native.length?`<section class="trash-native"><h2>${t('Native copies on this device')}</h2><p>${t('Close the corresponding agent before removing native copies. Referenced prefixes and changed files are kept for review.')}</p>${native.map(i=>`<article class="trash-row"><span>${esc(i.title||i.agent)}<small>${t(i.active?'Still active in the native client':'Deactivated native copy')}</small></span><button data-trash-native="${esc(i.branchId)}">${t('Remove native copy')}</button></article>`).join('')}</section>`:'');
+    $('#session-list').innerHTML=entries.filter(e=>!e.restoredAt).map(e=>`<article class="trash-row"><div><strong>${esc(e.names.join(', '))}</strong><small>${t(({pending:'Waiting for Sync',removed:'Removed from current version',cleaned:'Removed from current version'})[e.state]||'Waiting for Sync')} · ${e.expired?t('Recovery expired'):t('Local recovery until {date}',{date:trashDate.format(new Date(e.expiresAt))})}</small></div>${!e.expired?`<button data-trash-restore="${esc(e.id)}">${t('Restore as a new session')}</button>`:''}</article>`).join('')+(!entries.length?`<p class="empty">${t('No local recovery copies.')}</p>`:'')+(native.length?`<section class="trash-native"><h2>${t('Native copies on this device')}</h2><p>${t('Close the agent before removing its local copy.')}</p>${native.map(i=>`<article class="trash-row"><span>${esc(i.title||i.agent)}<small>${t(i.active?'Still active in the native client':'Deactivated native copy')}</small></span><button data-trash-native="${esc(i.branchId)}">${t('Remove native copy')}</button></article>`).join('')}</section>`:'');
     $$('[data-trash-restore]').forEach(el=>el.onclick=async()=>{let target;await run(async()=>{const r=await api('/trash/restore','POST',{id:el.dataset.trashRestore});target=r.projectIds[0];state.scope=PROJECTS;state.tree=null;state.projectFocus=target;state.olderProjects=true;for(const id of r.projectIds)state.expandedProjects.add(id);state.query='';$('#search').value='';toast(t(r.background?'Restored locally. Background visibility still follows Settings.':'Restored to Projects. It is not activated.'));});if(target)focusProject(target);});
     $$('[data-trash-native]').forEach(el=>el.onclick=()=>run(async()=>{const r=await api('/trash/native','POST',{branchIds:[el.dataset.trashNative]});if(r.blocked.length)toast(r.blocked.map(b=>t(b.reason)).join('\n'));}));
     renderCloudStatus();
@@ -628,7 +646,7 @@ async function activateDialog(p) {
     try {
         const d = await api('/branches/' + p.branchId), local = state.data.instances.find(i => i.branchId === p.branchId && i.applied);
         let checked = null, checkedPath = null, generation = 0;
-        modal('Activate', `<p class="dialog-copy">${t('Includes this node and all preceding context. Existing suffixes are preserved.')}</p><p><strong>${t('Title in your tool')}</strong><br><span id="activation-title"></span></p>${directoryField(local?.cwd || d.cwd)}<div id="activation-budget" role="status">${t('Loading…')}</div><button type="button" id="activate-as">${t('Change to another tool')}</button>${p.active && node.endBranchIds.includes(p.branchId) ? `<button type="button" id="deactivate-session">${t('Deactivate')}</button>` : ''}`, async form => {
+        modal('Activate', `<p><strong>${t('Title in your tool')}</strong><br><span id="activation-title"></span></p>${directoryField(local?.cwd || d.cwd)}<div id="activation-budget" role="status">${t('Loading…')}</div><button type="button" id="activate-as">${t('Switch tool')}</button>`, async form => {
             if (!checked || checkedPath !== form.get('cwd')) { await estimate(); if (!checked || checked.risk) return false; }
             if (!checked.complete) return false;
             const result = await api('/node-activation/activate', 'POST', { ...selection, cwd: form.get('cwd'), contextAcknowledgement: checked.fingerprint });
@@ -644,13 +662,14 @@ async function activateDialog(p) {
                 if (ticket !== modalVersion || turn !== generation || !$('#dialog').open) return;
                 checked = c; checkedPath = directory;
                 $('#activation-title').textContent = c.title;
-                $('#activation-budget').innerHTML = `${c.estimated == null ? '' : `<p>≈ ${compactNumber(c.estimated)} tokens${c.window || c.compactAt ? ' / ' + compactNumber(c.window || c.compactAt) : ''}</p>`}${!c.complete ? `<p class="warning">${t(c.readiness === 'node-boundary' ? 'This node does not end at a completed turn. Select a completed node.' : 'This context is incomplete or unsupported. Check Source before activating.')}</p>` : c.risk ? `<p class="warning">${t('Context may be near its limit. Confirm before activating.')}</p>` : c.unknown ? `<p class="dialog-copy">${t('No reliable context limit was found in the local configuration.')}</p>` : ''}`;
+                $('#activation-budget').innerHTML = `${c.estimated == null ? '' : `<p>≈ ${compactNumber(c.estimated)} tokens</p>${c.window ? `<p class="context-limit">${t('Context capacity')}: ${compactNumber(c.window)} tokens</p>` : ''}${c.compactAt ? `<p class="context-limit">${t('Compaction threshold')}: ${compactNumber(c.compactAt)} tokens</p>` : ''}`}${!c.complete ? `<p class="warning">${t(c.readiness === 'node-boundary' ? 'This node does not end at a completed turn. Select a completed node.' : 'This context is incomplete or unsupported. Check Source before activating.')}</p>` : c.risk ? `<p class="warning">${t('Context may be near its limit. Confirm before activating.')}</p>` : ''}`;
                 $('#dialog-submit').disabled = !c.complete; $('#dialog-submit').textContent = t(c.risk ? 'Activate anyway' : 'Confirm activation');
             } catch (e) { if (ticket === modalVersion && turn === generation) $('#dialog-error').textContent = e.message; }
         }
         cwd.oninput = () => { checked = null; generation++; $('#dialog-submit').disabled = true; estimate(); };
         $('#activate-as').onclick = () => conversionDialog(p, selection, cwd.value);
-        if ($('#deactivate-session')) $('#deactivate-session').onclick = () => run(async () => { await api('/manage', 'POST', { action: 'deactivate', branchIds: [p.branchId] }); $('#dialog').close(); });
+        $('#activate-as').dataset.modalAction='true';
+        $('#dialog-submit').before($('#activate-as'));
         await estimate();
     } catch (e) { toast(e.message); }
 }
@@ -660,7 +679,7 @@ async function conversionDialog(p, selection = {}, initialCwd = null) {
     try {
         const d = await api('/branches/' + p.branchId), target = p.agent === 'claude' ? 'codex' : 'claude';
         let previews = {}, checkedCwd = null, generation = 0, timer;
-        modal('Activate as…', `<p>${p.agent==='claude'?'Claude':'Codex'} → ${target==='claude'?'Claude':'Codex'}</p>${directoryField(initialCwd || d.cwd)}<label class="field">${t('Context mode')}<select name="mode" aria-label="${t('Context mode')}">${['lean','full','messages'].map(mode=>`<option value="${mode}">${t(modeName(mode))}</option>`).join('')}</select></label><p class="dialog-copy">${t('Creates a separate session. Thinking and attachments stay in the original.')}</p><div id="conversion-preview" role="status"></div>`, async form => {
+        modal('Activate as…', `<p>${p.agent==='claude'?'Claude':'Codex'} → ${target==='claude'?'Claude':'Codex'}</p>${directoryField(initialCwd || d.cwd)}<label class="field">${t('Context mode')}<select name="mode" aria-label="${t('Context mode')}">${['lean','full','messages'].map(mode=>`<option value="${mode}">${t(modeName(mode))}</option>`).join('')}</select></label><div id="conversion-preview" role="status"></div>`, async form => {
             const mode=form.get('mode'), cwd=form.get('cwd'), preview=previews[mode];
             if(!preview || checkedCwd!==cwd){await estimate();return false;}
             const result=await api('/convert','POST',{...selection,branchId:p.branchId,target,mode,cwd,fingerprint:preview.fingerprint,contextAcknowledgement:preview.budget.fingerprint});
@@ -706,15 +725,15 @@ async function settings(options = {}) {
         const p = c.preferences;
         modal('Settings', `<div class="settings-top"><label class="field">${t('Language')}<select id="language"><option value="en" ${locale() === 'en' ? 'selected' : ''}>English</option><option value="zh" ${locale() === 'zh' ? 'selected' : ''}>中文</option></select></label></div>
           <section class="settings-card"><div class="settings-section-heading"><h3>${t('Git repository')}</h3>${!edit ? `<span class="setting-ok">✓ ${t('Connected')}</span><button type="button" id="modify-connection">${t('Modify')}</button>` : ''}</div>
-          <label class="field">${t('SSH remote')}<input name="url" type="text" value="${esc(c.url)}" placeholder="git@github.com:owner/repository.git" ${!edit ? 'disabled' : ''}></label>
-          <p class="dialog-copy">${t('Uses your existing SSH key. Session text is stored in the private repository without a Grove passphrase. Git handles compression and incremental transfer.')}</p>
+          <label class="field">${t('Repository address')}<input name="url" type="text" value="${esc(c.url)}" placeholder="git@github.com:owner/repository.git" ${!edit ? 'disabled' : ''}></label>
+
           ${edit ? `<button type="button" id="verify-connection" class="primary">${t('Connect repository')}</button>` : ''}
-          ${c.legacyAvailable ? `<p class="dialog-copy">${t('Previous WebDAV data is unchanged. Use the migration command to import sessions that only exist there.')}</p>` : ''}</section>
-          <section class="settings-card"><h3>${t('Trash')}</h3><label class="field">${t('Local recovery days')}<input type="number" name="trashRetentionDays" min="1" max="365" value="${p.trashRetentionDays}"></label><p class="dialog-copy">${t('Applies to newly discarded sessions. Expired copies are removed automatically when Grove runs.')}</p></section><section class="settings-card"><h3>${t('Project contents')}</h3><label class="field">${t('Collapse older sessions')}<select name="projectFoldMode">${[['time','By age'],['count','By count'],['none','Show all']].map(([v,l])=>`<option value="${v}" ${p.projectFoldMode===v?'selected':''}>${t(l)}</option>`).join('')}</select></label>${p.projectFoldMode==='time'?`<label class="field">${t('Keep recent days')}<input type="number" name="projectFoldDays" min="1" max="365" value="${p.projectFoldDays}"></label>`:p.projectFoldMode==='count'?`<label class="field">${t('Visible sessions per project')}<input type="number" name="projectFoldCount" min="1" max="365" value="${p.projectFoldCount}"></label>`:''}</section><section class="settings-card"><h3>${t('Automatic updates')}</h3><div class="timer-row"><label><input type="checkbox" name="showScheduledSessions" ${p.showScheduledSessions?'checked':''}>${t('Show scheduled and background sessions')}</label></div><p class="dialog-copy">${t('Changes save immediately. Native files are never deleted.')}</p>
+</section>
+          <section class="settings-card"><h3>${t('Trash')}</h3><label class="field">${t('Local recovery days')}<input type="number" name="trashRetentionDays" min="1" max="365" value="${p.trashRetentionDays}"></label></section><section class="settings-card"><h3>${t('Project contents')}</h3><label class="field">${t('Collapse older sessions')}<select name="projectFoldMode">${[['time','By age'],['count','By count'],['none','Show all']].map(([v,l])=>`<option value="${v}" ${p.projectFoldMode===v?'selected':''}>${t(l)}</option>`).join('')}</select></label>${p.projectFoldMode==='time'?`<label class="field">${t('Keep recent days')}<input type="number" name="projectFoldDays" min="1" max="365" value="${p.projectFoldDays}"></label>`:p.projectFoldMode==='count'?`<label class="field">${t('Visible sessions per project')}<input type="number" name="projectFoldCount" min="1" max="365" value="${p.projectFoldCount}"></label>`:''}</section><section class="settings-card"><h3>${t('Automatic updates')}</h3><div class="timer-row"><label><input type="checkbox" name="showScheduledSessions" ${p.showScheduledSessions?'checked':''}>${t('Show scheduled and background sessions')}</label></div>
             <label class="field">${t('Collapse inactive projects after')}<select name="inactiveProjectDays" aria-label="${t('Collapse inactive projects after')}">${[[7,'One week'],[15,'Half a month'],[30,'One month'],[60,'Two months']].map(([days,label])=>`<option value="${days}" ${days===p.inactiveProjectDays?'selected':''}>${t(label)}</option>`).join('')}</select></label>
             ${[['localUpdate', 'Read local sessions', p.localUpdateEnabled, p.localUpdateMinutes], ['autoUpload', 'Automatically upload local changes', p.autoUploadEnabled, p.autoUploadMinutes]].map(([key,label,on,minutes]) => `<div class="timer-row"><label><input type="checkbox" name="${key}Enabled" ${on ? 'checked' : ''}>${t(label)}</label><label class="timer-interval"><input type="number" name="${key}Minutes" value="${minutes}" min="1" max="1440" ${!on ? 'disabled' : ''}><span>${t('minutes')}</span></label></div>`).join('')}
-            <p class="dialog-copy">${t('Every upload reads local sessions first. No changes means no scheduled cloud request.')}</p><button type="button" id="save-timers" hidden>${t('Save preferences')}</button>
-          </section>${c.recoverable && c.job?.state !== 'running' ? `<button type="button" id="recover-settings">${t('Recover settings change')}</button>` : ''}`, null);
+            <button type="button" id="save-timers" hidden>${t('Save preferences')}</button>
+          </section>`, null);
         $('#dialog-cancel').textContent = t('Close');
         enhanceSelect($('#language'));
         $('#language').onchange = async e => { setLocale(e.target.value); render(); await settings(options); };
@@ -738,9 +757,9 @@ async function settings(options = {}) {
     } catch(e) { toast(e.message); }
 }
 function information() {
-    modal('Information', `<details><summary>${t('When can I use each action?')}</summary><ul class="action-guide"><li>${t('Update reads local sessions. Sync pulls remote changes before pushing local work, including Pending.')}</li><li>${t('Move belongs to the session list. Select items before choosing a project.')}</li><li>${t('In a transcript, select a start and end to Combine or Dissolve a continuous range.')}</li><li>${t('Select a graph node to Rename it. Naming Pending makes it a saved node.')}</li><li>${t('Activate includes the selected node and its preceding context. Only session endpoints can move to Trash.')}</li><li>${t('Archived shows only archived paths with their prefixes. Restore returns a path to its project without activating it.')}</li></ul><p class="dialog-copy">${t('Token counts are estimates. Local configuration and recorded usage inform activation warnings; unknown limits are not guessed.')}</p><p class="dialog-copy">${t('Close running agents before changing native activation. Browsing and organization remain available.')}</p></details><details><summary>${t('Sync and local copies')}</summary><p>${t('Pull fetches the Git repository and imports all sessions locally. Click any session to open it. Push pulls first. Automatic Push is optional and off by default.')}</p></details><details><summary>${t('Context mode')}</summary>${['lean','full','messages'].map(m=>`<p><strong>${t(modeName(m))}</strong> — ${contextCopy(m)}</p>`).join('')}<p>${t('Counts estimate packaged text, not exact model billing or live context. Target instructions and files may add tokens.')}</p></details><details><summary>${t('Diagnostics')}</summary><p class="dialog-copy">${t('Logs contain timings, operation types and error references; no conversation text, passwords, URLs or working paths.')}</p><button type="button" id="download-diagnostics">${t('Download diagnostics')}</button></details>${(state.data.plan?.pendingRecovery||[]).map(id=>`<button type="button" data-recover="${esc(id)}">${t('Recover interrupted operation')}</button>`).join('')}${state.data.conflicts.map((c,i)=>`<div class="conflict">${t('Conflict')}: ${esc(c.local.name)}<button type="button" data-conflict="${i}" data-choice="local">${t('Keep local')}</button><button type="button" data-conflict="${i}" data-choice="remote">${t('Use remote')}</button></div>`).join('')}`,null);
-    const operation=state.data.cloud.operation, metrics=operation?.network;
-    $('#dialog-content').insertAdjacentHTML('beforeend', `<details id="transfer-diagnostics"><summary>${t('Transfer statistics')}</summary><p>${t('Git reports object progress and transfer speed when available. These are not HTTP request counters or billed network traffic.')}</p>${metrics?`<dl><dt>${t('Downloaded')}</dt><dd>${bytesLabel(metrics.bytesReceived||0)}</dd><dt>${t('Upload payload')}</dt><dd>${bytesLabel(metrics.bytesSent||0)}</dd><dt>${t('Requests')}</dt><dd>${metrics.requests||0}</dd><dt>${t('Elapsed')}</dt><dd>${Math.round(((operation.finishedAt||Date.now())-operation.startedAt)/1000)} s</dd></dl>`:`<p>${t('Not recorded')}</p>`}${operation?.summary?`<p>${t('Cached sessions checked')}: ${operation.summary.checked||0} · ${t('Published items')}: ${operation.summary.published||0} · ${t('Verified records')}: ${operation.summary.uploaded||0}</p>`:''}</details>`);
+    modal('Information', `<details><summary>${t('Using Grove')}</summary><ul class="action-guide"><li>${t('Update reads your local sessions. Pull gets changes from your other devices. Push sends your changes after pulling.')}</li><li>${t('Activate opens the selected node and its preceding context in your tool. Deactivate is available at the active endpoint.')}</li><li>${t('Renaming changes the Grove label. Your conversation keeps the same identity.')}</li></ul></details><details><summary>${t('Sync and recovery')}</summary><p>${t('Sessions are stored as readable files in your Git repository. Earlier versions remain in Git history.')}</p><p>${t('Changes made during upload remain queued for the next upload.')}</p><p>${t('Trash keeps a recovery copy on this device until its displayed expiry date.')}</p></details><details><summary>${t('Tokens and tools')}</summary><p>${t('Token counts estimate the selected conversation and recorded tool context. Model capacity and compaction thresholds come from available model settings.')}</p>${['lean','full','messages'].map(m=>`<p><strong>${t(modeName(m))}</strong> — ${contextCopy(m)}</p>`).join('')}<p>${t('Switching tools creates a new session. Thinking and attachments remain in the original.')}</p></details><details><summary>${t('Diagnostics')}</summary><button type="button" id="download-diagnostics">${t('Download diagnostics')}</button></details>${(state.data.plan?.pendingRecovery||[]).map(id=>`<button type="button" data-recover="${esc(id)}">${t('Recover interrupted operation')}</button>`).join('')}${state.data.conflicts.map((c,i)=>`<div class="conflict">${t('Conflict')}: ${esc(c.local.name)}<button type="button" data-conflict="${i}" data-choice="local">${t('Keep local')}</button><button type="button" data-conflict="${i}" data-choice="remote">${t('Use remote')}</button></div>`).join('')}`,null);
+    const operation=state.data.cloud.operation;
+    if (operation) $('#dialog-content').insertAdjacentHTML('beforeend', `<details id="transfer-diagnostics"><summary>${t('Last transfer')}</summary><dl><dt>${t('Elapsed')}</dt><dd>${Math.round(((operation.finishedAt||Date.now())-operation.startedAt)/1000)} s</dd>${operation.summary?`<dt>${t('Sessions checked')}</dt><dd>${operation.summary.checked||0}</dd><dt>${t('Items pushed')}</dt><dd>${operation.summary.published||0}</dd>`:''}</dl></details>`);
     $('#download-diagnostics').onclick=async()=>{try{const report=await api('/diagnostics'),url=URL.createObjectURL(new Blob([JSON.stringify(report,null,2)],{type:'application/json'})),link=document.createElement('a');link.href=url;link.download='session-grove-diagnostics.json';link.click();setTimeout(()=>URL.revokeObjectURL(url),1000);}catch(e){$('#dialog-error').textContent=e.message;}};
     $$('[data-conflict]').forEach(el=>el.onclick=()=>run(async()=>{await api('/conflicts/resolve','POST',{index:Number(el.dataset.conflict),choice:el.dataset.choice});$('#dialog').close();}));
     $$('[data-recover]').forEach(el=>el.onclick=()=>run(async()=>{await api('/recover','POST',{id:el.dataset.recover});$('#dialog').close();}));
@@ -751,19 +770,15 @@ function about() {
 async function sync(direction = 'pull'){
     if(!state.data.cloud.configured||!state.data.cloud.unlocked)return settings();
     if(state.syncPreparing||state.data.cloud.phase==='syncing')return;
-    state.syncPreparing=direction;syncPinned=true;showSyncPanel($('#transfer-progress'),$('#sync-details'));$('#sync-details').setAttribute('aria-expanded','true');renderCloudStatus();
+    state.syncPreparing=direction;renderCloudStatus();
     try{const result=await api('/synchronize/transfer','POST',{direction});state.syncOperation=result.operationId;const next=await api('/status');state.data.cloud=next.cloud;renderCloudStatus();}
     catch(e){toast(e.message);}finally{state.syncPreparing=false;renderCloudStatus();}
 }
 $('#about').onclick=about;$('#information').onclick=information;$('#sync').onclick=()=>sync('pull');$('#upload').onclick=()=>sync('push');$('#settings').onclick=()=>settings();
-$('#sync-details').onclick=()=>{syncPinned=!syncPinned;if(syncPinned){showSyncPanel($('#transfer-progress'),$('#sync-details'));renderTransfer();}else hideSyncPanel($('#transfer-progress'));$('#sync-details').setAttribute('aria-expanded',String(syncPinned));};
-$('#sync-details').onmouseenter=()=>{showSyncPanel($('#transfer-progress'),$('#sync-details'));renderTransfer();};
-$('#sync-details').onmouseleave=e=>{if(!syncPinned&&!$('#transfer-progress').contains(e.relatedTarget))setTimeout(()=>{if(!syncPinned&&!$('#transfer-progress').matches(':hover'))hideSyncPanel($('#transfer-progress'));},150);};
-$('#transfer-progress').onmouseleave=()=>{if(!syncPinned)hideSyncPanel($('#transfer-progress'));};
 $('#push-zone').onmouseenter=$('#push-zone').onfocusin=showPendingUploads;
 $('#push-zone').onmouseleave=$('#push-zone').onfocusout=e=>{if(!$('#push-zone').contains(e.relatedTarget))pendingTimer=setTimeout(()=>{pendingTicket++;hideSyncPanel($('#pending-uploads'));},180);};
-document.addEventListener('keydown',e=>{if(e.key==='Escape'){syncPinned=false;hideSyncPanel($('#transfer-progress'));hideSyncPanel($('#pending-uploads'));$('#sync-details').setAttribute('aria-expanded','false');}});
-window.addEventListener('resize',()=>{for(const [panel,anchor]of [['transfer-progress','sync-details'],['pending-uploads','push-zone']])if(!$('#'+panel).hidden)positionSyncPanel($('#'+panel),$('#'+anchor));});
+document.addEventListener('keydown',e=>{if(e.key==='Escape'){hideSyncPanel($('#pending-uploads'));$('#sync-details').setAttribute('aria-expanded','false');}});
+window.addEventListener('resize',()=>{for(const [panel,anchor]of [['pending-uploads','push-zone']])if(!$('#'+panel).hidden)positionSyncPanel($('#'+panel),$('#'+anchor));});
 
 function applyPanePreferences(){
     const layout=$('#layout');layout.classList.toggle('nav-collapsed',localStorage.getItem('grove-nav-collapsed')==='true');layout.classList.toggle('rail-collapsed',localStorage.getItem('grove-rail-collapsed')==='true');

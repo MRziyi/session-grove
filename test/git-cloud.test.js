@@ -35,7 +35,7 @@ test('Git roundtrip, metadata-only rename and no-op Push preserve bodies and his
     a.store.edit(session.id, { name: 'Renamed' }); await push(a);
     const files = execFileSync('git', ['--git-dir', e.url, 'diff', '--name-only', first, 'main'], { encoding: 'utf8' });
     assert.ok(!files.includes('records/')); assert.match(files, /graph.json/);
-    const second = a.cloud.connection.remote.head; await push(a); assert.equal(a.cloud.connection.remote.head, second);
+    const second = a.cloud.connection.remote.head; const current = await pull(a); assert.equal(current.unchanged, true); assert.equal(a.auto.operation.summary.unchanged, true); await push(a); assert.equal(a.cloud.connection.remote.head, second);
     await pull(b); assert.equal(b.store.get('branch', session.id).name, 'Renamed');
 });
 
@@ -108,4 +108,24 @@ test('migration excludes old Archive and Trash before the first commit', async t
         assert.equal(JSON.parse(fs.readFileSync(path.join(stage, 'prepared.json'))).excludedArchivedBranches, 1);
         assert.equal(a.store.get('branch', archived.id).archived, true); // source untouched
     } finally { store.close(); }
+});
+
+test('pending semantic changes become the Git message and reset after Push', async t => {
+    const e=fixture(t),a=e.device('a'),s=branch(a,'Before');await push(a);
+    a.store.edit(s.id,{name:'After'});
+    let changes=a.auto.pendingItems()[0].changes;
+    assert.deepEqual(changes.map(c=>c.kind),['session-renamed']);
+    const head=a.store.get('branch',s.id).head;
+    a.store.ingest(s.id,a.store.raw(head)+codexTurn('More','Done').map(r=>JSON.stringify(r)+'\n').join(''),head,{});
+    let graph=a.store.treeGraph(s.id);
+    a.store.organize(s.id,{version:graph.version,pathId:s.id,chatIds:graph.paths[0].messages.slice(0,2).map(m=>m.id),action:'combine',name:'First node'});
+    changes=a.auto.pendingItems()[0].changes;
+    assert.ok(changes.some(c=>c.kind==='transcript-appended'&&c.count===6));assert.ok(changes.some(c=>c.kind==='node-added'));
+    await push(a);
+    const message=execFileSync('git',['--git-dir',e.url,'log','-1','--format=%B'],{encoding:'utf8'});
+    assert.match(message,/After/);assert.match(message,/Session renamed: Before → After/);assert.match(message,/Transcript appended: 6 records/);assert.match(message,/First node/);
+    assert.deepEqual(a.auto.pendingItems(),[]);
+    graph=a.store.treeGraph(s.id);const node=graph.nodes.find(n=>n.name==='First node');
+    a.store.organize(s.id,{version:graph.version,pathId:s.id,nodeId:node.id,action:'rename',name:'Better node'});
+    assert.deepEqual(a.auto.pendingItems()[0].changes.map(c=>c.kind),['node-renamed']);
 });

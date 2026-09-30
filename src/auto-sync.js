@@ -70,6 +70,7 @@ export class AutoSync {
         return this.syncJob;
     }
     pendingItems() {
+        if (this.cloud.provider === 'git') return this.cloud.pendingItems();
         const dirty = new Set(this.cloud.dirtyIds()), removals = new Set((this.store.local('trashPending') || []).map(e => e.id));
         return [...this.store.syncCollections().items.filter(i => dirty.has(i.id)).map(i => ({ id: i.id, name: i.name, updatedAt: i.updatedAt, action: 'upload' })),
             ...(this.store.local('trashEntries') || []).filter(e => removals.has(e.id)).map(e => ({ id: e.id, name: e.names.join(', '), updatedAt: e.at, action: 'remove' }))];
@@ -78,12 +79,13 @@ export class AutoSync {
         this.operation = { ...this.operation, step: 'pull' }; this.progress({ phase: 'Checking cloud directory', completed: 0, total: null });
         if (this.run) return this.run(this.store, this.readConfig(), this.passphrase, 'pull');
         if (!await this.cloud.connect(this.passphrase, { readOnly: true })) { this.cloud.report('Cloud vault is empty', 0, 0); return { downloaded: 0 }; }
-        await this.cloud.catalog(this.passphrase);
+        const catalog = await this.cloud.catalog(this.passphrase);
         const projects = this.cloud.summaries(), started = Date.now(); let completed = 0;
         this.cloud.report('Updating project lists', 0, projects.length, started);
         for (const p of projects) { await this.cloud.project(p.id, this.passphrase); this.cloud.report('Updating project lists', ++completed, projects.length, started, p.name); }
         const local = new Set(this.store.all('branch').map(b => b.id));
         const items = this.cloud.items().filter(i => this.cloud.provider === 'git' || local.has(i.id));
+        const importsPending = items.some(i => i.versions?.some(v => !(this.cloud.cache().loaded[i.id] || []).includes(v.ref)));
         if (!deferProgress || this.cloud.provider === 'git') this.pullGroup = { completed: 0, fraction: 0, total: items.length };
         try {
             this.cloud.report('Pulling sessions', 0, items.length, started);
@@ -91,7 +93,7 @@ export class AutoSync {
         } finally { this.pullGroup = null; }
         this.cloud.saveDirectory(); this.store.local('lastPull', now());
         if (!deferProgress) this.cloud.report('Pull complete', items.length, items.length, started);
-        return { downloaded: items.length };
+        return { downloaded: items.length, unchanged: catalog?.remoteChanged === false && !importsPending };
     }
     startTransfer(direction, manual = true, captured = false) {
         assert(['pull', 'push'].includes(direction), 'Choose Pull or Push.');
@@ -104,7 +106,7 @@ export class AutoSync {
             this.progress({ phase: 'Reading local changes', completed: 0, total: null });
             if (!captured) await this.beforeUpload?.();
             const pulled = await this.pullCached({ deferProgress: direction === 'push' });
-            this.operation = { ...this.operation, summary: { checked: pulled?.downloaded || 0 } };
+            this.operation = { ...this.operation, summary: { checked: pulled?.downloaded || 0, unchanged: !!pulled?.unchanged } };
             if (direction === 'pull') { if (!this.lastFailure?.requiresReview) this.needsReview = null; return pulled; }
             assert(!(this.store.local('conflicts') || []).length, 'Resolve sync conflicts before uploading.');
             const beginPush = () => {

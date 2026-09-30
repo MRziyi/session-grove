@@ -16,13 +16,14 @@ export class GitRemote {
         this.directory = directory; this.url = url; this.onProgress = onProgress;
         this.controller = new AbortController();
     }
-    async run(args, { accepted = [0], progress = false } = {}) {
+    async run(args, { accepted = [0], progress = false, input = null } = {}) {
         this.controller.signal.throwIfAborted();
         return new Promise((resolve, reject) => {
             const child = spawn('git', ['-c', 'core.hooksPath=/dev/null', '-c', 'commit.gpgsign=false', '-c', 'core.quotePath=false', '-c', 'core.pager=cat', ...args], {
                 cwd: this.directory, env: { ...process.env, GIT_TERMINAL_PROMPT: '0', GIT_SSH_COMMAND: 'ssh -o BatchMode=yes -o ConnectTimeout=15', GIT_CONFIG_NOSYSTEM: '1' },
-                stdio: ['ignore', 'pipe', 'pipe'], signal: this.controller.signal,
+                stdio: [input === null ? 'ignore' : 'pipe', 'pipe', 'pipe'], signal: this.controller.signal,
             });
+            if (input !== null) { child.stdin.on('error', () => {}); child.stdin.end(input); }
             let stdout = '', stderr = '', progressBuffer = '', settled = false, phase = '', phaseStarted = Date.now();
             const timer = setTimeout(() => child.kill('SIGTERM'), 10 * 60 * 1000); timer.unref();
             child.stdout.on('data', chunk => { stdout += chunk; if (stdout.length > 32 * 1024 * 1024) child.kill(); });
@@ -75,10 +76,10 @@ export class GitRemote {
         await this.run(['clean', '-fd']);
         this.head = (await this.run(['rev-parse', 'HEAD'])).stdout;
     }
-    async commitAndPush() {
+    async commitAndPush(message = 'Update Grove sessions') {
         await this.run(['add', '--all']);
         const diff = await this.run(['diff', '--cached', '--quiet'], { accepted: [0, 1] });
-        if (diff.code) await this.run(['commit', '-m', 'Update Grove sessions']);
+        if (diff.code) await this.run(['commit', '-F', '-'], { input: message });
         // Normal fast-forward push is our concurrency check. Never force-push.
         await this.run(['push', '--progress', 'origin', 'HEAD:refs/heads/main'], { progress: true });
         this.head = (await this.run(['rev-parse', 'HEAD'])).stdout;

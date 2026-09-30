@@ -8,6 +8,8 @@ Session Grove is a project-based session manager for **Claude Code and Codex**. 
 
 ![A conversation and its context tree in Session Grove](docs/images/workspace.png)
 
+**0.15:** Git sync is now the default backend. Pending changes explain what changed and generate commit messages. Pull/Push show progress inside their buttons; unchanged Pull reports “Already up to date”. Session aliases preserve native identity, and active graph endpoints offer Deactivate.
+
 ## When your chat history becomes the problem
 
 You build a useful context, branch to try another idea, then branch again to write the introduction, debug an implementation, or explore a different approach. Soon the native chat list contains several almost-identical conversations. You remember what you worked on, but not which session contains it.
@@ -67,7 +69,7 @@ Git sync is optional. In Settings, connect an empty private repository using `gi
 
 Downloads and uploads are manual by default. **Pull** fetches the repository and imports all current sessions locally. **Push** completes Pull before publishing local changes. Hover/focus Push to inspect pending items. Automatic upload is opt-in, including after upgrade; its default interval is 15 minutes and it follows the same pull-before-push sequence. There is no independent download timer. Local session capture remains independently configurable, defaulting to 1 minute.
 
-Transfer details show concrete stages, the current action, progress, remaining time and download speed; technical counters are in Information. Errors use a bounded header inspector. Local Rename, Activate, Trash and node organization remain available during sync. Publication acknowledges its snapshot only; later edits remain queued. Session modification dates include transcript and organization changes, drive sorting and newer-version reconciliation, and are not advanced by browsing or downloading. See the mandatory [white-box design](docs/design.md) and [sync contract](docs/sync-policy.md).
+The split buttons show transfer progress, with the current action above them and available phase percentage, speed and ETA alongside. Errors appear inline; long details can be expanded within a bounded area. Local Rename, Activate, Trash and node organization remain available during sync. Publication acknowledges its snapshot only; later edits remain queued. Session modification dates include transcript and organization changes, drive sorting and newer-version reconciliation, and are not advanced by browsing or downloading. See the mandatory [white-box design](docs/design.md) and [sync contract](docs/sync-policy.md).
 
 The library retains original session records. Node edits organize those records rather than rewriting the conversation. Pull fetches and imports the entire current library. Push pulls first and publishes a Git commit; native Active choices stay on each device. Trash removes content from the current version on Push, while earlier Git commits remain. Local recovery is optional convenience, not a cloud cleanup operation.
 

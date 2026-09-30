@@ -247,3 +247,23 @@ test('Codex materialization preserves untouched record bytes and large integer p
     const raw=codexSample(cwd,[['Keep context','Ready']])+record;
     const output=renderNative(raw,'codex',randomUUID(),cwd,'Copy');assert.ok(output.endsWith(record));
 });
+
+test('Grove rename preserves native IDs and Claude message links through continuation and reactivation', t => {
+    const {store,native,cwd}=setup(t),b=store.branch(null,'Original label','claude',claudeSample(cwd,[['Question','Answer']]));
+    native.setActive(b.id,cwd,true,{nodeName:'Pending 1'});native.apply([b.id]);
+    const instance=store.instances().find(i=>i.branchId===b.id),original=fs.readFileSync(instance.file,'utf8');
+    const ids=store.treeGraph(b.id).paths[0].messages.map(m=>m.id);
+    store.edit(b.id,{name:'Grove alias'});
+    assert.equal(store.get('branch',b.id).head,b.head);assert.equal(native.plan().operations.length,0);
+    native.apply([b.id]);assert.equal(fs.readFileSync(instance.file,'utf8'),original);
+    assert.deepEqual(store.treeGraph(b.id).paths[0].messages.map(m=>m.id),ids);
+    native.setActive(b.id,null,false);native.apply([b.id]);native.setActive(b.id,cwd,true,{nodeName:'Pending 1'});native.apply([b.id]);
+    const current=store.instances().find(i=>i.branchId===b.id),rows=fs.readFileSync(current.file,'utf8').trim().split('\n').map(JSON.parse);
+    assert.equal(current.nativeId,instance.nativeId);
+    assert.deepEqual(rows.filter(r=>r.type==='user'||r.type==='assistant').map(r=>r.uuid),original.trim().split('\n').map(JSON.parse).filter(r=>r.type==='user'||r.type==='assistant').map(r=>r.uuid));
+    const last=rows.findLast(r=>r.type==='assistant'),u=randomUUID();
+    fs.appendFileSync(current.file,[{type:'user',uuid:u,parentUuid:last.uuid,sessionId:current.nativeId,cwd,message:{role:'user',content:'Continue after rename'}},{type:'assistant',uuid:randomUUID(),parentUuid:u,sessionId:current.nativeId,cwd,message:{role:'assistant',content:'Still linked',stop_reason:'end_turn'}}].map(r=>JSON.stringify(r)+'\n').join(''));
+    assert.deepEqual(native.collect().errors,[]);assert.equal(store.get('branch',b.id).name,'Grove alias');
+    assert.deepEqual(store.detail(b.id).messages.map(m=>m.text),['Question','Answer','Continue after rename','Still linked']);
+    assert.equal(store.all('branch').length,1);
+});

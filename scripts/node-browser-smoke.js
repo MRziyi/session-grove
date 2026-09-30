@@ -21,15 +21,15 @@ try{
  const wait=async expression=>{for(let i=0;i<100;i++){if(await evaluate(expression))return;await new Promise(r=>setTimeout(r,100));}throw Error('Timeout '+expression);};
  await call('Runtime.enable');await call('Emulation.setDeviceMetricsOverride',{width:1512,height:982,deviceScaleFactor:1,mobile:false});await wait('document.querySelector("[data-open]")');await evaluate('document.querySelector("[data-open]").click()');await wait('document.querySelectorAll("[data-node]").length>10');
  await evaluate('document.querySelector("#graph-reset").click()');
- const graph=store.treeGraph(parent.id),targets=[parent,child].map(b=>graph.paths.find(p=>p.branchId===b.id).nodeIds.at(-1));
+ const graph=store.treeGraph(parent.id),targets=[parent,child].map(b=>graph.paths.find(p=>p.branchId===b.id).nodeIds.at(-4));
  async function positionNode(node){const v=await evaluate(`(()=>{const a=document.querySelector('[data-node="${node}"]').getBoundingClientRect(),b=document.querySelector('#graph-scroll').getBoundingClientRect();return {x:b.x+b.width/2,y:b.y+b.height/2,deltaX:a.x+a.width/2-b.x-b.width/2,deltaY:a.y+a.height/2-b.y-b.height/2}})()`);await call('Input.dispatchMouseEvent',{type:'mouseWheel',...v});await evaluate('new Promise(resolve=>requestAnimationFrame(resolve))');}
  async function clickNode(node){await positionNode(node);const rect=await evaluate(`(()=>{const r=document.querySelector('[data-node="${node}"]').getBoundingClientRect();return {x:r.x+r.width/2,y:r.y+r.height/2}})()`);await call('Input.dispatchMouseEvent',{type:'mousePressed',button:'left',clickCount:1,...rect});await call('Input.dispatchMouseEvent',{type:'mouseReleased',button:'left',clickCount:1,...rect});await evaluate('new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))');}
  for(const target of [...targets,...targets]){
   await positionNode(target);
   const before=await evaluate(`(()=>{const r=document.querySelector('[data-node="${target}"]').getBoundingClientRect();return {x:r.x,y:r.y}})()`);
   await clickNode(target);
-  const result=await evaluate(`(()=>{const el=document.querySelector('[data-node="${target}"]'),r=el.getBoundingClientRect(),pane=document.querySelector('#transcripts'),segment=document.querySelector('[data-segment="${target}"]').getBoundingClientRect(),view=pane.getBoundingClientRect();return {selected:el.getAttribute('aria-pressed'),x:r.x,y:r.y,scroll:pane.scrollTop,visible:segment.top<view.bottom&&segment.bottom>view.top}})()`);
-  assert.equal(result.selected,'true');assert.ok(Math.abs(result.x-before.x)<=4&&Math.abs(result.y-before.y)<=4,'graph camera must stay on clicked branch: '+JSON.stringify({before,result}));assert.ok(result.scroll>100&&result.visible,'one click must align the new transcript after rendering');
+  const result=await evaluate(`(()=>{const el=document.querySelector('[data-node="${target}"]'),r=el.getBoundingClientRect(),pane=document.querySelector('#transcripts'),segment=document.querySelector('[data-segment="${target}"]').getBoundingClientRect(),view=pane.getBoundingClientRect();return {selected:el.getAttribute('aria-pressed'),x:r.x,y:r.y,scroll:pane.scrollTop,offset:segment.top-view.top,visible:segment.top<view.bottom&&segment.bottom>view.top}})()`);
+  assert.equal(result.selected,'true');assert.ok(Math.abs(result.x-before.x)<=4&&Math.abs(result.y-before.y)<=4,'graph camera must stay on clicked branch: '+JSON.stringify({before,result}));assert.ok(result.scroll>100&&result.visible,'one click must align the new transcript after rendering');assert.ok(Math.abs(result.offset)<4,'deep node must align on the FIRST click: '+JSON.stringify(result));
  }
  if(!process.argv.includes('--navigation-only')){
   const internal=graph.paths.find(p=>p.branchId===parent.id).nodeIds[5];await clickNode(internal);
@@ -37,11 +37,24 @@ try{
   assert.equal(await evaluate('!!document.querySelector("#fork")||!!document.querySelector("#toggle-active")||!!document.querySelector("#convert-session")'),false);
   await evaluate('document.querySelector("#activate-node").click()');await wait('document.querySelector("#activation-title")?.textContent.startsWith("[Grove]")&&!document.querySelector("#dialog-submit").disabled');
   fs.mkdirSync('test-results',{recursive:true});const screenshot=await call('Page.captureScreenshot',{format:'png'});fs.writeFileSync('test-results/node-activation.png',Buffer.from(screenshot.data,'base64'));
+  assert.equal(await evaluate('document.querySelector("#activate-as").nextElementSibling.id'),'dialog-submit');
+  assert.equal(await evaluate('!!document.querySelector("#deactivate-session")'),false);
+  await call('Emulation.setDeviceMetricsOverride',{width:390,height:844,deviceScaleFactor:1,mobile:true});
+  assert.ok(await evaluate('(()=>{const d=document.querySelector("#dialog"),a=document.querySelector("#activate-as").getBoundingClientRect(),b=document.querySelector("#dialog-submit").getBoundingClientRect();return d.scrollWidth<=d.clientWidth+1&&a.right<=b.left&&Math.abs(a.top-b.top)<2})()'));
+  await call('Emulation.setDeviceMetricsOverride',{width:1512,height:982,deviceScaleFactor:1,mobile:false});
   const title=await evaluate('document.querySelector("#activation-title").textContent');assert.equal(title,'[Grove] Mixed session · codex node 5');assert.equal(store.all('branch').length,2);
   await evaluate('document.querySelector("#activate-as").click()');await wait('document.querySelector("#conversion-preview")?.textContent.includes("tokens")');assert.ok(await evaluate('document.querySelector("#conversion-preview").textContent.includes("[Grove] Mixed session · codex node 5")'));
   await evaluate('document.querySelector("#dialog-close").click();document.querySelector("#activate-node").click()');await wait('!!document.querySelector("#activation-title")&&!document.querySelector("#dialog-submit").disabled');
   await evaluate('document.querySelector("#dialog-form").requestSubmit()');await wait('!document.querySelector("#dialog").open');assert.equal(store.all('branch').length,3);assert.ok(store.instances().some(i=>i.applied&&i.title===title));
-  await evaluate('window.__requests=[];const originalFetch=window.fetch;window.fetch=(url,...args)=>{window.__requests.push(String(url));return originalFetch(url,...args)};document.querySelector("[data-scope=trash]").click()');await wait('document.querySelector(".trash-note")&&window.__requests.includes("/api/trash")');
+  await wait('document.querySelectorAll(".active-node-dot").length>=2');
+  const active=store.instances().find(i=>i.applied&&i.title===title),fresh=store.treeGraph(parent.id),endpoint=fresh.paths.find(p=>p.branchId===active.branchId).nodeIds.at(-1);
+  await clickNode(endpoint);assert.equal(await evaluate('document.querySelector("#activate-node").textContent'),'Deactivate');
+  await evaluate('document.querySelector("#activate-node").click()');await wait('document.querySelector("#activate-node")?.textContent==="Activate"');
+  const pendingName=await evaluate(`document.querySelector('[data-node="${endpoint}"] .node-title').textContent`);
+  await evaluate('document.querySelector("#activate-node").click()');await wait('document.querySelector("#dialog").open&&document.querySelector("#activation-title")?.textContent.length&&!document.querySelector("#dialog-submit").disabled');
+  assert.ok((await evaluate('document.querySelector("#activation-title").textContent')).endsWith(pendingName));
+  await evaluate('document.querySelector("#dialog-close").click()');
+  await evaluate('window.__requests=[];const originalFetch=window.fetch;window.fetch=(url,...args)=>{window.__requests.push(String(url));return originalFetch(url,...args)};document.querySelector("[data-scope=trash]").click()');await wait('document.querySelector("#list-title").textContent==="Trash"&&window.__requests.includes("/api/trash")');
   const paths=await evaluate('window.__requests');assert.ok(!paths.some(p=>p==='/api/state'||p.startsWith('/api/list')),'Trash must use its lightweight endpoint');
  }
  assert.deepEqual(errors,[]);console.log('Browser passed: one-click cross-tool branch positioning, stable graph camera, unified activation preview/title, conversion panel, prefix continuation, lightweight Trash.');

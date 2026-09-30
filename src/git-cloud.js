@@ -6,6 +6,7 @@ import { GitRemote, gitRemote } from './git-remote.js';
 import { assert, hash, now, atomic } from './util.js';
 import { bodyRefs, retainedGraph } from './retention.js';
 import { applyTrashState, deletedIds, trashState } from './trash.js';
+import { changeSnapshot, sessionChanges, commitMessage } from './session-changes.js';
 import { cloudProjectId } from './inbox.js';
 const digest = value => hash(JSON.stringify(value));
 
@@ -27,7 +28,7 @@ export class GitCloud extends Cloud {
         return this.connection;
     }
     lock() { this.connection?.remote.controller.abort(); super.lock(); }
-    directory() { return this.connection.remote.directory; }
+    directory() { return this.connection?.remote.directory || path.join(this.store.root, 'git-cache', hash(this.readConfig().url || '')); }
     file(name) {
         const file = path.join(this.directory(), name);
         // Never follow repository-controlled symlinks outside our checkout.
@@ -98,16 +99,20 @@ export class GitCloud extends Cloud {
             return { ...value.project, index, treeIds, count: treeIds.length };
         });
         c.heads = { git: { projects: summaries } }; c.indexes = indexes; c.checkedAt = now();
+        for (const entry of this.entries()) if (!(c.baselines ||= {})[entry.id]) c.baselines[entry.id] = changeSnapshot(this.read(this.folder(entry.id) + '/graph.json'));
         this.save(c);
         const state = this.read('trash.json', { schema: 1, events: [] });
         if (state.events.length) applyTrashState(this.store, state);
     }
     async catalog() {
         await this.connect(); this.report('Fetching Git changes');
+        const previous = this.cache().gitHead;
         await this.connection.remote.fetch();
+        const remoteChanged = (previous || null) !== (this.connection.remote.head || null);
         if (this.connection.remote.head) this.loadDirectory();
         else { const c = this.cache(); c.heads = {}; c.indexes = {}; c.checkedAt = now(); this.save(c); }
-        return { projects: this.summaries().length };
+        const cache = this.cache(); cache.gitHead = this.connection.remote.head; this.save(cache);
+        return { projects: this.summaries().length, remoteChanged };
     }
     async project(projectId) { return this.items().filter(i => i.projectId === projectId); }
     async hydrate(treeId, passphrase, { latest = true } = {}) {
@@ -134,6 +139,7 @@ export class GitCloud extends Cloud {
         const wasDirty = before && digest(before) !== c.ack[treeId];
         const result = this.store.merge(graph, {}, { latest });
         c.loaded[treeId] = [item.ref];
+        (c.baselines ||= {})[treeId] = changeSnapshot(graph);
         const extraLocal = before?.branches.some(b => !graph.branches.some(r => r.id === b.id));
         if ((!wasDirty || !result.keptLocal && !extraLocal) && !(this.store.local('conflicts') || []).length) c.ack[treeId] = digest(treeSnapshot(this.store, treeId));
         this.save(c); this.report('Importing session from Git cache', 1, 1, Date.now(), item.name);
@@ -144,6 +150,16 @@ export class GitCloud extends Cloud {
         const downloadIds = this.items().filter(i => !(this.cache().loaded[i.id] || []).includes(i.ref)).map(i => i.id);
         return { pull: { trees: downloadIds.length, records: 0 }, push: { trees: this.dirtyIds().length, records: 0, bytes: 0 }, large: false, downloadIds };
     }
+    pendingItems() {
+        this.useSavedCache();
+        const c = this.cache(), dirty = new Set(this.dirtyIds());
+        return this.store.syncCollections().items.filter(i=>dirty.has(i.id)).map(i => {
+            const graph = treeSnapshot(this.store,i.id);
+            let before = c.baselines?.[i.id];
+            if (!before && c.ack[i.id]) before = this.store.memo('git-baseline:'+i.id+':'+c.ack[i.id],()=>changeSnapshot(this.read(this.folder(i.id)+'/graph.json')));
+            return {id:i.id,name:i.name,project:graph.projects.find(p=>p.id===cloudProjectId(i.projectId))?.name || 'Ungrouped',updatedAt:i.updatedAt,action:'upload',changes:sessionChanges(before,changeSnapshot(graph),this.store)};
+        }).concat((this.store.local('trashPending') || []).map(e=>({id:e.id,name:(this.store.local('trashEntries')||[]).find(t=>t.id===e.id)?.names.join(', ') || 'Removed sessions',project:this.store.all('project').find(p=>p.id===this.store.find('branch',e.branchIds[0])?.projectId)?.name || 'Ungrouped',action:'remove',updatedAt:e.at,changes:[{kind:'session-removed',label:'Session removed'}]})));
+    }
     async publish(treeIds, passphrase, { catalogFresh = false } = {}) {
         if (!catalogFresh) {
             await this.catalog();
@@ -152,6 +168,7 @@ export class GitCloud extends Cloud {
         assert(!(this.store.local('conflicts') || []).length, 'Resolve sync conflicts before pushing.');
         const remote = this.connection.remote;
         // Capture exactly what this commit will acknowledge before yielding to local edits.
+        const changes = this.pendingItems();
         const snapshots = new Map(this.dirtyIds().map(id => [id, treeSnapshot(this.store, id)]));
         const items = new Map(this.store.syncCollections().items.map(i => [i.id, i]));
         const pending = structuredClone(this.store.local('trashPending') || []);
@@ -188,11 +205,11 @@ export class GitCloud extends Cloud {
             await yieldToLocal();
         }
         this.report('Pushing Git commit');
-        await remote.commitAndPush();
+        await remote.commitAndPush(commitMessage(changes));
         // A failed/non-fast-forward push never clears pending work or acknowledges data.
         const c = this.cache();
-        for (const [id, graph] of snapshots) { c.ack[id] = digest(graph); c.loaded[id] = [digest(graph)]; }
-        c.lastUpload = now(); this.save(c);
+        for (const [id, graph] of snapshots) { c.ack[id] = digest(graph); (c.baselines ||= {})[id] = changeSnapshot(graph); c.loaded[id] = [digest(graph)]; }
+        c.lastUpload = now(); c.gitHead = remote.head; this.save(c);
         if (state.events.length) applyTrashState(this.store, state); this.loadDirectory(); this.saveDirectory();
         return { published: snapshots.size, uploaded: 0, commit: remote.head };
     }

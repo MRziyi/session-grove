@@ -1,3 +1,4 @@
+import { pendingLabels } from '../web/library-view.js';
 import { activationInfo } from './activation.js';
 import { assert, hash } from './util.js';
 
@@ -5,7 +6,7 @@ export const groveTitle = (session, node) => `[Grove] ${session} · ${node || 'P
 
 // Preview a prefix without creating a branch or changing native files.
 export function nodeActivation(store, native, { branchId, nodeId, version, cwd }) {
-    const graph = store.treeGraph(branchId, 'all');
+    const graph = store.treeGraph(branchId, 'in-use');
     assert(version === graph.version, 'Conversation changed. Refresh before activating.', 409);
     const branch = store.get('branch', branchId), path = graph.paths.find(p => p.branchId === branchId);
     const node = graph.nodes.find(n => n.id === nodeId && n.branchIds.includes(branchId));
@@ -16,7 +17,7 @@ export function nodeActivation(store, native, { branchId, nodeId, version, cwd }
     const next = last && path.messages[path.messages.indexOf(last) + 1];
     const checkpoint = last && path.checkpoints.findLast(c => c.end >= last.line && (!next || c.end < next.line));
     const end = terminal ? revision.refs.length : checkpoint?.end;
-    const nodeName = node.name || (node.empty ? branch.activationNodeName : null) || 'Pending';
+    const nodeName = node.name || 'Pending ' + pendingLabels(graph.nodes).get(node.id);
     if (!end) return { branch, node, terminal, preview: { complete: false, readiness: 'node-boundary', title: groveTitle(branch.name, nodeName), nodeName } };
     const parsed = store.parsed(branch.head, branch.agent, end);
     const contextPolicy = branch.contextPolicy ? { disabled: branch.contextPolicy.disabled.filter(id => parsed.context.compactions.some(e => e.id === id)) } : undefined;

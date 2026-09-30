@@ -1,4 +1,3 @@
-import fs from 'node:fs';
 import path from 'node:path';
 import { GitCloud } from './git-cloud.js';
 import { gitRemote } from './git-remote.js';
@@ -15,7 +14,6 @@ export class GitSettings {
     status() {
         const config = this.read();
         return { provider: 'git', url: config.url || '', verified: !!config.verified,
-            legacyAvailable: fs.existsSync(path.join(this.root, 'webdav.json')),
             preferences: preferences(this.store), job: this.job };
     }
     async verify(body) {

@@ -173,8 +173,10 @@ export class Store {
     }
     edit(branchId, patch) {
         const b = this.get('branch', branchId), previous = structuredClone(b);
-        if ('name' in patch)
-            b.name = text(patch.name);
+        if ('name' in patch) {
+            const name = text(patch.name);
+            if (name !== b.name) { b.name = name; b.groveNamed = true; }
+        }
         if ('endpointName' in patch) b.endpointName = text(patch.endpointName, 'Node title');
         if ('group' in patch)
             b.group = String(patch.group).slice(0, 100);

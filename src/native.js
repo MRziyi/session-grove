@@ -170,7 +170,7 @@ export class Native {
             if ((branch.excluded || null) !== observed.excluded) { patch.excluded = observed.excluded; metadataChanged = true; }
             if (observed.cwdAvailable !== undefined && instance.cwdAvailable !== observed.cwdAvailable) instance.cwdAvailable = observed.cwdAvailable;
             if (instance.excluded !== !!observed.excluded) { instance.excluded = !!observed.excluded; metadataChanged = true; }
-            if (!observed.excluded && observed.title && !(instance.groveTitle && observed.title === instance.title) && branch.name !== observed.title && (branch.name === instance.title || branch.nativeObservedTitle === branch.name)) {
+            if (!branch.groveNamed && !observed.excluded && observed.title && !(instance.groveTitle && observed.title === instance.title) && branch.name !== observed.title && (branch.name === instance.title || branch.nativeObservedTitle === branch.name)) {
                 patch.name = observed.title; patch.nativeObservedTitle = observed.title;
                 instance.title = observed.title;
             }
@@ -323,7 +323,7 @@ export class Native {
         const operations = this.store.instances().flatMap(i => {
             if (i.excluded || isTrashed(this.store,i.branchId)) return [];
             const b = this.store.get('branch', i.branchId);
-            if (i.desired && (!i.applied || i.baseRevision !== b.head || i.missing || i.title !== this.title(b, i) || (i.contextPolicyHash || policyHash(null)) !== policyHash(b.contextPolicy)))
+            if (i.desired && (!i.applied || i.baseRevision !== b.head || i.missing || (i.contextPolicyHash || policyHash(null)) !== policyHash(b.contextPolicy)))
                 return [{ instanceId: i.id, branchId: b.id, name: b.name, agent: i.agent, action: 'activate', cwd: i.cwd, file: this.destination(i) }];
             if (!i.desired && i.applied)
                 return [{ instanceId: i.id, branchId: b.id, name: b.name, agent: i.agent, action: 'deactivate', cwd: i.cwd, file: i.file }];
@@ -385,7 +385,7 @@ export class Native {
                     const nativeClaudeFork = b.agent === 'claude' && lineage[0]?.source.operation === 'fork';
                     assert(nativeClaudeFork || !lineage.some(r => r.source.requiresAuxiliary) || lineage.some(r => r.source.auxiliary), '此分支继承了含伴随目录的会话，当前版本尚不支持完整物化');
                     assert(!parsed.warnings.some(w => w.includes('外部附件')), '此会话包含外部附件引用。当前版本可浏览和分支，完整附件迁移尚未支持。');
-                    const original = i.adopted && i.baseRevision === b.head && (i.contextPolicyHash || policyHash(null)) === policyHash(b.contextPolicy) && parsed.cwd === i.cwd;
+                    const original = !!i.file && fs.existsSync(i.file) && i.baseRevision === b.head && (i.contextPolicyHash || policyHash(null)) === policyHash(b.contextPolicy) && parsed.cwd === i.cwd;
                     const forkSource = nativeClaudeFork && lineage[0].parent && lineage[0].source.claudeCheckpoint ? { raw: this.store.availableRaw(lineage[0].parent), upToMessageId: lineage[0].source.claudeCheckpoint } : null;
                     let output = original && i.file && fs.existsSync(i.file) ? this.read(i.file) : renderNative(raw, b.agent, i.nativeId, i.cwd, this.title(b, i), b.contextPolicy, forkSource);
                     if (original && i.groveTitle && b.agent === 'claude' && claudeTitle(parsed.records).title !== this.title(b, i)) output = output.replace(/\n?$/, '\n') + JSON.stringify({type:'custom-title',customTitle:this.title(b, i),sessionId:i.nativeId}) + '\n';

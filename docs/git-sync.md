@@ -1,4 +1,4 @@
-# Git sync (0.15 technical fork)
+# Git sync (0.15)
 
 The runtime uses native Git over SSH and an application-owned checkout. Local SQLite remains the UI/index store; it is never committed. WebDAV, encryption and generation rebuilding are legacy migration code only. No new package dependency is needed.
 
@@ -23,7 +23,7 @@ Records are plain `[contentHash, originalRecordText]` JSONL, grouped into bounde
 - A stale remote rejection preserves local database changes. Retry Pull/Push to reconcile. We target sequential personal use, not team collaboration.
 - Settings verifies SSH access and repository format without publishing. Connect an empty repository or an existing Grove-format repository, not a source-code repository. Git uses the existing SSH configuration in batch mode; keys stay with SSH.
 
-Progress displays Git receiving/writing/counting/compressing/applying phases, and local import/commit preparation. Percentages describe the named phase, not total operation bytes. Speed and ETA appear only when available; no synthetic HTTP request counters are presented as Git measurements. Errors replace the progress bar in the bounded transfer panel.
+The split Pull / Push buttons contain the progress fill. Push fills Pull first, then Push. Workflow milestones allocate portions of the fill to preparation, transfer and import; the separately displayed percentage measures the named current phase, not total operation bytes. Unknown work uses a moving highlight. The action text remains above the buttons; measured speed and phase ETA appear only when available. Errors remain inline with expandable, bounded details. There is no separate transfer-progress panel or duplicate stage tags. Completed buttons briefly show a check and fade back to their idle appearance. New local edits clear Push success and add a pending dot. A Pull with no remote change and no outstanding local imports reports “Already up to date”.
 
 ## Trash and initial migration
 
@@ -41,7 +41,7 @@ The staging directory defaults to `.grove/git-migration` (gitignored), and can b
 
 The source database, native agent files, old credentials and old WebDAV vault are left untouched. Only the prepared live graph and its referenced bodies enter Git. Recovery backups, SQLite, credential files, temporary files and discarded bodies are not committed. After publication, configure the live app with the new remote and Pull to apply deletion markers and import the remaining sessions. Old credentials may be retained locally for rollback; the Git runtime never reads them.
 
-All devices must use this Git branch and the same data remote. A repository's private setting provides access control, not client-side encryption. Git retains history and ordinary fetch downloads reachable history; this intentionally favors easy local access over the old cloud-only storage model.
+All devices must use version 0.15 or newer and the same data remote. A repository's private setting provides access control, not client-side encryption. Git retains history and ordinary fetch downloads reachable history; this intentionally favors easy local access over the old cloud-only storage model.
 
 ## Validation on 2026-09-30
 
@@ -51,3 +51,9 @@ All devices must use this Git branch and the same data remote. A repository's pr
 - Published plain files occupy about 1.1 GiB in the working tree; the local Git pack is 555,082,751 bytes (about 529 MiB). These are disk measurements, not billed network traffic.
 - Reusing that checkout, first import into the live SQLite library took 15.34 seconds. A subsequent unchanged Pull took 2.45 seconds; unchanged Push (including Pull) took 2.44 seconds and created no new commit. Both left zero conflicts and zero pending changes.
 - These timings measure this library and connection, with native scanning omitted in the isolated transfer invocation. They are not an equal-work benchmark against the former WebDAV cleanup operation or a guarantee for another network.
+
+## Change summaries and identity
+
+Pending uploads compare a compact semantic baseline with the current graph: session rename/move/add/remove, transcript append or rewrite, node rename/regroup/dissolve, context settings, and project metadata. These same captured changes generate the Git commit subject and body with project/session names. Changes made after the upload snapshot remain pending. Transcript append counts are native records, not model tokens or conversation turns.
+
+Grove names are display aliases. UUIDs, native thread IDs, immutable revision IDs and message identities are independent of these names. Renaming does not schedule native rematerialization. Re-activating an unchanged native Claude session preserves its existing UUID chain instead of forking it again. Active endpoints show a green dot and offer Deactivate directly. Activation previews use the graph's complete Pending number, explain context capacity/compaction thresholds with labels, and put tool switching beside Confirm. General explanations belong in Information.
