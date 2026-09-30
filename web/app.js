@@ -168,11 +168,12 @@ const transferPhaseNames={'Fetching Git changes':'Checking for updates','Importi
 
 function renderIntelligence(){
     const value=state.data?.intelligence,button=$('#smart-status');if(!button)return;
-    button.hidden=!value?.running&&!value?.error;
-    button.textContent=t(value?.error?'Smart organization needs attention':value?.phase||'Smart organization');
+    button.hidden=!value?.running&&!value?.error&&!value?.pending;
+    const phase=t(value?.phase||'Smart organization queued');
+    button.textContent=t(value?.error?'Smart organization needs attention':value?.phase||'Smart organization queued');
     button.title=value?.error?[value.current,errorText(value.error)].filter(Boolean).join(' · '):[value?.current,value?.pending?t('{count} remaining',{count:value.pending}):''].filter(Boolean).join(' · ');
     button.classList.toggle('has-error',!!value?.error);button.onclick=()=>settings();
-    const detail=$('#intelligence-status');if(detail)detail.textContent=value?.error?[value.current,errorText(value.error)].filter(Boolean).join(' · '):value?.running?[t(value.phase),value.current,t('{count} remaining',{count:value.pending})].filter(Boolean).join(' · '):value?.pending?t('{count} remaining',{count:value.pending}):'';
+    const detail=$('#intelligence-status');if(detail)detail.textContent=value?.error?[t('Smart organization needs attention'),value.current,errorText(value.error)].filter(Boolean).join(' · '):value?.pending||value?.running?[phase,value.current,value.activeRequests?t('{count} active',{count:value.activeRequests}):'',t('{count} remaining',{count:value.pending})].filter(Boolean).join(' · '):'';
     if($('#retry-intelligence'))$('#retry-intelligence').hidden=!value?.error;
 }
 
@@ -779,7 +780,7 @@ async function showSource() {
 async function settings(options = {}) {
     try {
         const c = await api('/settings'), edit = options.editConnection || !c.verified;
-        const p = c.preferences, smart=c.intelligence||{};
+        const p = c.preferences, smart=c.intelligence||{},contexts=c.context||{};
         modal('Settings', `
           <section class="settings-card"><div class="settings-section-heading"><h3>${t('Git repository')}</h3>${!edit ? `<span class="setting-ok">✓ ${t('Connected')}</span><button type="button" id="modify-connection">${t('Modify')}</button>` : ''}</div>
           <label class="field">${t('Repository address')}<input name="url" type="text" value="${esc(c.url)}" placeholder="git@github.com:owner/repository.git" ${!edit ? 'disabled' : ''}></label>
@@ -787,12 +788,17 @@ async function settings(options = {}) {
           ${edit ? `<button type="button" id="verify-connection" class="primary">${t('Verify and connect')}</button>` : ''}
 </section>
           <section class="settings-card" id="intelligence-settings"><div class="settings-section-heading"><h3>${t('Smart organization')}</h3><span class="context-limit">GPT-6 Luna</span></div>
-          <label class="field">${t('OpenAI API key')}<input type="password" name="intelligenceKey" autocomplete="off" placeholder="${t(smart.hasKey?'Key saved':'Add an API key')}" value=""></label>
-          <div class="intelligence-key-actions"><button type="button" id="save-intelligence-key">${t('Verify and save')}</button>${smart.hasKey?`<button type="button" id="remove-intelligence-key">${t('Remove key')}</button>`:''}</div>
+          <label class="field">${t('OpenAI API key')}<input type="password" name="intelligenceKey" autocomplete="off" placeholder="${t(smart.hasKey?'Key saved':'Add an API key')}" value="" ${smart.hasKey?'disabled':''}></label>
+          <div class="intelligence-key-actions">${smart.hasKey?`<button type="button" id="remove-intelligence-key">${t('Remove key')}</button>`:`<button type="button" id="save-intelligence-key" disabled>${t('Verify and save')}</button>`}</div>
           <label class="timer-row"><span>${t('Classify and name new sessions')}</span><input type="checkbox" name="smartClassify" ${smart.classify?'checked':''} ${!smart.hasKey?'disabled':''}></label>
           <label class="timer-row"><span>${t('Name new branch points')}</span><input type="checkbox" name="smartNodes" ${smart.nameNodes?'checked':''} ${!smart.hasKey?'disabled':''}></label>
+          <label class="timer-row smart-scheduling"><span>${t('Concurrent requests')}</span><select name="smartConcurrency">${[1,2,3,4].map(n=>`<option value="${n}" ${n===(smart.concurrency??2)?'selected':''}>${n===1?t('1 (serial)'):n}</option>`).join('')}</select></label>
+          <label class="timer-row"><span>${t('Minimum request interval')}</span><span class="timer-interval"><input type="number" name="smartInterval" min="0" max="60" step="0.1" value="${smart.minIntervalSeconds??0}" aria-label="${t('Minimum request interval')}"><span>${t('seconds')}</span></span></label>
           <p class="dialog-copy">${t('Selected messages are sent to OpenAI when enabled.')}</p><p id="intelligence-status" role="status"></p><button type="button" id="retry-intelligence" ${!smart.error?'hidden':''}>${t('Retry')}</button>
           </section>
+          <section class="settings-card" id="native-context-settings"><h3>${t('Context windows')}</h3>
+          ${['codex','claude'].map(agent=>{const context=contexts[agent]||{};return `<div class="native-context-tool"><strong>${agent==='codex'?'Codex':'Claude Code'}${context.profile?' · '+esc(context.profile):''}</strong>${context.error?`<p class="dialog-copy">${esc(errorText(context.error))}</p>`:`<div class="context-inputs"><label class="field">${t(agent==='codex'?'Context window (tokens)':'Auto-compact window (tokens)')}<input type="number" name="${agent}Window" min="${agent==='claude'?100000:1}" max="${agent==='claude'?1000000:10000000}" step="1" placeholder="${t('Automatic')}" value="${context.window??''}"></label>${agent==='codex'?`<label class="field">${t('Auto-compact at (tokens)')}<input type="number" name="codexCompactAt" min="1" max="10000000" step="1" placeholder="${t('Automatic')}" value="${context.compactAt??''}"></label>`:''}</div>${agent==='codex'&&context.compactScope==='body_after_prefix'?`<p class="dialog-copy">${t('Compaction counts new context after the previous summary.')}</p>`:''}${agent==='claude'&&context.compactPercent?`<p class="dialog-copy">${t('Existing compaction percentage: {count}%',{count:context.compactPercent})}</p>`:''}<button type="button" id="save-context-${agent}">${t(agent==='codex'?'Save Codex':'Save Claude Code')}</button>`}</div>`;}).join('')}
+          <p class="dialog-copy">${t('Empty fields use client defaults. Changes apply to new client sessions; model limits still apply.')}</p><p id="context-settings-status" role="status"></p></section>
           <section class="settings-card"><h3>${t('Trash')}</h3><label class="field">${t('Local recovery days')}<input type="number" name="trashRetentionDays" min="1" max="365" value="${p.trashRetentionDays}"></label></section><section class="settings-card"><h3>${t('Project contents')}</h3><label class="field">${t('Collapse older sessions')}<select name="projectFoldMode">${[['time','By age'],['count','By count'],['none','Show all']].map(([v,l])=>`<option value="${v}" ${p.projectFoldMode===v?'selected':''}>${t(l)}</option>`).join('')}</select></label>${p.projectFoldMode==='time'?`<label class="field">${t('Keep recent days')}<input type="number" name="projectFoldDays" min="1" max="365" value="${p.projectFoldDays}"></label>`:p.projectFoldMode==='count'?`<label class="field">${t('Visible sessions per project')}<input type="number" name="projectFoldCount" min="1" max="365" value="${p.projectFoldCount}"></label>`:''}</section><section class="settings-card"><h3>${t('Automatic updates')}</h3><div class="timer-row"><label><input type="checkbox" name="showScheduledSessions" ${p.showScheduledSessions?'checked':''}>${t('Show scheduled and background sessions')}</label></div>
             <label class="timer-row collapse-setting"><span>${t('Collapse projects after')}</span><select name="inactiveProjectDays" aria-label="${t('Collapse projects after')}">${[[7,'One week'],[15,'Half a month'],[30,'One month'],[60,'Two months']].map(([days,label])=>`<option value="${days}" ${days===p.inactiveProjectDays?'selected':''}>${t(label)}</option>`).join('')}</select></label>
             ${[['localUpdate', 'Read local sessions', p.localUpdateEnabled, p.localUpdateMinutes], ['autoUpload', 'Automatically upload local changes', p.autoUploadEnabled, p.autoUploadMinutes]].map(([key,label,on,minutes]) => `<div class="timer-row"><label><input type="checkbox" name="${key}Enabled" ${on ? 'checked' : ''}>${t(label)}</label><label class="timer-interval"><input type="number" name="${key}Minutes" value="${minutes}" min="1" max="1440" ${!on ? 'disabled' : ''}><span>${t('minutes')}</span></label></div>`).join('')}
@@ -802,11 +808,14 @@ async function settings(options = {}) {
         const busy = async (button, fn) => { if (working) return; working = true; button.disabled = true; const original = button.textContent; button.textContent = t(['verify-connection','save-intelligence-key'].includes(button.id)?'Verifying connection…':'Working…'); $('#dialog-error').textContent = '';
             try { await fn(); } catch(e) { $('#dialog-error').textContent = e.message; } finally { working = false; renderCloudStatus(); if (button.isConnected) { button.disabled = false; button.textContent = original; } } };
         const saveSmart=async body=>{state.data.intelligence=await api('/settings/intelligence','POST',body);await settings(options);renderCloudStatus();};
-        $('#save-intelligence-key').disabled=true;
-        $('[name=intelligenceKey]').oninput=e=>{$('#save-intelligence-key').disabled=!e.target.value.trim();};
-        $('#save-intelligence-key').onclick=e=>busy(e.currentTarget,()=>saveSmart({apiKey:$('[name=intelligenceKey]').value.trim()}));
+        for(const agent of ['codex','claude']){const button=$('#save-context-'+agent);if(button)button.onclick=e=>busy(e.currentTarget,async()=>{const window=$(`[name=${agent}Window]`),compact=$('[name=codexCompactAt]');for(const input of [window,...(agent==='codex'?[compact]:[])])if(!input.checkValidity()){input.reportValidity();return;}await api('/settings/context','POST',{agent,fingerprint:contexts[agent].fingerprint,window:window.value===''?null:Number(window.value),...(agent==='codex'?{compactAt:compact.value===''?null:Number(compact.value)}:{})});await settings(options);$('#context-settings-status').textContent=t('Context settings saved. Reopen your client session to apply them.');});}
+        if($('#save-intelligence-key')){
+            $('[name=intelligenceKey]').oninput=e=>{$('#save-intelligence-key').disabled=!e.target.value.trim();};
+            $('#save-intelligence-key').onclick=e=>busy(e.currentTarget,()=>saveSmart({apiKey:$('[name=intelligenceKey]').value.trim()}));
+        }
         if($('#remove-intelligence-key'))$('#remove-intelligence-key').onclick=e=>busy(e.currentTarget,()=>saveSmart({removeKey:true}));
         for(const [name,key] of [['smartClassify','classify'],['smartNodes','nameNodes']])$(`[name=${name}]`).onchange=async e=>{const input=e.currentTarget;input.disabled=true;try{await saveSmart({[key]:input.checked});}catch(error){input.checked=!input.checked;input.disabled=false;$('#dialog-error').textContent=error.message;}};
+        for(const [name,key] of [['smartConcurrency','concurrency'],['smartInterval','minIntervalSeconds']])$(`[name=${name}]`).onchange=async e=>{const input=e.currentTarget;if(!input.checkValidity()){input.reportValidity();return;}input.disabled=true;try{await saveSmart({[key]:Number(input.value)});}catch(error){input.disabled=false;$('#dialog-error').textContent=error.message;}};
         $('#retry-intelligence').onclick=e=>busy(e.currentTarget,async()=>{state.data.intelligence=await api('/intelligence/retry','POST',{});renderIntelligence();});
         state.data.intelligence=smart;renderIntelligence();
         if ($('#modify-connection')) $('#modify-connection').onclick = () => settings({editConnection:true});

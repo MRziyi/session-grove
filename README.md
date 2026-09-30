@@ -1,50 +1,59 @@
 # Session Grove
 
-**English** | [简体中文](README.zh-CN.md)
+**English** · [简体中文](README.zh-CN.md)
 
-**Your AI conversations have branches. Your chat list should not be the only way to find them.**
+**Keep the context. Explore a branch. Come back to the work.**
 
-Session Grove is a project-based session manager for **Claude Code and Codex**. Keep chatting in your CLI or VS Code extension; use Grove to organize conversation history, preserve useful context, manage branches, and continue work on another Mac through a private Git repository.
+Session Grove is a local session manager for **Claude Code and Codex** on Windows and macOS. Bring scattered AI conversations into projects, see how ideas branched, and continue from the context you actually want.
 
-![A conversation and its context tree in Session Grove](docs/images/workspace.png)
+For research, writing and software projects that outgrow a flat chat list.
 
-**0.16:** Optional smart organization uses GPT-6 Luna to classify and name new sessions, and give new branch points concise titles. Configure your OpenAI API key in Settings and enable either option independently. Existing names and original transcripts are preserved.
+![A project with named branches, original conversation and a selected active path](docs/images/workspace.png)
 
-## When your chat history becomes the problem
+*The transcript and the branch graph stay together. Select a node to see the conversation behind it.*
 
-You build a useful context, branch to try another idea, then branch again to write the introduction, debug an implementation, or explore a different approach. Soon the native chat list contains several almost-identical conversations. You remember what you worked on, but not which session contains it.
+## When the work has more than one direction
 
-Session Grove gives that work a structure:
+You establish a useful context, try two approaches, refine one, and return to an earlier idea. Later, several conversations have similar names. The important part is remembering how they fit together.
 
-- **One Project for one piece of work.** Keep a paper, repository or research topic together across sessions and devices. Shared-prefix conversations appear as one tree. Internal agent workers and empty sessions stay out of your list. Scheduled/background sessions are hidden by default, with an opt-in filter in Settings.
-- **A home for everyday questions.** Ungrouped is a shared inbox across devices. Browse recent work, expand older sessions, search everything, and archive in batches without having to classify every conversation.
-- **See the source.** Tool badges identify Codex/Claude history; a device badge shows the latest recorded conversation source.
-- **Name the work, not every message.** Turn a stretch of conversation into “Set up context”, “Draft the introduction” or “Test the alternative”. New conversation stays in Pending until you organize it.
-- **See the branch and read its context together.** The Transcript and Graph stay side by side, with color bands connecting the actual chats to your logical Nodes.
-- **Choose which context to continue with.** Use a recorded compaction result or restore the recorded history before it. The graph shows which earlier Nodes are superseded; choices apply when you activate or explicitly apply the context.
-- **Keep only useful sessions active.** Activate the path you want in your agent. Move failed or unwanted paths to Trash. Keep useful older work in Projects.
-- **Pick up on another Mac.** Named projects and Ungrouped sync through your private Git repository. Pull imports all sessions locally; click any session to open it.
+| What you want to do | How Grove helps |
+| --- | --- |
+| Keep a project together | Group Claude and Codex sessions in one project. Related conversations appear as a tree with shared history. |
+| Find a useful idea again | Search your library, read the original transcript and give stretches of work meaningful names. |
+| Try another direction | Activate a selected node to create a continuation from that context while preserving existing branches. |
+| Choose how much history to carry | Preview context and token estimates; use recorded compaction or the available history before it. |
+| Continue in another tool | **Activate as** converts a selected prefix for Claude Code or Codex, with three choices for how much text to include. |
+| Pick up on another computer | Pull your library from a private Git repository, then activate the session in a local working folder. |
 
-Grove manages the session library. **Codex and Claude Code remain where you actually talk to the agent.** Optional smart organization sends selected messages to OpenAI for labels; it does not run conversation turns in your client.
+Keep talking in your preferred agent. Use Grove to organize, compare and return to the work.
 
-## A typical workflow
+## A library that follows your projects
 
-1. Start a conversation in Codex or Claude Code, then click **Update** in Grove.
-2. Keep everyday conversations in **Ungrouped**, or **Move** a whole tree into a named Project. Both synchronize; filing is optional.
-3. Open a tree. Click a start chat and an end chat to select a continuous range, then **Combine** it under a useful title. **Dissolve** returns a range to Pending.
-4. Select any graph Node to **Rename** it, including an empty continuation. Naming Pending saves its title.
-5. **Activate** any selected node: preview its prefix, token cost and `[Grove] session · node` native title, or switch tools in that panel. Existing suffixes remain intact. Only path endpoints offer Trash.
-6. Continue chatting in the agent. New records attach to the continuation. Changes appear in the upload queue. **Pull** refreshes cloud updates; **Push** downloads first, then publishes local changes, including Pending.
+Named projects hold ongoing work. **Ungrouped** keeps everyday questions close until they belong somewhere. Agent and device badges show where a conversation came from, and Active marks what is available in your client on this computer.
 
-Internal-node activation adds a continuation containing the selected node and its preceding context, including its compaction choices.
+![Project library with a shared conversation tree, Claude and Codex sessions, and an Ungrouped inbox](docs/images/library.png)
 
-Read conversations as Markdown. Expand recorded activity to inspect tool inputs/results, named files and readable reasoning alongside the conversation. Encrypted reasoning without a readable summary is labeled explicitly: Grove preserves its original bytes and does not pretend to decode them. Large record previews are paged. Large graphs support background dragging, zoom and reset; Sankey bands connect only visible content.
+New conversation stays in **Pending**. Select a range to give it a name such as “Project brief”, “Compare approaches” or “Prototype feedback”. Those names organize your history without rewriting the conversation.
 
-Actions appear only when they apply to the current selection. **Settings** contains the Git SSH remote, smart organization and automatic-update intervals. Switch language beside **ⓘ Information**. **ⓘ Information**, at the bottom of the sidebar, contains the action guide and context details. **About** links to the author and repository.
+## Continue from a useful point
 
-## Try it
+Select a node and choose **Activate**. Grove shows the context estimate, destination folder and the title you will see in your agent. Use **Switch tool** in the same panel to continue with another agent.
 
-Requires **Node.js 24+**. Run `pnpm install` (or `npm install`) for the pinned official Claude SDK. No build step is needed.
+![Activation preview for an earlier branch point, with context estimate and tool switching](docs/images/activation.png)
+
+Same-agent activation preserves supported native records, including recorded tool activity and reasoning. Cross-agent conversion carries a text representation with source provenance. Client instructions, model behavior, external files and opaque compaction can differ; see the [context guide](docs/context-and-sync.md) for the boundaries.
+
+## Less housekeeping
+
+Optional **Smart Organization** classifies and names new sessions and labels new branch points. Enable either feature independently with your own OpenAI API key. Existing names stay yours.
+
+Requests default to two at a time. Settings lets you choose serial operation or up to four concurrent requests, and set a minimum request interval. Progress shows what is running, what remains and anything that needs attention. Selected messages are sent to OpenAI only when enabled.
+
+Settings also provides Codex context-window and compaction controls, plus Claude’s auto-compaction window. Empty values inherit client defaults; model capacity still applies. Removing a saved API key restores the key-entry workflow.
+
+## Try it in a few minutes
+
+Install **Node.js 24+** and Git, then:
 
 ```sh
 git clone https://github.com/MRziyi/session-grove.git
@@ -53,85 +62,24 @@ pnpm install
 pnpm run demo
 ```
 
-Open **http://127.0.0.1:7421**. The demo uses sample sessions and does not read personal history.
+Open **http://127.0.0.1:7421**. Demo mode uses sample sessions and does not read personal history. The screenshots above use synthetic examples in the real interface.
 
-To manage your own sessions, stop the demo and run:
+To use your own history, stop the demo, run `pnpm start`, then click **Update**. Grove reads the local Claude Code and Codex session folders. You can keep the agents running while browsing, organizing or creating a new continuation.
 
-```sh
-pnpm dev
-```
+Prefer npm? Use `npm install`, `npm run demo` and `npm start`. Switch between English and Chinese at the bottom of the sidebar.
 
-npm works too: `npm run demo`, `npm run dev`, and `npm test`. The interface defaults to English; switch to Chinese using the language button beside **Information**.
+## Your history, across your computers
 
-## Your context, on your storage
+For optional sync, connect a **private Git SSH repository** in Settings. **Pull** downloads the library; **Push** pulls first, then publishes local changes. Both are manual by default. Automatic upload is opt-in, and each device keeps its own Active choices.
 
-Git sync is optional. In Settings, connect an empty private repository using `git@github.com:owner/repository.git` and your existing SSH key. Grove stores readable JSON and JSONL files; Git handles compression, history and incremental transfer. No Grove passphrase is required. See [Git sync and migration](docs/git-sync.md).
+Sessions remain local and the sync repository contains readable history. Your projects’ code, agent credentials and Smart Organization key are not included. Trash removes a session from the current library; local recovery is available for a configurable period, and older Git commits retain their history.
 
-Downloads and uploads are manual by default. **Pull** fetches the repository and imports all current sessions locally. **Push** completes Pull before publishing local changes. Hover/focus Push to inspect pending items. Automatic upload is opt-in, including after upgrade; its default interval is 15 minutes and it follows the same pull-before-push sequence. There is no independent download timer. Local session capture remains independently configurable, defaulting to 1 minute.
+## Learn more
 
-The split buttons show transfer progress, with the current action above them and available phase percentage, speed and ETA alongside. Errors appear inline; long details can be expanded within a bounded area. Local Rename, Activate, Trash and node organization remain available during sync. Publication acknowledges its snapshot only; later edits remain queued. Session modification dates include transcript and organization changes, drive sorting and newer-version reconciliation, and are not advanced by browsing or downloading. See the mandatory [white-box design](docs/design.md) and [sync contract](docs/sync-policy.md).
+[Setup and troubleshooting](docs/operations.md) · [Context and branches](docs/context-and-sync.md) · [Git sync](docs/git-sync.md) · [1.0 validation and performance](docs/1.0-windows-validation.md) · [Changelog](CHANGELOG.md)
 
-The library retains original session records. Node edits organize those records rather than rewriting the conversation. Pull fetches and imports the entire current library. Push pulls first and publishes a Git commit; native Active choices stay on each device. Trash removes content from the current version on Push, while earlier Git commits remain. Local recovery is optional convenience, not a cloud cleanup operation.
+For a bug report, include what you selected, what happened and the error reference shown in the interface. Please keep private conversation text and credentials out of public issues.
 
-## Current scope
+Contributions and [issues](https://github.com/MRziyi/session-grove/issues) are welcome. Run `pnpm test` for the regression suite and `pnpm test:browser` for browser acceptance.
 
-**0.14.0 · experimental · macOS first.** Same-agent branching, cross-device continuation and cross-agent text conversion with three explicit context modes are supported.
-
-**Context fidelity has limits.** Supported materialization preserves recorded tool calls/results, reasoning and instructions instead of rebuilding a conversation from visible prose. Codex paginated forks resolve their recorded prefix references and remain paginated on activation. Native New branch and Grove Fork have been compared at the same checkpoint, including tool/reasoning records and native projected items. Missing history segments still block context changes. Dynamic client instructions, opaque compaction and external assets prevent a promise of identical model requests. See the [requirements and fidelity audit](docs/requirements-audit.md).
-
-Adding an activated session works while clients remain running. Editing or removing existing copies retains native-write protections. Codex native read/resume has been exercised with a real executable; Claude read/fork behavior has been compared against the official SDK on 32 sessions and 111 checkpoints; dynamic model state is outside that equivalence. The Git backend is tested with isolated bare repositories for cross-device continuation, deletion and interrupted upload recovery. Legacy WebDAV is available only for migration.
-
-Select a session endpoint and use “Activate as…” to preview full or lean context and create an independent target session with source provenance.
-
-Node token counts are estimates. Before activation, Grove checks recorded usage and available local context-window settings and warns when the context may be near its limit.
-
-## Testing and feedback
-
-If something fails, note what you selected, what you clicked, and the error reference shown in the UI. **ⓘ Information → Diagnostics → Pull diagnostics** exports operation types, timings and error references without chat text or credentials.
-
-```sh
-pnpm test
-```
-
-[Setup, data locations and troubleshooting](docs/operations.md) · [Interaction rules](docs/interaction-model.md) · [Context and sync details](docs/context-and-sync.md) · [Sync triggers and measured overhead](docs/sync-policy.md) · [Technical choices](docs/technology.md)
-
-<details>
-<summary>中文简介</summary>
-
-Session Grove 用项目和分支图管理 Claude Code 与 Codex 的会话。你仍在原生客户端对话，在 Grove 里整理上下文、为一段工作命名、分叉、激活或归档，并通过自己的私有 Git 仓库 在不同 Mac 之间续接。
-
-[阅读完整中文说明 →](README.zh-CN.md)
-
-</details>
-
-Design references: [codex-session-sync](https://github.com/shonngithub/codex-session-sync), [claude-sync](https://github.com/tawanorg/claude-sync), and [Chronicle](https://github.com/geekmuse/chronicle).
-
-[MIT License](LICENSE)
-
-The version notes below describe historical releases. Current behavior is defined above and in [Sync policy](docs/sync-policy.md).
-
-### Pull first, then Push
-
-**Sync** pulls remote changes before pushing local work. Clicking Sync starts immediately; the banner shows compact direction, progress and ETA without a modal. there is no upload dropdown. Automatic sync remains dirty-only, native Active choices remain local to each device, and completed verified packs are reused after interruption.
-
-### Service management and fidelity (0.9)
-
-Use `pnpm start`, `pnpm status`, and `pnpm stop`. Ctrl+C stops a foreground server; stop a `pnpm dev` watcher from its original terminal. Shutdown cancels ordinary sync requests and has a ten-second deadline. See [fidelity boundaries, conversion rules and measured performance](docs/0.9-session-fidelity.md).
-
-### Unified workspace (0.10)
-
-One Sync action pulls before pushing with inline progress. Projects form a continuous grouped list with configurable time/count folding, scroll-linked navigation, collapsible panes and an adjustable reading split. Background sessions use native provenance. Verified record packs reduce cloud requests; **other devices need 0.10 to read newly packed data**. See [design, compatibility and checks](docs/0.10-workspace-and-sync.md).
-
-### Local copies and explicit Pull (0.11)
-
-Browsing uses a saved directory. Only cloud-only sessions show a cloud icon; opening one downloads and retains it locally. Sync refreshes the directory and previously downloaded trees, then pushes local changes. Automatic Push starts only after local edits and does not refresh the browsing directory. Older projects collapse together (7/15/30/60 days), context modes show token estimates, and transcript selection preserves scrolling. See [rules and validation](docs/0.11-local-copies.md).
-
-Node selection now scrolls to its transcript segment without rebuilding the same path. Fork branches **before** a selected non-root Node, preserving the preceding completed context. Project contents default to folding sessions older than a week; Settings also supports a row-count limit. Activation uses a folder picker. See the [fidelity and resource audit](docs/0.12-validation.md) for tested boundaries and context modes.
-
-### Discarded work belongs in Trash
-
-Trash removes cloud conversation bodies on Sync and keeps a **local-only recovery copy for 30 days**, configurable in Settings. Shared context required by kept paths is preserved. Expired recovery copies are cleared while Grove runs or on its next startup. Existing archives remain under Previous archives until you explicitly move them to Trash. **Update every device to 0.13+ before the first Trash sync.** See the [Trash lifecycle and cleanup guarantees](docs/trash-design.md).
-
-### 0.15.1
-
-Native titles refresh by session ID in the transcript selector; Grove aliases stay independent. Every activation creates a separate continuation through the selected node. Shared-prefix detection handles native serialization defaults. See [native fork comparison and boundaries](docs/0.15.1-node-context.md).
+Created by [Ziyi Zhang](https://ziyi-zhang.vercel.app). Inspired by [codex-session-sync](https://github.com/shonngithub/codex-session-sync), [claude-sync](https://github.com/tawanorg/claude-sync) and [Chronicle](https://github.com/geekmuse/chronicle). [MIT License](LICENSE).

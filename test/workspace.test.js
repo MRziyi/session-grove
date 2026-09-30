@@ -42,8 +42,8 @@ test('session and shared node edits reorder lists without changing transcript ti
     const current = store.treeGraph(first.id);
     store.organize(first.id, { version: current.version, pathId: first.id, nodeId: current.nodes.find(n => n.name === 'Shared setup').id, action: 'rename', name: 'Shared setup' });
     assert.equal(store.get('branch', child.id).metadataUpdatedAt, timestamp);
-    const remote = new Store(path.join(cwd, 'remote')); t.after(() => remote.close()); copy(store, remote);
-    assert.equal(remote.get('branch', child.id).metadataUpdatedAt, timestamp);
+    const remote = new Store(path.join(cwd, 'remote')); try { copy(store, remote);
+    assert.equal(remote.get('branch', child.id).metadataUpdatedAt, timestamp); } finally { remote.close(); }
 });
 test('logical nodes support arbitrary chat boundaries, internal Pending and neighboring repartition without native changes', t => {
     const { store, cwd } = fixture(t), b = store.branch(null, 'Draft', 'codex', codexSample(cwd, pairs(5))), raw = store.raw(b.head);

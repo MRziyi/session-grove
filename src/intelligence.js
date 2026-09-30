@@ -1,6 +1,6 @@
-import fs from 'node:fs';
+import {writePrivateFile} from './private-file.js';
 import path from 'node:path';
-import { atomic, json, assert, hash } from './util.js';
+import { json, assert, hash } from './util.js';
 import { rootOf } from './organization.js';
 import { isTrashed } from './trash.js';
 import { INBOX_ID } from './inbox.js';
@@ -25,23 +25,26 @@ export class Intelligence {
         Object.assign(this,{store,request,onChange,onStatus,canApply});
         this.file=path.join(store.root,'intelligence.json');
         this.data=store.local('intelligenceState') || {seen:{},trees:{},waiting:[],jobs:[]};
-        this.running=false;this.closed=false;this.error=this.data.error||null;this.timer=null;this.generation=0;
+        this.running=false;this.closed=false;this.error=this.data.error||null;this.timer=null;this.generation=0;this.tasks=new Map();this.lastStartedAt=0;
         // Seed existing sessions and fork points without retroactively renaming the library.
         this.observe(false);
     }
-    config(){return {classify:false,nameNodes:false,...json(this.file,{})};}
-    status(){const c=this.config();return {model:MODEL,hasKey:!!c.apiKey,classify:c.classify,nameNodes:c.nameNodes,running:this.running,pending:this.data.jobs.length,phase:this.phase||null,current:this.current||null,error:this.error,completed:this.completed||0};}
+    config(){return {classify:false,nameNodes:false,concurrency:2,minIntervalSeconds:0,...json(this.file,{})};}
+    get pending(){return this.tasks.size?Promise.allSettled([...this.tasks.values()].map(task=>task.promise)):null;}
+    status(){const c=this.config();return {model:MODEL,hasKey:!!c.apiKey,classify:c.classify,nameNodes:c.nameNodes,concurrency:c.concurrency,minIntervalSeconds:c.minIntervalSeconds,activeRequests:this.tasks.size,running:this.running,pending:this.data.jobs.length,phase:this.phase||null,current:this.current||null,error:this.error,completed:this.completed||0};}
     publish(){this.onStatus(this.status());}
     persist(){this.data.error=this.error;this.store.local('intelligenceState',this.data);}
     async save(body){
         const previous=this.config(),next={...previous};
         for(const key of ['classify','nameNodes'])if(key in body){assert(typeof body[key]==='boolean','Choose a smart organization setting.');next[key]=body[key];}
+        if('concurrency' in body){assert(Number.isInteger(body.concurrency)&&body.concurrency>=1&&body.concurrency<=4,'Choose 1 to 4 concurrent requests.');next.concurrency=body.concurrency;}
+        if('minIntervalSeconds' in body){assert(Number.isFinite(body.minIntervalSeconds)&&body.minIntervalSeconds>=0&&body.minIntervalSeconds<=60,'Choose a request interval from 0 to 60 seconds.');next.minIntervalSeconds=body.minIntervalSeconds;}
         if('apiKey' in body){assert(typeof body.apiKey==='string'&&body.apiKey.length<500,'Enter an API key.');next.apiKey=body.apiKey.trim();
             if(next.apiKey){await this.request(next.apiKey,'node',{user:'Verify connection',assistant:'Connection verified'});}}
         if(body.removeKey){next.apiKey='';next.classify=false;next.nameNodes=false;}
         assert(!(next.classify||next.nameNodes)||next.apiKey,'Add an API key first.');
-        this.generation++;this.controller?.abort();
-        atomic(this.file,JSON.stringify(next));fs.chmodSync(this.file,0o600);
+        writePrivateFile(this.file,JSON.stringify(next));
+        if(['apiKey','classify','nameNodes'].some(key=>next[key]!==previous[key])){this.generation++;for(const task of this.tasks.values())task.controller.abort();}
         if(next.classify&&!previous.classify || next.nameNodes&&!previous.nameNodes)this.observe(false);
         this.error=null;this.data.jobs=this.data.jobs.filter(j=>next[j.kind==='classify'?'classify':'nameNodes']);
         this.persist();this.publish();this.kick();return this.status();
@@ -94,25 +97,26 @@ export class Intelligence {
     }
     kick(){
         clearTimeout(this.timer);
-        if(this.closed||this.running||this.error||!this.data.jobs.length)return;
+        if(this.closed||this.error||!this.data.jobs.some(job=>!this.tasks.has(job.key)))return;
         const config=this.config();if(!config.apiKey||!config.classify&&!config.nameNodes)return;
+        if(this.tasks.size>=config.concurrency)return;
         if(!this.canApply()){this.timer=setTimeout(()=>this.kick(),500);this.timer.unref?.();return;}
-        this.timer=setTimeout(()=>{this.pending=this.run().finally(()=>{this.pending=null;this.kick();});},25);this.timer.unref?.();
+        this.timer=setTimeout(()=>{this.run();this.kick();},Math.max(25,this.lastStartedAt+config.minIntervalSeconds*1000-Date.now()));this.timer.unref?.();
     }
     retry(){this.error=null;this.persist();this.publish();this.kick();return this.status();}
-    async run(){
-        if(this.running||this.closed||this.error)return;
+    run(){
+        if(this.closed||this.error)return;
         if(!this.canApply())return;
-        const job=this.data.jobs[0];if(!job)return;
-        const c=this.config();if(!c.apiKey)return;
+        const job=this.data.jobs.find(job=>!this.tasks.has(job.key));if(!job)return;
+        const c=this.config();if(!c.apiKey||this.tasks.size>=c.concurrency)return;
         if(!c[job.kind==='classify'?'classify':'nameNodes']){this.finish(job);return;}
         let prepared;
         try{prepared=this.prepare(job);}catch{prepared=null;}
         if(!prepared){this.finish(job);return;}
-        const generation=this.generation;this.controller=new AbortController();this.running=true;
-        this.phase=job.kind==='classify'?'Classifying session':'Naming branch point';this.current=this.store.get('branch',job.id).name;this.publish();
+        const generation=this.generation,task={job,controller:new AbortController(),name:this.store.get('branch',job.id).name};this.tasks.set(job.key,task);this.lastStartedAt=Date.now();this.updateActivity();this.publish();
+        task.promise=(async()=>{
         try {
-            const result=await this.request(c.apiKey,job.kind,prepared.evidence,prepared.projects||[],{signal:this.controller.signal});
+            const result=await this.request(c.apiKey,job.kind,prepared.evidence,prepared.projects||[],{signal:task.controller.signal});
             if(this.closed||generation!==this.generation)return;
             // Delay only the metadata write while local capture or Trash owns the store.
             while(!this.canApply()) {await new Promise(r=>setTimeout(r,100));if(this.closed||generation!==this.generation)return;}
@@ -127,9 +131,11 @@ export class Intelligence {
                 if(!latest.branch.groveNamed)this.store.edit(job.id,{name:result.name});
             }else this.store.organize(job.id,{version:latest.graph.version,pathId:latest.branchId,nodeId:latest.node.id,action:'rename',name:result.name});
             this.onChange(job.id);this.completed=(this.completed||0)+1;this.finish(job);
-        }catch(error){if(!this.closed&&generation===this.generation){this.error=error.message;this.phase=null;}}
-        finally{this.running=false;if(!this.error){this.current=null;this.phase=null;}this.persist();this.publish();}
+        }catch(error){if(!this.closed&&generation===this.generation){this.error=error.message;this.errorCurrent=task.name;}}
+        finally{this.tasks.delete(job.key);this.updateActivity();this.persist();this.publish();this.kick();}
+        })();return task.promise;
     }
+    updateActivity(){const tasks=[...this.tasks.values()];this.running=tasks.length>0;this.phase=tasks.length?(tasks.every(t=>t.job.kind==='node')?'Naming branch point':tasks.every(t=>t.job.kind==='classify')?'Classifying session':'Smart organization'):null;this.current=this.error?this.errorCurrent:tasks.map(t=>t.name).join(' · ')||null;}
     finish(job){this.data.jobs=this.data.jobs.filter(j=>j.key!==job.key);if(job.kind==='classify')this.data.waiting=this.data.waiting.filter(id=>id!==job.id);this.persist();}
-    close(){this.closed=true;this.generation++;clearTimeout(this.timer);this.controller?.abort();}
+    close(){this.closed=true;this.generation++;clearTimeout(this.timer);for(const task of this.tasks.values())task.controller.abort();}
 }

@@ -7,6 +7,7 @@ import { INBOX_ID, inboxProject } from './inbox.js';
 import { GitSettings as Settings } from './git-settings.js';
 import { preferences } from './preferences.js';
 import { Intelligence } from './intelligence.js';
+import {NativeContextSettings} from './native-context-settings.js';
 import http from 'node:http';
 import { performance } from 'node:perf_hooks';
 import { Diagnostics } from './diagnostics.js';
@@ -40,6 +41,7 @@ export function createApp({ root, roots, guard, demo = false }) {
     autoSync.beforeUpload = () => store.local('localUpdateStarted') ? captureLocal() : null;
     let capturePromise; let interval, nextCaptureAt = null, lastCaptureAt = null;
     const settings = new Settings(root, store, autoSync, configureCapture); settings.diagnostics = diagnostics;
+    const contextSettings=new NativeContextSettings(root,native.roots);
 
     const management = () => new Map(store.collections().items.map(i => [i.id, hash(JSON.stringify([
         i.projectId ? store.get('project', i.projectId) : inboxProject(), i.sessionIds.map(id => { const b = store.get('branch', id); return [b.id, b.name, b.projectId, b.archived, b.parentId, b.forkEnd, b.nodeHead, b.layoutHead, b.contextPolicy, b.endpointName]; }),
@@ -122,7 +124,8 @@ export function createApp({ root, roots, guard, demo = false }) {
             if (req.method === 'GET' && route === '/api/diagnostics') return send(200, { ...diagnostics.report(), git: { commit: autoSync.cloud.connection?.remote.head || null, progress: autoSync.status().operation?.progress || null }, fallbackMinutes: autoSync.status().fallbackMinutes });
             if (req.method === 'GET' && route === '/api/discover')
                 return send(200, native.discover());
-            if (req.method === 'GET' && ['/api/webdav', '/api/settings'].includes(route)) return send(200, { ...settings.status(), intelligence: intelligence.status() });
+            if (req.method === 'GET' && ['/api/webdav', '/api/settings'].includes(route)) return send(200, { ...settings.status(), intelligence: intelligence.status(), context:contextSettings.status() });
+            if (req.method === 'POST' && route === '/api/settings/context') return send(200,contextSettings.save(body));
             if (req.method === 'POST' && route === '/api/settings/intelligence') return send(200, await intelligence.save(body));
             if (req.method === 'POST' && route === '/api/intelligence/retry') return send(200, intelligence.retry());
             if (req.method === 'POST' && route === '/api/settings/verify') return send(200, await settings.verify(body));

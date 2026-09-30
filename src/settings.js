@@ -1,9 +1,10 @@
 import fs from 'node:fs';
+import {privateFile,writePrivateFile} from './private-file.js';
 import path from 'node:path';
 import { connectionConfig, baseUrl, APP_FOLDER, verifyConnection, migrateVault, vaultKey } from './vault.js';
 import { WebDAV } from './sync.js';
 import { Cloud } from './cloud.js';
-import { atomic, json, assert, hash } from './util.js';
+import { json, assert, hash } from './util.js';
 import { preferences, savePreferences } from './preferences.js';
 export class Settings {
     constructor(root, store, autoSync, onTimers) {
@@ -12,7 +13,7 @@ export class Settings {
         this.job = null; this.draft = null;
     }
     read() { return json(this.file, {}); }
-    savedKey() { try { assert(!(fs.statSync(this.keyFile).mode & 0o077), 'Sync key file must have owner-only permissions.'); return fs.readFileSync(this.keyFile, 'utf8').replace(/\r?\n$/, ''); } catch (e) { if (e.code === 'ENOENT') return null; throw e; } }
+    savedKey() { try { assert(privateFile(this.keyFile), 'Sync key file must have owner-only permissions.'); return fs.readFileSync(this.keyFile, 'utf8').replace(/\r?\n$/, ''); } catch (e) { if (e.code === 'ENOENT') return null; throw e; } }
     status() {
         const c = this.draft?.config || this.read(), key = this.savedKey();
         return { url: baseUrl(c), suffix: APP_FOLDER + '/', username: c.username || '', hasPassword: !!c.password, verified: !!this.draft || !!c.verified,
@@ -45,7 +46,7 @@ export class Settings {
                 await this.autoSync.pending?.catch(() => {});
                 this.autoSync.lock();
                 // Journal is private and contains the new key before the remote publication point.
-                atomic(this.journal, JSON.stringify({ destination, passphrase }));
+                writePrivateFile(this.journal, JSON.stringify({ destination, passphrase }));
                 const sourceConfig = (old.encryptionReady || old.url && this.savedKey() !== null) && old.url !== destination.url ? old : destination;
                 const { vault } = await verifyConnection(sourceConfig);
                 if (vault) {
@@ -71,8 +72,8 @@ export class Settings {
         return this.status();
     }
     commit(destination, passphrase) {
-        atomic(this.keyFile, passphrase + '\n');
-        atomic(this.file, JSON.stringify({ ...destination, verified: true, encryptionReady: true, encrypted: !!passphrase }));
+        writePrivateFile(this.keyFile, passphrase + '\n');
+        writePrivateFile(this.file, JSON.stringify({ ...destination, verified: true, encryptionReady: true, encrypted: !!passphrase }));
         this.autoSync.cloud.lock(); this.autoSync.cloud.cacheKey = undefined;
         fs.rmSync(this.journal, { force: true });
     }

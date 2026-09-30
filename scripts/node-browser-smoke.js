@@ -1,6 +1,7 @@
+import {browserBinary} from './browser-runtime.js';
 // Isolated Chrome/CDP regression for cross-branch selection and node activation.
-import fs from 'node:fs';import os from 'node:os';import path from 'node:path';import {spawn} from 'node:child_process';import {once} from 'node:events';import {pathToFileURL} from 'node:url';import assert from 'node:assert/strict';
-const source=path.resolve(process.argv[2]||new URL('..',import.meta.url).pathname);
+import fs from 'node:fs';import os from 'node:os';import path from 'node:path';import {spawn} from 'node:child_process';import {once} from 'node:events';import {pathToFileURL,fileURLToPath} from 'node:url';import assert from 'node:assert/strict';
+const source=path.resolve(process.argv[2]||fileURLToPath(new URL('..',import.meta.url)));
 const {createApp}=await import(pathToFileURL(path.join(source,'src/server.js')));
 const {codexSample,claudeSample}=await import(pathToFileURL(path.join(source,'src/demo.js')));
 const root=fs.mkdtempSync(path.join(os.tmpdir(),'grove-node-browser-')),app=createApp({root:path.join(root,'app'),roots:{codex:path.join(root,'codex'),claude:path.join(root,'claude')},guard:()=>{}}),store=app.store;
@@ -11,15 +12,15 @@ store.put('branch',{...child,parentId:parent.id,forkRevision:parent.head,forkEnd
 for(const b of [parent,child])for(let i=b===parent?0:3;i<(b===parent?12:23);i++){const g=store.treeGraph(parent.id),p=g.paths.find(p=>p.branchId===b.id);store.organize(parent.id,{version:g.version,pathId:b.id,chatIds:p.messages.slice(i*2,i*2+2).map(m=>m.id),action:'combine',name:b.agent+' node '+i});}
 app.native.setActive(parent.id,root,true);app.native.apply([parent.id]);
 app.server.listen(0,'127.0.0.1');await once(app.server,'listening');
-const chrome=spawn(process.env.CHROME||'/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',['--headless=new','--no-first-run','--no-default-browser-check','--remote-debugging-port=0','--user-data-dir='+path.join(root,'chrome'),'about:blank'],{stdio:'ignore'});let ws;
+const chrome=spawn(browserBinary(),['--headless=new','--no-first-run','--no-default-browser-check','--remote-debugging-port=0','--user-data-dir='+path.join(root,'chrome'),'about:blank'],{stdio:'ignore',windowsHide:true});let ws;
 try{
  let port;for(let i=0;i<100;i++){try{port=fs.readFileSync(path.join(root,'chrome','DevToolsActivePort'),'utf8').split('\n')[0];break;}catch{}await new Promise(r=>setTimeout(r,100));}assert.ok(port,'Chrome debugging port');
  const page=await(await fetch('http://127.0.0.1:'+port+'/json/new?http://127.0.0.1:'+app.server.address().port,{method:'PUT'})).json();ws=new WebSocket(page.webSocketDebuggerUrl);await once(ws,'open');let id=0;const requests=new Map(),errors=[];
  ws.onmessage=e=>{const m=JSON.parse(e.data);if(m.id){const p=requests.get(m.id);requests.delete(m.id);m.error?p.reject(m.error):p.resolve(m.result);}if(m.method==='Runtime.exceptionThrown')errors.push(m.params.exceptionDetails.text);};
  const call=(method,params={})=>new Promise((resolve,reject)=>{const n=++id;requests.set(n,{resolve,reject});ws.send(JSON.stringify({id:n,method,params}));});
  const evaluate=async expression=>{const r=await call('Runtime.evaluate',{expression,awaitPromise:true,returnByValue:true});if(r.exceptionDetails)throw Error(JSON.stringify(r.exceptionDetails));return r.result.value;};
- const wait=async expression=>{for(let i=0;i<100;i++){if(await evaluate(expression))return;await new Promise(r=>setTimeout(r,100));}throw Error('Timeout '+expression);};
- await call('Runtime.enable');await call('Emulation.setDeviceMetricsOverride',{width:1512,height:982,deviceScaleFactor:1,mobile:false});await wait('document.querySelector("[data-open]")');await evaluate('document.querySelector("[data-open]").click()');await wait('document.querySelectorAll("[data-node]").length>10');
+ const wait=async expression=>{for(let i=0;i<100;i++){if(await evaluate(expression))return;await new Promise(r=>setTimeout(r,100));}throw Error('Timeout '+expression+' '+JSON.stringify(await evaluate('({hidden:document.hidden,dialog:document.querySelector("#dialog")?.open,toast:document.querySelector("#toast")?.textContent,rows:document.querySelectorAll("[data-trash-select]").length})'))) ;};
+ await call('Emulation.setFocusEmulationEnabled',{enabled:true});await call('Page.bringToFront');await call('Runtime.enable');await call('Emulation.setDeviceMetricsOverride',{width:1512,height:982,deviceScaleFactor:1,mobile:false});await wait('document.querySelector("[data-open]")');await evaluate('document.querySelector("[data-open]").click()');await wait('document.querySelectorAll("[data-node]").length>10');
  assert.equal(await evaluate(`document.querySelector('[data-scope="active:codex"]').classList.contains('selected')`),true);
  assert.ok(await evaluate('(()=>{const a=document.querySelector(".transcript-panel").getBoundingClientRect(),b=document.querySelector(".graph-panel").getBoundingClientRect(),p=parseFloat(getComputedStyle(document.querySelector("#editor")).paddingLeft);return Math.abs(b.left-a.right-p)<1})()'));
  const dividerStart=await evaluate('(()=>{const r=document.querySelector("#ribbon-lane").getBoundingClientRect();return{x:r.x+r.width/2,y:r.y+r.height/2}})()');
@@ -78,15 +79,26 @@ try{
   assert.equal(await evaluate('document.querySelector(".dialog-actions").hidden'),true);
   if(selector==='#settings'){
    assert.equal(await evaluate('document.querySelector("[name=smartClassify]").disabled&&document.querySelector("[name=smartNodes]").disabled'),true);
+   assert.equal(await evaluate('document.querySelector("[name=smartConcurrency]").value'),'2');
+   await evaluate('document.querySelector("[name=smartConcurrency]").value="1";document.querySelector("[name=smartConcurrency]").dispatchEvent(new Event("change"))');
+   await wait('document.querySelector("[name=smartConcurrency]").value==="1"&&!document.querySelector("[name=smartConcurrency]").disabled');assert.equal(app.intelligence.status().concurrency,1);
+   await evaluate('document.querySelector("[name=smartInterval]").value="0.5";document.querySelector("[name=smartInterval]").dispatchEvent(new Event("change"))');
+   await wait('document.querySelector("[name=smartInterval]").value==="0.5"&&!document.querySelector("[name=smartInterval]").disabled');assert.equal(app.intelligence.status().minIntervalSeconds,0.5);
    app.intelligence.request=async()=>({name:'Verified'});
    await evaluate('document.querySelector("[name=intelligenceKey]").value="browser-test-secret";document.querySelector("[name=intelligenceKey]").dispatchEvent(new Event("input"));document.querySelector("#save-intelligence-key").click()');
    await wait('document.querySelector("#remove-intelligence-key")&&!document.querySelector("[name=smartClassify]").disabled');
    assert.equal(await evaluate('document.querySelector("[name=intelligenceKey]").value'),'');
+   assert.equal(await evaluate('document.querySelector("[name=intelligenceKey]").disabled&&!document.querySelector("#save-intelligence-key")'),true);
    assert.ok(!(await evaluate('document.querySelector("#dialog").innerHTML')).includes('browser-test-secret'));
    await evaluate('document.querySelector("[name=smartNodes]").click()');await wait('document.querySelector("[name=smartNodes]").checked&&!document.querySelector("[name=smartNodes]").disabled');
    assert.equal(app.intelligence.status().nameNodes,true);
    await evaluate('document.querySelector("#remove-intelligence-key").click()');await wait('document.querySelector("[name=smartNodes]").disabled&&!document.querySelector("#remove-intelligence-key")');
    assert.equal(app.intelligence.status().hasKey,false);
+   await evaluate('document.querySelector("[name=codexWindow]").value="1000000";document.querySelector("[name=codexCompactAt]").value="900000";document.querySelector("#save-context-codex").click()');
+   await wait('document.querySelector("#context-settings-status")?.textContent.includes("saved")');assert.match(fs.readFileSync(path.join(app.native.roots.codex,'config.toml'),'utf8'),/model_context_window = 1000000/);
+   await evaluate('document.querySelector("[name=claudeWindow]").value="500000";document.querySelector("#save-context-claude").click()');
+   await wait('document.querySelector("#context-settings-status")?.textContent.includes("saved")&&!document.querySelector("#save-context-claude").disabled');assert.equal(JSON.parse(fs.readFileSync(path.join(app.native.roots.claude,'settings.json'))).env.CLAUDE_CODE_AUTO_COMPACT_WINDOW,'500000');
+   assert.equal(await evaluate('!document.querySelector("[name=intelligenceKey]").disabled&&document.querySelector("#save-intelligence-key").disabled'),true);
    assert.equal(await evaluate('!!document.querySelector("#language")'),false);
    assert.ok(await evaluate('(()=>{const h=document.querySelector(".settings-section-heading h3").getBoundingClientRect(),b=document.querySelector("#modify-connection").getBoundingClientRect();return b.left>h.right&&Math.abs(h.y+h.height/2-b.y-b.height/2)<2})()'));
    assert.ok(await evaluate('[...document.querySelectorAll(".settings-card")].every(c=>{const style=getComputedStyle(c),h=c.querySelector("h3");return style.paddingTop===style.paddingBottom&&style.paddingTop===style.paddingLeft&&getComputedStyle(h).marginTop==="0px"})'));
@@ -101,6 +113,9 @@ try{
  await call('Emulation.setDeviceMetricsOverride',{width:430,height:932,deviceScaleFactor:1,mobile:true});
  assert.ok(await evaluate('(()=>{const r=document.querySelector("#smart-status").getBoundingClientRect(),h=document.querySelector(".banner").getBoundingClientRect();return r.left>=0&&r.right<=innerWidth&&r.bottom<=h.bottom+1})()'));
  app.intelligence.running=false;app.intelligence.phase=null;app.intelligence.current=null;app.intelligence.publish();await wait('document.querySelector("#smart-status").hidden');
+ app.intelligence.data.jobs=[{key:'queued-fixture'}];app.intelligence.publish();await wait('document.querySelector("#smart-status").textContent==="Smart organization queued"');
+ await evaluate('document.querySelector("#smart-status").click()');await wait('document.querySelector("#intelligence-status")?.textContent.includes("Smart organization queued")');
+ assert.ok(await evaluate('document.querySelector("#intelligence-status").textContent.includes("remaining")'));await evaluate('document.querySelector("#dialog-close").click()');app.intelligence.data.jobs=[];app.intelligence.publish();
  await call('Emulation.setDeviceMetricsOverride',{width:1512,height:982,deviceScaleFactor:1,mobile:false});
  await evaluate('document.querySelector("#language-toggle").click()');assert.equal(await evaluate('document.querySelector("#language-toggle").textContent'),'中');
  await evaluate('document.querySelector("#language-toggle").click()');assert.equal(await evaluate('document.querySelector("#language-toggle").textContent'),'En');

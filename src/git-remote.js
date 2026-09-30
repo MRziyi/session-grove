@@ -21,7 +21,7 @@ export class GitRemote {
         return new Promise((resolve, reject) => {
             const child = spawn('git', ['-c', 'core.hooksPath=/dev/null', '-c', 'commit.gpgsign=false', '-c', 'core.quotePath=false', '-c', 'core.pager=cat', ...args], {
                 cwd: this.directory, env: { ...process.env, GIT_TERMINAL_PROMPT: '0', GIT_SSH_COMMAND: 'ssh -o BatchMode=yes -o ConnectTimeout=15', GIT_CONFIG_NOSYSTEM: '1' },
-                stdio: [input === null ? 'ignore' : 'pipe', 'pipe', 'pipe'], signal: this.controller.signal,
+                windowsHide: true, stdio: [input === null ? 'ignore' : 'pipe', 'pipe', 'pipe'], signal: this.controller.signal,
             });
             if (input !== null) { child.stdin.on('error', () => {}); child.stdin.end(input); }
             let stdout = '', stderr = '', progressBuffer = '', settled = false, phase = '', phaseStarted = Date.now();
@@ -65,7 +65,9 @@ export class GitRemote {
             assert(previous.code !== 0, 'Remote main disappeared. Reconnect using a new data repository.');
             this.head = null; return;
         }
-        await this.run(['fetch', '--progress', '--no-tags', 'origin', '+refs/heads/main:refs/remotes/origin/main'], { progress: true });
+        const previous = await this.run(['rev-parse', '--verify', 'refs/remotes/origin/main'], { accepted: [0, 128] });
+        if(previous.stdout !== remote.stdout.split(/\s+/)[0])
+            await this.run(['fetch', '--progress', '--no-tags', 'origin', '+refs/heads/main:refs/remotes/origin/main'], { progress: true });
         const marker = await this.run(['show', 'refs/remotes/origin/main:grove.json']);
         const format = JSON.parse(marker.stdout);
         assert(format.format === 'session-grove-git' && format.schema === 1, 'This repository is not a Grove data repository.');
@@ -83,5 +85,6 @@ export class GitRemote {
         // Normal fast-forward push is our concurrency check. Never force-push.
         await this.run(['push', '--progress', 'origin', 'HEAD:refs/heads/main'], { progress: true });
         this.head = (await this.run(['rev-parse', 'HEAD'])).stdout;
+        await this.run(['update-ref','refs/remotes/origin/main',this.head]);
     }
 }

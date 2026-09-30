@@ -9,7 +9,9 @@ export function codexBinary() {
     if (process.env.GROVE_CODEX_BINARY) return process.env.GROVE_CODEX_BINARY;
     const extensions=path.join(os.homedir(),'.vscode/extensions');
     if(fs.existsSync(extensions)){
-        const candidates=fs.readdirSync(extensions).filter(n=>n.startsWith('openai.chatgpt-')).map(n=>path.join(extensions,n,'bin',process.platform==='darwin'?'macos-'+(process.arch==='arm64'?'aarch64':'x86_64'):'linux-x86_64','codex')).filter(f=>fs.existsSync(f));
+        const arch=process.arch==='arm64'?'aarch64':'x86_64';
+        const platform={darwin:'macos',win32:'windows',linux:'linux'}[process.platform];
+        const candidates=fs.readdirSync(extensions).filter(n=>n.startsWith('openai.chatgpt-')).map(n=>path.join(extensions,n,'bin',platform+'-'+arch,process.platform==='win32'?'codex.exe':'codex')).filter(f=>fs.existsSync(f));
         candidates.sort((a,b)=>fs.statSync(b).mtimeMs-fs.statSync(a).mtimeMs);if(candidates[0])return candidates[0];
     }
     throw new Error('Set GROVE_CODEX_BINARY to the Codex app-server used by your client.');

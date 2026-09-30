@@ -19,6 +19,12 @@ export function nativeTrashCandidates(store) {
     }).map(i=>({id:i.id,branchId:i.branchId,title:store.find('branch',i.branchId)?.name || i.title,agent:i.agent,active:i.applied,updatedAt:fs.statSync(i.file).mtime.toISOString(),archived:!!i.nativeArchived || i.file.includes(path.sep+'archived_sessions'+path.sep)}));
 }
 export function checkFileIdle(file) {
+    if(process.platform==='win32'){
+        // FileShare.None rejects open client handles without changing the file.
+        try { execFileSync('powershell.exe',['-NoProfile','-NonInteractive','-Command',"try { $stream = [IO.File]::Open($env:GROVE_CHECK_FILE, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::None); $stream.Dispose() } catch { exit 1 }"],{env:{...process.env,GROVE_CHECK_FILE:file},windowsHide:true,stdio:'pipe'}); }
+        catch { throw Object.assign(new Error('Cannot exclusively open this session file. Close this session and retry.'),{status:409}); }
+        return;
+    }
     try {
         const pids=execFileSync(process.platform==='darwin'?'/usr/sbin/lsof':'lsof',['-t','--',file],{encoding:'utf8',stdio:['ignore','pipe','pipe']}).trim().split(/\s+/).filter(pid=>pid && Number(pid)!==process.pid);
         assert(!pids.length,'This session file is in use. Close this session and retry.',409);

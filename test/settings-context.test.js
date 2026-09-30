@@ -1,3 +1,4 @@
+import {privateFile} from '../src/private-file.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -54,7 +55,7 @@ test('settings reveal encryption after verification, persist a private key, and 
  const e=await fixture(t),a=e.device('a'),auto=new AutoSync(a.store,()=>settings.read()),settings=new Settings(a.store.root,a.store,auto,()=>{});t.after(()=>auto.close());
  assert.equal(settings.status().verified,false);await settings.verify(e.config);assert.equal(settings.status().verified,true);assert.equal(settings.status().encryptionReady,false);
  settings.start({passphrase:'synthetic-settings-key'});await settings.pending;assert.equal(settings.job.state,'complete');assert.equal(settings.status().hasPassphrase,true);
- assert.equal(fs.statSync(settings.keyFile).mode&0o077,0);assert.ok(!JSON.stringify(settings.status()).includes('synthetic-settings-key'));assert.ok(!JSON.stringify(settings.status()).includes('sample-password'));
+ assert.equal(privateFile(settings.keyFile),true);assert.ok(!JSON.stringify(settings.status()).includes('synthetic-settings-key'));assert.ok(!JSON.stringify(settings.status()).includes('sample-password'));
  settings.start({passphrase:''});await settings.pending;assert.equal(settings.job.state,'complete');assert.equal(settings.status().encrypted,false);assert.equal(auto.status().unlocked,true);
 });
 test('fallback captures first, uploads changed Pending, and sends no requests when unchanged or disabled',async t=>{

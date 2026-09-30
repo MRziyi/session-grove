@@ -1,3 +1,4 @@
+import {connect as connectNative} from '../src/codex-rpc.js';
 // Offline compatibility smoke: runs the installed Codex against an isolated home.
 // Never copies authentication or config, and never submits a model turn.
 import fs from 'node:fs';
@@ -14,40 +15,7 @@ const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'grove-codex-
 const nativeHome = path.join(root, 'native'), cwd = path.join(root, 'project');
 fs.mkdirSync(nativeHome);
 fs.mkdirSync(cwd);
-function connect() {
-    const child = spawn(executable, ['app-server', '--stdio'], { env: { PATH: process.env.PATH, CODEX_HOME: nativeHome }, stdio: ['pipe', 'pipe', 'pipe'] });
-    let n = 0, buffer = '', stderr = '';
-    const pending = new Map();
-    child.stderr.on('data', c => stderr = (stderr + c.toString()).slice(-3000));
-    child.stdout.on('data', c => { buffer += c; let index; while ((index = buffer.indexOf('\n')) >= 0) {
-        const line = buffer.slice(0, index);
-        buffer = buffer.slice(index + 1);
-        try {
-            const m = JSON.parse(line), p = pending.get(m.id);
-            if (p) {
-                clearTimeout(p.timer);
-                pending.delete(m.id);
-                m.error ? p.reject(new Error(JSON.stringify(m.error))) : p.resolve(m.result);
-            }
-        }
-        catch { }
-    } });
-    child.on('error', e => { for (const p of pending.values()) {
-        clearTimeout(p.timer);
-        p.reject(e);
-    } pending.clear(); });
-    child.on('exit', () => { for (const p of pending.values()) {
-        clearTimeout(p.timer);
-        p.reject(new Error('Codex exited: ' + stderr));
-    } pending.clear(); });
-    const request = (method, params = {}) => new Promise((resolve, reject) => { const id = ++n, timer = setTimeout(() => { pending.delete(id); reject(new Error('RPC timeout: ' + method + ' ' + stderr)); }, 15000); pending.set(id, { resolve, reject, timer }); child.stdin.write(JSON.stringify({ id, method, params }) + '\n'); });
-    const init = async () => { await request('initialize', { clientInfo: { name: 'session_grove_smoke', version: '0.1.0' } }); child.stdin.write(JSON.stringify({ method: 'initialized' }) + '\n'); };
-    const close = async () => { if (child.exitCode === null) {
-        child.kill();
-        await once(child, 'exit');
-    } };
-    return { request, init, close };
-}
+const connect=()=>connectNative(executable,nativeHome);
 const store = new Store(path.join(root, 'library'));
 let client;
 try {
@@ -108,5 +76,5 @@ try {
 finally {
     await client?.close();
     store.close();
-    fs.rmSync(root, { recursive: true, force: true });
+    fs.rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
 }

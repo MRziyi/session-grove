@@ -1,6 +1,6 @@
 // CPU/storage scaling benchmark; accepts an optional pre-change source directory.
-import fs from 'node:fs';import os from 'node:os';import path from 'node:path';import {pathToFileURL} from 'node:url';
-const source=path.resolve(process.argv[2]||new URL('..',import.meta.url).pathname);
+import fs from 'node:fs';import os from 'node:os';import path from 'node:path';import {pathToFileURL,fileURLToPath} from 'node:url';
+const source=path.resolve(process.argv[2]||fileURLToPath(new URL('..',import.meta.url)));
 const {Store}=await import(pathToFileURL(path.join(source,'src/store.js')));
 const {Cloud}=await import(pathToFileURL(path.join(source,'src/cloud.js')));
 const {codexSample}=await import(pathToFileURL(path.join(source,'src/demo.js')));

@@ -99,10 +99,10 @@ test('encrypted WebDAV push/pull is idempotent, preserves no Active state, rejec
 });
 test('workspace HTTP actions archive atomically, restore without activation, reject empty projects, and persist layout conflict choices', async t => {
     const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'grove-actions-'))), cwd = path.join(root, 'work'); fs.mkdirSync(cwd);
-    let busy = false;
+    let busy = false, remote;
     const app = createApp({ root: path.join(root, 'data'), roots: { codex: path.join(root, 'codex'), claude: path.join(root, 'claude') }, guard: () => { if (busy) throw new Error('native busy'); } });
     app.server.listen(0, '127.0.0.1'); await once(app.server, 'listening');
-    t.after(async () => { app.server.close(); await once(app.server, 'close'); fs.rmSync(root, { force: true, recursive: true }); });
+    t.after(async () => { remote?.close(); await new Promise(resolve=>app.close(resolve)); fs.rmSync(root, { force: true, recursive: true }); });
     const base = `http://127.0.0.1:${app.server.address().port}`, boot = await (await fetch(base + '/api/bootstrap')).json();
     const request = async (path, data) => { const r = await fetch(base + '/api' + path, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Grove-Token': boot.token }, body: JSON.stringify(data) }); return { status: r.status, data: await r.json() }; };
     assert.equal((await request('/projects', { name: 'Empty' })).status, 400);
@@ -145,8 +145,7 @@ test('workspace HTTP actions archive atomically, restore without activation, rej
     const g = app.store.treeGraph(a.id), body = { version: g.version, pathId: a.id, chatIds: [g.paths[0].messages[0].id], action: 'combine', name: 'Setup' };
     assert.equal((await request('/trees/' + a.id, body)).status, 200);
     assert.equal((await request('/trees/' + a.id, body)).status, 409);
-    const remote = new Store(path.join(root, 'remote'));
-    t.after(() => remote.close());
+    remote = new Store(path.join(root, 'remote'));
     const copy = (from, to) => to.merge(from.exportGraph(), Object.fromEntries(from.db.prepare('SELECT * FROM objects').all().map(v => [v.hash, v.body])));
     copy(app.store, remote);
     for (const [store, name] of [[app.store, 'Local'], [remote, 'Remote']]) {

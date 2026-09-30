@@ -1,3 +1,4 @@
+import {browserBinary} from './browser-runtime.js';
 // Synthetic white-box sync UI regression. No real cloud or native sessions are touched.
 import fs from 'node:fs';import os from 'node:os';import path from 'node:path';import {spawn} from 'node:child_process';import {once} from 'node:events';import assert from 'node:assert/strict';
 import {createApp} from '../src/server.js';import {codexSample} from '../src/demo.js';import {treeSnapshot} from '../src/cloud.js';import {hash} from '../src/util.js';
@@ -13,7 +14,7 @@ app.autoSync.run=async(store,config,key,direction,ids)=>{
  app.autoSync.cloud.cacheKey='cloud:ui-benchmark';const cache=app.autoSync.cloud.cache();for(const[id,value]of fingerprints)cache.ack[id]=value;app.autoSync.cloud.save(cache);return {published:ids.length};
 };
 app.server.listen(0,'127.0.0.1');await once(app.server,'listening');
-const chrome=spawn(process.env.CHROME||'/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',['--headless=new','--no-first-run','--no-default-browser-check','--remote-debugging-port=0','--user-data-dir='+path.join(root,'chrome'),'about:blank'],{stdio:'ignore'});let ws;
+const chrome=spawn(browserBinary(),['--headless=new','--no-first-run','--no-default-browser-check','--remote-debugging-port=0','--user-data-dir='+path.join(root,'chrome'),'about:blank'],{stdio:'ignore',windowsHide:true});let ws;
 try{
  let port;for(let i=0;i<100;i++){try{port=fs.readFileSync(path.join(root,'chrome','DevToolsActivePort'),'utf8').split('\n')[0];break;}catch{}await new Promise(r=>setTimeout(r,100));}assert.ok(port);
  const page=await(await fetch('http://127.0.0.1:'+port+'/json/new?http://127.0.0.1:'+app.server.address().port,{method:'PUT'})).json();ws=new WebSocket(page.webSocketDebuggerUrl);await once(ws,'open');let next=0;const pending=new Map(),errors=[];
@@ -23,7 +24,7 @@ try{
  const wait=async expression=>{for(let i=0;i<100;i++){if(await evaluate(expression))return;await new Promise(r=>setTimeout(r,100));}throw Error('Timeout '+expression+'; '+await evaluate('document.querySelector("#dialog-error")?.textContent'));};
  const hover=async selector=>{await call('Input.dispatchMouseEvent',{type:'mouseMoved',x:5,y:800});const r=await evaluate(`(()=>{const r=document.querySelector('${selector}').getBoundingClientRect();return{x:r.x+r.width/2,y:r.y+r.height/2}})()`);await call('Input.dispatchMouseEvent',{type:'mouseMoved',...r});};
  const fits=async selector=>assert.ok(await evaluate(`(()=>{const r=document.querySelector('${selector}').getBoundingClientRect();return r.width>0&&r.top>=0&&r.left>=0&&r.right<=innerWidth+1&&r.bottom<=innerHeight+1&&document.documentElement.scrollWidth<=innerWidth})()`),'inspector must fit viewport: '+selector);
- await call('Runtime.enable');await call('Emulation.setDeviceMetricsOverride',{width:1512,height:982,deviceScaleFactor:1,mobile:false});await wait('document.querySelector("[data-open]")');
+ await call('Emulation.setFocusEmulationEnabled',{enabled:true});await call('Page.bringToFront');await call('Runtime.enable');await call('Emulation.setDeviceMetricsOverride',{width:1512,height:982,deviceScaleFactor:1,mobile:false});await wait('document.querySelector("[data-open]")');
  assert.equal(await evaluate('!!document.querySelector("#upload .button-countdown")'),false);
  assert.ok(await evaluate('(()=>{const a=document.querySelector("#sync").getBoundingClientRect(),b=document.querySelector("#collect").getBoundingClientRect(),s=document.querySelector("#sync-details").getBoundingClientRect();return Math.abs(a.y+a.height/2-b.y-b.height/2)<2&&s.right<=a.left})()'));
  assert.ok(await evaluate('!!document.querySelector(".session-state.active-state")&&!!document.querySelector(".session-state.modified-state")'));

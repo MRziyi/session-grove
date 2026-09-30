@@ -29,7 +29,7 @@ if (['status', 'stop'].includes(args[0])) {
 if (args.includes('--background')) {
     fs.mkdirSync(path.join(root,'logs'),{recursive:true,mode:0o700});
     const output=fs.openSync(path.join(root,'logs','server.log'),'a',0o600);
-    const child=spawn(process.execPath,[fileURLToPath(import.meta.url),...args.filter(a=>a!=='--background')],{detached:true,stdio:['ignore',output,output]});
+    const child=spawn(process.execPath,[fileURLToPath(import.meta.url),...args.filter(a=>a!=='--background')],{detached:true,windowsHide:true,stdio:['ignore',output,output]});
     child.unref();fs.closeSync(output);
     let ready=false;
     for(let n=0;n<300;n++){try{const info=JSON.parse(fs.readFileSync(path.join(root,'server.json'),'utf8'));if(info.pid===child.pid){ready=true;break;}}catch{}if(child.exitCode!==null)break;await new Promise(r=>setTimeout(r,100));}

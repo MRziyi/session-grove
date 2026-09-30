@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.0.0
+
+- Validate Windows local history, Git Pull, native activation, cross-agent conversion and smart organization; add Windows unit/browser CI and test-gated GitHub releases.
+- Fix Windows process detection, Codex executable discovery, native file locks, restricted credential storage, headless browser checks and RPC shutdown.
+- Lock the saved Smart Organization key field; show Remove key in place of Verify, restoring the entry workflow after removal.
+- Index native identities during discovery; skip redundant Git fetch and catalog reads on unchanged Pull. Add `pnpm bench:git` for CPU, memory, latency, Git and SQLite measurements.
+- Batch revision/session writes in SQLite transactions; stream Git record files and yield during imports. Avoid repeated base-history reads and forced disk flushes for disposable Git cache files.
+- Default smart organization to two concurrent requests, with configurable concurrency and request spacing. Keep queued progress labeled, shorten the header and enlarge the About footer.
+- Add native context-window controls with profile-aware Codex edits and Claude auto-compaction budgets, private backups and stale-form protection.
+- Rewrite both READMEs around use cases and replace screenshots with synthetic examples rendered in the real UI.
+- See [1.0 validation](docs/1.0-windows-validation.md) and [release notes](docs/releases/v1.0.0.md).
+
 ## 0.14.0
 
 - Replace Sync with one Pull / Push control, directional arrow animations, linked stage indicators and completion checks. Transfers are manual by default; automatic Push is opt-in.

@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import {createInterface} from 'node:readline';
 import { setImmediate as yieldToLocal } from 'node:timers/promises';
 import { Cloud, treeSnapshot } from './cloud.js';
 import { GitRemote, gitRemote } from './git-remote.js';
@@ -49,7 +50,9 @@ export class GitCloud extends Cloud {
         const file = this.file(name); fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
         const text = typeof value === 'string' ? value : JSON.stringify(value, null, 2) + '\n';
         assert(Buffer.byteLength(text) < 95 * 1024 * 1024, 'Git data file exceeds the 95 MiB limit.');
-        if (!fs.existsSync(file) || fs.readFileSync(file, 'utf8') !== text) atomic(file, text);
+        // This checkout is reconstructable from SQLite or the fetched commit.
+        // Keep atomic replacement without forcing a disk flush for every cache file.
+        if (!fs.existsSync(file) || fs.readFileSync(file, 'utf8') !== text) atomic(file, text,{durable:false});
     }
     folder(id) { return 'trees/' + hash(id); }
     *records(id) {
@@ -58,6 +61,15 @@ export class GitCloud extends Cloud {
             const file = this.file(this.folder(id) + '/records/' + name);
             assert(fs.statSync(file).size < 95 * 1024 * 1024, 'Git record file exceeds size limit.');
             for (const line of fs.readFileSync(file, 'utf8').split('\n')) if (line) yield JSON.parse(line);
+        }
+    }
+    async *streamRecords(id){
+        const directory=this.file(this.folder(id)+'/records');
+        for(const name of fs.readdirSync(directory).filter(n=>/^[0-9]{6}\.jsonl$/.test(n)).sort()){
+            const file=this.file(this.folder(id)+'/records/'+name);
+            assert(fs.statSync(file).size<95*1024*1024,'Git record file exceeds size limit.');
+            const stream=fs.createReadStream(file,{encoding:'utf8'}),lines=createInterface({input:stream,crlfDelay:Infinity});
+            try{for await(const line of lines)if(line)yield JSON.parse(line);}finally{lines.close();stream.destroy();}
         }
     }
     writeRecords(id, records) {
@@ -73,33 +85,35 @@ export class GitCloud extends Cloud {
         if (bytes || !part) flush();
         for (const name of fs.readdirSync(this.file(dir))) if (/^[0-9]{6}\.jsonl$/.test(name) && Number(name.slice(0, 6)) >= part) fs.rmSync(this.file(dir + '/' + name));
     }
-    entries() {
+    *entryIterator() {
         const dir = this.file('trees');
-        if (!fs.existsSync(dir)) return [];
-        return fs.readdirSync(dir).filter(n => /^[a-f0-9]{64}$/.test(n)).map(n => {
+        if (!fs.existsSync(dir)) return;
+        for(const n of fs.readdirSync(dir).filter(n => /^[a-f0-9]{64}$/.test(n))){
             const entry = this.read('trees/' + n + '/index.json');
             assert(entry && hash(entry.id) === n && Array.isArray(entry.sessions), 'Invalid Git session index.');
-            return entry;
-        });
+            yield entry;
+        }
     }
-    loadDirectory() {
+    entries(){return [...this.entryIterator()];}
+    async loadDirectory() {
         const format = this.read('grove.json');
         assert(format?.format === 'session-grove-git' && format.schema === 1, 'This repository is not a supported Grove data repository.');
-        const c = this.cache(), projects = new Map(), indexes = {};
-        for (const entry of this.entries()) {
+        const projects = new Map(), indexes = {};let completed=0;
+        for (const entry of this.entryIterator()) {
             const { project, ...item } = entry;
             assert(project?.id === item.projectId && /^[a-f0-9]{64}$/.test(item.ref), 'Invalid Git project index.');
             if (!projects.has(project.id)) projects.set(project.id, { project, items: [] });
             const group = projects.get(project.id); group.items.push(item);
             if ((project.updatedAt || '') > (group.project.updatedAt || '')) group.project = project;
+            if(++completed%8===0)await yieldToLocal();
         }
         const summaries = [...projects.values()].map(value => {
             const index = digest(value); indexes[index] = value;
             const treeIds = value.items.filter(i => !i.archived).map(i => i.id);
             return { ...value.project, index, treeIds, count: treeIds.length };
         });
-        c.heads = { git: { projects: summaries } }; c.indexes = indexes; c.checkedAt = now();
-        for (const entry of this.entries()) if (!(c.baselines ||= {})[entry.id]) c.baselines[entry.id] = changeSnapshot(this.read(this.folder(entry.id) + '/graph.json'));
+        const c=this.cache();c.heads = { git: { projects: summaries } }; c.indexes = indexes; c.checkedAt = now();
+        // Hydration records the verified baseline; don't read every graph twice.
         this.save(c);
         const state = this.read('trash.json', { schema: 1, events: [] });
         if (state.events.length) applyTrashState(this.store, state);
@@ -109,7 +123,10 @@ export class GitCloud extends Cloud {
         const previous = this.cache().gitHead;
         await this.connection.remote.fetch();
         const remoteChanged = (previous || null) !== (this.connection.remote.head || null);
-        if (this.connection.remote.head) this.loadDirectory();
+        if (this.connection.remote.head) {
+            if(remoteChanged || !this.cache().heads?.git)await this.loadDirectory();
+            else {const c=this.cache();c.checkedAt=now();this.save(c);}
+        }
         else { const c = this.cache(); c.heads = {}; c.indexes = {}; c.checkedAt = now(); this.save(c); }
         const cache = this.cache(); cache.gitHead = this.connection.remote.head; this.save(cache);
         return { projects: this.summaries().length, remoteChanged };
@@ -120,7 +137,7 @@ export class GitCloud extends Cloud {
         const item = this.items().find(i => i.id === treeId);
         if (!item || (this.cache().loaded[treeId] || []).includes(item.ref)) return;
         this.report('Importing session from Git cache', 0, 1, Date.now(), item.name);
-        // No network awaits between snapshot comparison and merge; later UI edits stay dirty.
+        // Stream immutable records before comparing the latest local snapshot.
         let graph = this.read(this.folder(treeId) + '/graph.json');
         assert(digest(graph) === item.ref && graph.branches.some(b => b.id === treeId), 'Git session integrity check failed.');
         const deleted = deletedIds(this.store, graph);
@@ -128,13 +145,14 @@ export class GitCloud extends Cloud {
         const needed = new Set(bodyRefs(graph)), exists = this.store.db.prepare('SELECT 1 FROM objects WHERE hash=?');
         let batch = [], bytes = 0;
         const flush = () => { this.store.transaction(() => { for (const [h, body] of batch) this.store.insertObject.run(h, body); }); batch = []; bytes = 0; };
-        for (const [h, body] of this.records(treeId)) {
+        for await (const [h, body] of this.streamRecords(treeId)) {
             assert(typeof body === 'string' && hash(body) === h, 'Git record integrity check failed.');
             if (needed.delete(h) && !exists.get(h)) { batch.push([h, body]); bytes += Buffer.byteLength(body); }
-            if (batch.length >= 128 || bytes >= 4 * 1024 * 1024) flush();
+            if (batch.length >= 128 || bytes >= 4 * 1024 * 1024) {flush();await yieldToLocal();}
         }
         if (batch.length) flush();
         assert(!needed.size, 'Missing Git session record.');
+        const currentDeleted=deletedIds(this.store,graph);if(currentDeleted.size)graph=retainedGraph(graph,currentDeleted);
         const before = treeSnapshot(this.store, treeId), c = this.cache();
         const wasDirty = before && digest(before) !== c.ack[treeId];
         const result = this.store.merge(graph, {}, { latest });
@@ -210,7 +228,7 @@ export class GitCloud extends Cloud {
         const c = this.cache();
         for (const [id, graph] of snapshots) { c.ack[id] = digest(graph); (c.baselines ||= {})[id] = changeSnapshot(graph); c.loaded[id] = [digest(graph)]; }
         c.lastUpload = now(); c.gitHead = remote.head; this.save(c);
-        if (state.events.length) applyTrashState(this.store, state); this.loadDirectory(); this.saveDirectory();
+        if (state.events.length) applyTrashState(this.store, state); await this.loadDirectory(); this.saveDirectory();
         return { published: snapshots.size, uploaded: 0, commit: remote.head };
     }
 }

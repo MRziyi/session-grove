@@ -37,4 +37,4 @@ try {
     }
     const report = { codexToClaudeAllModesRead:true, fullReadResume: true, leanReadResume: true, messagesReadResume: true, modelRequests: 0 };
     fs.writeFileSync('test-results/conversion-native.json', JSON.stringify(report, null, 2)); console.log(report);
-} finally { await client?.close(); store.close(); fs.rmSync(root, { recursive: true, force: true }); }
+} finally { await client?.close(); store.close(); fs.rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }); }

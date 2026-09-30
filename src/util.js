@@ -11,13 +11,13 @@ export function text(value, label = '名称', max = 200) {
     assert(typeof value === 'string' && value.trim() && value.length <= max, `${label}不能为空，最多 ${max} 字符`);
     return value.trim();
 }
-export function atomic(file, content) {
+export function atomic(file, content, {durable=true} = {}) {
     fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
     const temp = `${file}.${id()}.tmp`;
     const fd = fs.openSync(temp, 'wx', 0o600);
     try {
         fs.writeFileSync(fd, content);
-        fs.fsyncSync(fd);
+        if(durable)fs.fsyncSync(fd);
     }
     finally {
         fs.closeSync(fd);

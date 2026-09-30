@@ -50,6 +50,32 @@ test('sequential two-device work preserves both sessions and appended transcript
     assert.equal(a.store.get('branch', two.id).name, 'Two');
 });
 
+test('unchanged Pull checks the remote once without fetching or rereading session indexes',async t=>{
+    const e=fixture(t),a=e.device('a'),b=e.device('b');branch(a);await push(a);await pull(b);
+    const remote=b.cloud.connection.remote,run=remote.run.bind(remote),commands=[];
+    remote.run=(args,options)=>{commands.push(args[0]);return run(args,options);};
+    b.cloud.loadDirectory=()=>{throw new Error('Unchanged catalog should be reused');};
+    const result=await pull(b);
+    assert.equal(result.unchanged,true);assert.equal(commands.filter(c=>c==='ls-remote').length,1);assert.ok(!commands.includes('fetch'));
+    assert.equal(b.store.all('branch').length,1);
+});
+
+test('local rename during streamed Pull wins and remains queued',async t=>{
+    const e=fixture(t),a=e.device('a'),b=e.device('b'),one=branch(a);await push(a);await pull(b);
+    a.store.ingest(one.id,a.store.raw(one.head)+codexTurn('Remote continuation','Reply').map(v=>JSON.stringify(v)+'\n').join(''),one.head,{});await push(a);
+    const records=b.cloud.streamRecords.bind(b.cloud);let changed=false;
+    b.cloud.streamRecords=async function*(id){for await(const row of records(id)){if(!changed){changed=true;b.store.edit(one.id,{name:'Edited while reading'});}yield row;}};
+    await pull(b);assert.equal(b.store.get('branch',one.id).name,'Edited while reading');assert.ok(b.cloud.dirtyIds().includes(one.id));
+});
+
+test('Trash during streamed Pull does not resurrect the discarded session',async t=>{
+    const e=fixture(t),a=e.device('a'),b=e.device('b'),one=branch(a);await push(a);await pull(b);
+    a.store.ingest(one.id,a.store.raw(one.head)+codexTurn('Remote continuation','Reply').map(v=>JSON.stringify(v)+'\n').join(''),one.head,{});await push(a);
+    const records=b.cloud.streamRecords.bind(b.cloud);let changed=false;
+    b.cloud.streamRecords=async function*(id){for await(const row of records(id)){if(!changed){changed=true;stageTrash(b.store,[one.id],[one.id]);}yield row;}};
+    await pull(b);assert.equal(b.store.syncCollections().items.length,0);assert.equal(b.auto.trashPending(),true);
+});
+
 test('rename during Git upload is still dirty after commit acknowledgement', async t => {
     const e = fixture(t), a = e.device('a'), session = branch(a); await push(a);
     a.store.edit(session.id, { name: 'Snapshot' });
@@ -89,7 +115,9 @@ test('Git rejects unsafe remotes and unrelated repository contents', async t => 
     for (const value of ['-x', 'file:///tmp/repo', 'git@github.com:a/../b.git', 'git@github.com:a/b.git;echo bad']) assert.throws(() => gitRemote(value));
     const e = fixture(t), a = e.device('a'); branch(a); await push(a);
     const remote = a.cloud.connection.remote;
-    fs.symlinkSync('/tmp', path.join(remote.directory, 'unsafe')); await remote.run(['add', 'unsafe']); await remote.run(['commit', '-m', 'Synthetic unsafe file']); await remote.run(['push', 'origin', 'HEAD:main']);
+    // Construct a Git symlink entry without requiring Windows symlink privileges.
+    const object=await remote.run(['hash-object','-w','--stdin'],{input:'/tmp'});
+    await remote.run(['update-index','--add','--cacheinfo','120000,'+object.stdout+',unsafe']); await remote.run(['commit', '-m', 'Synthetic unsafe file']); await remote.run(['push', 'origin', 'HEAD:main']);
     const b = e.device('b'); await assert.rejects(pull(b), /Unexpected file or link/);
 });
 

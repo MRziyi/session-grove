@@ -15,7 +15,7 @@ export async function controlService(root, action) {
     catch { throw new Error('Server is unavailable; saved PID ' + info.pid + '. No process was killed.'); }
     if (state.pid !== info.pid || state.instance !== info.instance) throw new Error('Server identity changed. No process was killed.');
     if (action === 'status') { console.log(`Session Grove is running (PID ${info.pid})\n${base}\nLibrary: ${root}`); return; }
-    const response = await fetch(base + '/api/service/stop', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Grove-Token': info.token }, body: '{}', signal: AbortSignal.timeout(2000) });
+    const response = await fetch(base + '/api/service/stop', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Grove-Token': info.token }, body: '{}', signal: AbortSignal.timeout(10000) });
     if (!response.ok) throw new Error('Server rejected stop: ' + response.status);
     console.log('Stopping Session Grove; outstanding work has up to 10 seconds to finish.');
 }

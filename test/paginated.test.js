@@ -77,6 +77,7 @@ test('authoritative native pointers link already summarized sessions without par
 
 test('restart reuses verified summaries and file stamps without reading unchanged history bodies',t=>{
  const f=fixture(t),roots={codex:f.home,claude:path.join(f.root,'claude')},native=new Native(f.store,{roots,guard:()=>{}});native.refreshLocal();native.refreshLocal();
- const reopened=new Store(f.store.root);t.after(()=>reopened.close());const next=new Native(reopened,{roots,guard:()=>{}});reopened.raw=()=>{throw new Error('Unchanged history should not be read again');};
+ const reopened=new Store(f.store.root);try{const next=new Native(reopened,{roots,guard:()=>{}});reopened.raw=()=>{throw new Error('Unchanged history should not be read again');};
  assert.equal(next.refreshLocal().errors.length,0);assert.equal(reopened.snapshot().items.length,1);assert.ok(reopened.snapshot().instances.every(i=>!('summaryJson' in i)&&!('baseline' in i)));
+ }finally{reopened.close();}
 });

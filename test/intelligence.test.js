@@ -1,3 +1,4 @@
+import {privateFile} from '../src/private-file.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';import os from 'node:os';import path from 'node:path';
@@ -8,6 +9,7 @@ import {requestSpec,requestName} from '../src/intelligence-api.js';
 import {codexSample,codexTurn,claudeSample} from '../src/demo.js';
 import {parse} from '../src/transcript.js';
 const row=(role,text)=>({type:'response_item',payload:{type:'message',role,content:[{type:role==='user'?'input_text':'output_text',text}]}});
+const waitFor=async predicate=>{for(let i=0;i<200;i++){if(predicate())return;await new Promise(r=>setTimeout(r,10));}assert.fail('Background queue did not reach the expected state');};
 function setup(t,request=async()=>({project_id:null,new_project:null,name:'New name'})){
  const root=fs.mkdtempSync(path.join(os.tmpdir(),'grove-smart-')),store=new Store(root);
  fs.writeFileSync(path.join(root,'intelligence.json'),JSON.stringify({apiKey:'test-local-secret',classify:true,nameNodes:true}));
@@ -98,7 +100,7 @@ test('API key is verified before replacement and disabling removes queued jobs',
  await assert.rejects(f.smart.save({apiKey:'bad'}),/rejected/);assert.equal(f.smart.config().apiKey,'test-local-secret');
  await f.smart.save({removeKey:true});assert.equal(f.smart.status().hasKey,false);assert.equal(f.smart.status().classify,false);
  await assert.rejects(f.smart.save({classify:true}),/API key first/);
- await f.smart.save({apiKey:'new-local-secret'});assert.equal(fs.statSync(f.smart.file).mode&0o777,0o600);
+ await f.smart.save({apiKey:'new-local-secret'});assert.equal(privateFile(f.smart.file),true);
 });
 test('Claude fork evidence excludes sibling replies and names only the shared segment',async t=>{
  let observed;const f=setup(t,async(k,kind,e)=>{observed=e;return {name:'Shared result'};}),p=f.store.project('Paper');
@@ -123,4 +125,29 @@ test('HTTP Update finishes while naming runs; status is visible and local edits 
  assert.equal((await api('branches/'+b.id,'PATCH',{name:'Manual during request'})).status,200);
  resolve({project_id:null,new_project:'Ignored',name:'Automatic'});await app.intelligence.pending;
  assert.equal(app.store.get('branch',b.id).name,'Manual during request');assert.equal(app.store.all('project').length,0);
+});
+
+test('default two-request pool respects the cap and completes independent jobs',async t=>{
+ let active=0,maximum=0;const releases=[];
+ const f=setup(t,async()=>{active++;maximum=Math.max(maximum,active);await new Promise(r=>releases.push(r));active--;return {project_id:null,new_project:'Shared project',name:'Named'};});
+ for(let i=0;i<4;i++)f.store.branch(null,'Session '+i,'codex',codexSample(f.root,[['Task '+i,'Reply']]));
+ f.smart.observe();await waitFor(()=>releases.length===2);assert.equal(f.smart.status().activeRequests,2);assert.equal(f.smart.status().pending,4);
+ releases.splice(0).forEach(r=>r());await waitFor(()=>releases.length===2);releases.splice(0).forEach(r=>r());await waitFor(()=>f.smart.status().pending===0);
+ assert.equal(maximum,2);assert.equal(f.store.all('project').length,1);assert.equal(f.smart.status().completed,4);
+});
+test('request interval applies across concurrent slots and serial mode persists',async t=>{
+ const starts=[];const f=setup(t,async()=>{starts.push(Date.now());await new Promise(r=>setTimeout(r,10));return {project_id:null,new_project:null,name:'Named'};});
+ await f.smart.save({concurrency:4,minIntervalSeconds:0.08});
+ for(let i=0;i<3;i++)f.store.branch(null,'Session '+i,'codex',codexSample(f.root,[['Task '+i,'Reply']]));
+ f.smart.observe();await waitFor(()=>f.smart.status().pending===0);
+ assert.equal(starts.length,3);assert.ok(starts[1]-starts[0]>=75);assert.ok(starts[2]-starts[1]>=75);
+ await f.smart.save({concurrency:1,minIntervalSeconds:0});assert.equal(f.smart.config().concurrency,1);
+ await assert.rejects(f.smart.save({concurrency:0}),/1 to 4/);await assert.rejects(f.smart.save({minIntervalSeconds:-1}),/0 to 60/);
+});
+test('removing a key aborts every active request and prevents late names',async t=>{
+ let aborted=0;const f=setup(t,async(_key,_kind,_evidence,_projects,{signal})=>new Promise((resolve,reject)=>signal.addEventListener('abort',()=>{aborted++;reject(Error('aborted'));},{once:true})));
+ for(let i=0;i<3;i++)f.store.branch(null,'Original '+i,'codex',codexSample(f.root,[['Task '+i,'Reply']]));
+ f.smart.observe();await waitFor(()=>f.smart.status().activeRequests===2);const pending=f.smart.pending;
+ await f.smart.save({removeKey:true});await pending;
+ assert.equal(aborted,2);assert.equal(f.smart.status().pending,0);assert.equal(f.smart.status().activeRequests,0);assert.equal(f.smart.status().error,null);assert.ok(f.store.all('branch').every(b=>b.name.startsWith('Original')));
 });

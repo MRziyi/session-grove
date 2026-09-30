@@ -57,4 +57,4 @@ try{
   report.claude.push({messages:end,messagePayloadsIdentical:true,normalizedRecordsIdentical:digest(normalize(output))===digest(normalize(forked))});
  }
  fs.mkdirSync('test-results',{recursive:true});fs.writeFileSync('test-results/node-fork-equivalence.json',JSON.stringify(report,null,2));console.log(JSON.stringify(report));
-}finally{await client?.close();store.close();fs.rmSync(root,{recursive:true,force:true});}
+}finally{await client?.close();store.close();fs.rmSync(root,{recursive:true,force:true,maxRetries:10,retryDelay:100});}

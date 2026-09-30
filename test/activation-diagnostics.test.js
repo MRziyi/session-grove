@@ -31,7 +31,7 @@ test('diagnostic reports omit payloads and credential fields', t => {
     logs.request('POST', '/api/trees/01234567-abcd-abcd-abcd-012345678901?q=private', 409, 8, 'reference');
     const report = JSON.stringify(logs.report());
     for (const secret of ['secret-password', 'private conversation', 'private.example', '?q=', '01234567-abcd']) assert.ok(!report.includes(secret));
-    assert.ok(report.includes('reference')); assert.equal(fs.statSync(logs.file).mode & 0o777, 0o600);
+    assert.ok(report.includes('reference')); if(process.platform!=='win32')assert.equal(fs.statSync(logs.file).mode & 0o777, 0o600);
 });
 test('native Codex index titles and archive flags are observed without writing native files', async t => {
     const { root, store, native: options } = fixture(t);

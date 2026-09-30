@@ -17,7 +17,9 @@ import { parse, renderNative } from './transcript.js';
 export function coldGuard(agents = ['codex', 'claude']) {
     let output;
     try {
-        output = execFileSync('/bin/ps', ['-axo', 'pid=,comm='], { encoding: 'utf8' });
+        output = process.platform === 'win32'
+            ? execFileSync('tasklist.exe', ['/FO', 'CSV', '/NH'], { encoding: 'utf8', windowsHide: true }).split(/\r?\n/).map(line => line.match(/^"([^"]+)"/)?.[1]?.replace(/\.exe$/i, '') || '').join('\n')
+            : execFileSync('/bin/ps', ['-axo', 'pid=,comm='], { encoding: 'utf8' });
     }
     catch {
         throw new Error('无法检查 Agent 是否仍在运行，暂不写入原生数据');
@@ -53,6 +55,8 @@ export class Native {
         const found = [], errors = [], showScheduled = preferences(this.store).showScheduledSessions;
         const instances = this.store.instances();
         const ignoredFiles=new Set(instances.filter(i=>isTrashed(this.store,i.branchId)).map(i=>i.file));
+        const byFile=new Map(),byNativeId=new Map();
+        for(const instance of instances){const fileKey=instance.agent+':'+instance.file,nativeKey=instance.agent+':'+instance.nativeId;if(!byFile.has(fileKey))byFile.set(fileKey,instance);if(!byNativeId.has(nativeKey))byNativeId.set(nativeKey,instance);}
         this.catalog.clear(); this.observations = new Map(); this.historyFiles = [...new Set([...codexFiles(this.roots.codex), ...instances.filter(i => i.agent === 'codex' && i.file && inside(this.store.root, i.file) && fs.existsSync(i.file)).map(i => i.file)])];
         for (const agent of ['codex', 'claude']) {
             const root = this.roots[agent];
@@ -87,7 +91,7 @@ export class Native {
             const dirs = agent === 'codex' ? ['sessions', 'archived_sessions'] : ['projects'];
             for (const dir of dirs)
                 for (const file of walk(path.join(root, dir))) {
-                    if (agent === 'claude' && (file.includes('/subagents/') || path.basename(file).startsWith('agent-')))
+                    if (agent === 'claude' && (file.split(path.sep).includes('subagents') || path.basename(file).startsWith('agent-')))
                         continue;
                     try {
                         const indexed = indexedFiles.get(path.resolve(file));
@@ -98,7 +102,7 @@ export class Native {
                         const namedId = path.basename(file).match(/[a-f0-9]{8}-(?:[a-f0-9]{4}-){3}[a-f0-9]{12}/)?.[0];
                         if (namedId && canonicalPaths.has(namedId) && canonicalPaths.get(namedId) !== path.resolve(file)) continue;
                         const stat = fs.statSync(file), stamp = `${stat.ino}:${stat.size}:${stat.mtimeMs}:${stat.ctimeMs}`;
-                        const known = instances.find(i => i.agent === agent && (i.file === file || i.nativeId === indexed?.id));
+                        const known = byFile.get(agent+':'+file) || (indexed?.id && byNativeId.get(agent+':'+indexed.id));
                         const saved = known?.summaryVersion === 5 && known.observedStamp === stamp && this.store.summary(known.baseRevision,agent);
                         let p = saved ? { nativeId:known.nativeId,cwd:known.cwd,count:saved.chats,firstUser:saved.firstUser,title:agent==='claude'?saved.nativeTitle:known.title,background:saved.background,initialization:saved.background==='background',source:indexed?.source,warnings:[],errors:0 } : this.scanCache.get(file)?.stamp === stamp ? this.scanCache.get(file).summary : null;
                         if (!p) { const full = parse(this.history(file, agent), agent); p = { nativeId: full.nativeId, cwd: full.cwd, title: agent === 'claude' ? claudeTitle(full.records).title : null, initialization: agent === 'claude' && claudeTitle(full.records).initialization, storedSummary: this.store.rememberSummary('scan:' + hash(file) + ':' + stamp, agent, full), firstUser: full.messages.find(m => m.role === 'user')?.text.slice(0, 100), count: full.messages.filter(m => m.role !== 'tool').length, source: full.meta?.source, threadSource:full.meta?.thread_source, sidechain: full.records.find(r => ['user', 'assistant'].includes(r.value?.type))?.value?.isSidechain === true, originKind: full.records.find(r => r.value?.type === 'user' && !r.value.isMeta)?.value?.origin?.kind, sessionKind: full.records.find(r=>r.value?.sessionKind)?.value.sessionKind, warnings: full.warnings, errors: full.errors.length }; this.scanCache.set(file, { stamp, summary: p }); }
@@ -111,7 +115,7 @@ export class Native {
                         const nativeTitle = titles.get(p.nativeId) || p.title;
                         const scheduled = [sessionExclusion({agent,source:info.source,threadSource:info.threadSource}),sessionExclusion({agent,source:p.source,threadSource:p.threadSource})].includes('scheduled');
                         const background = p.background || backgroundKind({agent,source: info.source ?? p.source, threadSource: info.threadSource ?? p.threadSource, sidechain:p.sidechain,originKind:p.originKind,sessionKind:p.sessionKind, initialization:p.initialization});
-                        const item = { background, scheduled, key: hash(file), agent, nativeId: p.nativeId, cwd: indexed?.cwd || p.cwd || '', cwdAvailable: !(indexed?.cwd || p.cwd) || fs.existsSync(indexed?.cwd || p.cwd), title: nativeTitle || p.firstUser || 'Untitled session', messages: p.count, updatedAt: stat.mtime.toISOString(), managed: instances.some(i => i.file === file || i.agent === agent && i.nativeId === p.nativeId), warnings: p.warnings, excluded, source: info.source ?? p.source, archived: dir === 'archived_sessions' || archivedIds.has(p.nativeId) };
+                        const item = { background, scheduled, key: hash(file), agent, nativeId: p.nativeId, cwd: indexed?.cwd || p.cwd || '', cwdAvailable: !(indexed?.cwd || p.cwd) || fs.existsSync(indexed?.cwd || p.cwd), title: nativeTitle || p.firstUser || 'Untitled session', messages: p.count, updatedAt: stat.mtime.toISOString(), managed: byFile.has(agent+':'+file) || byNativeId.has(agent+':'+p.nativeId), warnings: p.warnings, excluded, source: info.source ?? p.source, archived: dir === 'archived_sessions' || archivedIds.has(p.nativeId) };
                         this.observations.set(file, item);
                         if (excluded) continue;
                         this.catalog.set(item.key, { ...item, file });
@@ -130,7 +134,7 @@ export class Native {
         const duplicate = this.store.instances().find(i => i.file === item.file);
         if (duplicate)
             return this.store.get('branch', duplicate.branchId);
-        const physical = this.read(item.file), raw = this.history(item.file, item.agent);
+        const physical = this.read(item.file), raw = item.agent==='claude'?physical:this.history(item.file, item.agent);
         return this.store.transaction(() => {
             const sidecarDir = item.agent === 'claude' ? path.join(path.dirname(item.file), item.nativeId) : null;
             const auxiliary = sidecarDir ? auxiliarySnapshot(sidecarDir) : [];
@@ -159,8 +163,9 @@ export class Native {
         // the user's library, or changing any native availability.
         const instances = this.store.instances();
         let metadataChanged = false;
+        const catalogByNativeId=new Map([...this.catalog.values()].map(item=>[item.agent+':'+item.nativeId,item]));
         for (const instance of instances) {
-            const current = [...this.catalog.values()].find(v => v.nativeId === instance.nativeId && v.agent === instance.agent);
+            const current = catalogByNativeId.get(instance.agent+':'+instance.nativeId);
             if (current && current.file !== instance.file) { instance.file = current.file; this.observedStats.delete(instance.id); }
             if (current?.cwd && instance.adopted && current.cwd !== instance.cwd) { instance.cwd = current.cwd; metadataChanged = true; }
             const observed = current || this.observations.get(instance.file); if (!observed) continue;

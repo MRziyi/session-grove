@@ -139,6 +139,7 @@ export class Store {
     instances() { return this.local('instances') || []; }
     project(name, description = '') { return this.put('project', { id: id(), name: text(name), description: String(description).slice(0, 2000), createdAt: now(), updatedAt: now(), metaVersion: id(), metaAncestors: [] }); }
     revision(raw, parent = null, source = {}, prefixRaw = null) {
+        if(!this.db.isTransaction)return this.transaction(()=>this.revision(raw,parent,source,prefixRaw));
         const inherited = parent && prefixRaw !== null && prefixRaw.endsWith('\n') && raw.startsWith(prefixRaw) ? this.get('revision',parent).refs : [];
         const refs = recordRefs(inherited.length ? raw.slice(prefixRaw.length) : raw);
         for (const r of refs)
@@ -151,6 +152,7 @@ export class Store {
         return rev.refs.slice(0, end ?? rev.refs.length).map(h => { const row = this.objectStatement.get(h); assert(row, `缺少历史对象 ${h}`, 409); return row.body; }).join('');
     }
     branch(projectId, name, agent, raw = null, source = {}) {
+        if(!this.db.isTransaction)return this.transaction(()=>this.branch(projectId,name,agent,raw,source));
         if (projectId)
             this.get('project', projectId);
         assert(['codex', 'claude'].includes(agent), '未知 Agent');
@@ -159,10 +161,11 @@ export class Store {
         return this.put('branch', { id: id(), projectId: projectId || null, name: branchName, agent, head: rev.id, nodeHead: null, parentId: null, forkRevision: null, forkEnd: 0, archived: false, group: '', createdAt: now(), updatedAt: now(), contentUpdatedAt: now(), logicalVersion: 1, metaVersion: id(), metaAncestors: [] });
     }
     fork(branchId, { name, end, revisionId, nodeId, graphVersion, nodeBoundary = false }) {
+        if(!this.db.isTransaction)return this.transaction(()=>this.fork(branchId,{name,end,revisionId,nodeId,graphVersion,nodeBoundary}));
         const parent = this.get('branch', branchId), rev = this.get('revision', revisionId || parent.head);
         assert(!isTrashed(this,parent.id) && !parent.excluded && !parent.archived && !(parent.projectId && this.get('project', parent.projectId).archived), 'Restore this session before organizing.');
         assert(this.ancestor(rev.id, parent.head), '检查点不属于该分支历史');
-        const parsed = parse(this.raw(rev.id), parent.agent);
+        const parsed = this.parsed(rev.id, parent.agent);
         end = Number(end);
         if(nodeId){const graph=this.treeGraph(branchId,'in-use'),route=graph.paths.find(p=>p.branchId===branchId),node=graph.nodes.find(n=>n.id===nodeId);assert(graph.version===graphVersion,'Conversation changed. Refresh before organizing.',409);assert(route&&node&&route.nodeIds.indexOf(nodeId)>0,'Cannot fork before the root node.');const first=route.messages.find(m=>node.chatIds.includes(m.id));const previous=first?route.messages[route.messages.indexOf(first)-1]:route.messages.at(-1);const checkpoint=route.checkpoints.findLast(c=>c.end>=previous?.line&&(!first||c.end<first.line));assert(checkpoint&&checkpoint.end===end,'Fork requires a complete turn before the selected node.');}
 
@@ -200,10 +203,10 @@ export class Store {
         return false;
     }
     ingest(branchId, raw, baseRevision, source) {
-        const b = this.get('branch', branchId), current = this.raw(b.head);
-        if (raw === current || raw === this.raw(baseRevision))
+        if(!this.db.isTransaction)return this.transaction(()=>this.ingest(branchId,raw,baseRevision,source));
+        const b = this.get('branch', branchId), current = this.raw(b.head), base=baseRevision===b.head?current:this.raw(baseRevision);
+        if (raw === current || raw === base)
             return b;
-        const base = this.raw(baseRevision);
         if (b.head !== baseRevision && !raw.startsWith(current)) {
             const child = this.branch(b.projectId, `${b.name} · ${source.deviceName || this.device.name} 更新`, b.agent, raw, source);
             child.parentId = b.id;

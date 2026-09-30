@@ -19,6 +19,14 @@ function setup(t) {
     return { root, store, roots, cwd, native, p };
 }
 const extra = () => codexTurn('A new question', 'A new answer').map(x => JSON.stringify(x) + '\n').join('');
+
+test('failed branch creation rolls back records and revision together',t=>{
+    const {store,cwd}=setup(t),original=store.insertObject;let count=0;
+    store.insertObject={run(...args){if(++count===3)throw Error('Synthetic database failure');return original.run(...args);}};
+    assert.throws(()=>store.branch(null,'Incomplete','codex',codexSample(cwd,[['Question','Answer']])),/Synthetic database failure/);
+    assert.equal(store.all('branch').length,0);assert.equal(store.all('revision').length,0);assert.equal(store.db.prepare('SELECT count(*) n FROM objects').get().n,0);
+    store.insertObject=original;assert.ok(store.branch(null,'Complete','codex',codexSample(cwd,[['Question','Answer']])).head);
+});
 test('fork pins an exact checkpoint, deduplicates history, and does not activate', t => {
     const { store, p, cwd } = setup(t), raw = codexSample(cwd, [['Context', 'Ready'], ['Intro', 'Done']]);
     const b = store.branch(p.id, 'main', 'codex', raw), detail = store.detail(b.id), count = store.db.prepare('SELECT COUNT(*) AS n FROM objects').get().n;
