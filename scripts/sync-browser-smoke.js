@@ -24,7 +24,7 @@ try{
  const wait=async expression=>{for(let i=0;i<100;i++){if(await evaluate(expression))return;await new Promise(r=>setTimeout(r,100));}throw Error('Timeout '+expression+'; '+await evaluate('document.querySelector("#dialog-error")?.textContent'));};
  const hover=async selector=>{await call('Input.dispatchMouseEvent',{type:'mouseMoved',x:5,y:800});const r=await evaluate(`(()=>{const r=document.querySelector('${selector}').getBoundingClientRect();return{x:r.x+r.width/2,y:r.y+r.height/2}})()`);await call('Input.dispatchMouseEvent',{type:'mouseMoved',...r});};
  const fits=async selector=>assert.ok(await evaluate(`(()=>{const r=document.querySelector('${selector}').getBoundingClientRect();return r.width>0&&r.top>=0&&r.left>=0&&r.right<=innerWidth+1&&r.bottom<=innerHeight+1&&document.documentElement.scrollWidth<=innerWidth})()`),'inspector must fit viewport: '+selector);
- await call('Emulation.setFocusEmulationEnabled',{enabled:true});await call('Page.bringToFront');await call('Runtime.enable');await call('Emulation.setDeviceMetricsOverride',{width:1512,height:982,deviceScaleFactor:1,mobile:false});await wait('document.querySelector("[data-open]")');
+ await call('Emulation.setFocusEmulationEnabled',{enabled:true});await call('Emulation.setEmulatedMedia',{features:[{name:'prefers-reduced-motion',value:'no-preference'}]});await call('Page.bringToFront');await call('Runtime.enable');await call('Emulation.setDeviceMetricsOverride',{width:1512,height:982,deviceScaleFactor:1,mobile:false});await wait('document.querySelector("[data-open]")');
  assert.equal(await evaluate('!!document.querySelector("#upload .button-countdown")'),false);
  assert.ok(await evaluate('(()=>{const a=document.querySelector("#sync").getBoundingClientRect(),b=document.querySelector("#collect").getBoundingClientRect(),s=document.querySelector("#sync-details").getBoundingClientRect();return Math.abs(a.y+a.height/2-b.y-b.height/2)<2&&s.right<=a.left})()'));
  assert.ok(await evaluate('!!document.querySelector(".session-state.active-state")&&!!document.querySelector(".session-state.modified-state")'));
@@ -35,6 +35,9 @@ try{
  assert.ok(await evaluate('document.querySelector("#sync-substatus").textContent.includes("40%")'));await fits('#sync-control');await fits('#cloud-status');
  assert.equal(await evaluate('getComputedStyle(document.querySelector("#sync>.icon")).animationName'),'none');
  assert.equal(await evaluate('getComputedStyle(document.querySelector("#sync .transfer-arrow")).animationName'),'pull-arrow');
+ await call('Emulation.setEmulatedMedia',{features:[{name:'prefers-reduced-motion',value:'reduce'}]});
+ assert.equal(await evaluate('getComputedStyle(document.querySelector("#sync .transfer-arrow")).animationName'),'none');
+ await call('Emulation.setEmulatedMedia',{features:[{name:'prefers-reduced-motion',value:'no-preference'}]});
  assert.equal(await evaluate('document.querySelector("#sync").dataset.operation'),'running');
  assert.equal(await evaluate('document.querySelector("#upload").dataset.operation'),'');
  assert.equal(await evaluate('!!document.querySelector("#transfer-progress")||!!document.querySelector("#sync-mini")'),false);
