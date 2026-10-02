@@ -1,5 +1,8 @@
 let language = localStorage.getItem('grove-language') === 'zh' ? 'zh' : 'en';
 const dictionary = {
+"Working directory":"工作目录",
+"Transcript file":"对话文件",
+"Client session ID":"客户端会话 ID",
 "Name branch points and compacted nodes":"为分叉点和压缩完成的节点命名",
 "Update transcription titles on new nodes":"新增节点时更新 Transcription 标题",
 "Transcription updates are unavailable in demo mode.":"演示模式不支持更新 Transcription 标题。",

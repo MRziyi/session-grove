@@ -31,7 +31,12 @@ try{
  assert.ok(await evaluate('(()=>{const a=document.querySelector("#sync").getBoundingClientRect(),b=document.querySelector("#collect").getBoundingClientRect(),s=document.querySelector("#sync-details").getBoundingClientRect();return Math.abs(a.y+a.height/2-b.y-b.height/2)<2&&s.right<=a.left})()'));
  assert.ok(await evaluate('!!document.querySelector(".session-state.active-state")&&!!document.querySelector(".session-state.modified-state")'));
  assert.ok(await evaluate('(()=>{const a=document.querySelector("#sync").getBoundingClientRect(),b=document.querySelector("#upload").getBoundingClientRect();return Math.abs(a.right-b.left)<=2&&Math.abs(a.height-b.height)<1})()'));
+ await evaluate('window.__pendingReads=0;const originalPendingFetch=window.fetch;window.fetch=(...args)=>{if(String(args[0])==="/api/synchronize/pending")window.__pendingReads++;return originalPendingFetch(...args)}');
  await hover('#push-zone');await wait('document.querySelector("#pending-uploads").textContent.includes("Waiting upload")');await fits('#pending-uploads');
+ const pendingReads=await evaluate('window.__pendingReads');const travel=await evaluate('(()=>{const b=document.querySelector(".banner").getBoundingClientRect(),p=document.querySelector("#pending-uploads").getBoundingClientRect();return {x:p.x+p.width/2,bottom:b.bottom,top:p.top}})()');
+ for(const y of [travel.bottom-2,(travel.bottom+travel.top)/2,travel.top+10]){await call('Input.dispatchMouseEvent',{type:'mouseMoved',x:travel.x,y});await new Promise(r=>setTimeout(r,250));assert.equal(await evaluate('document.querySelector("#pending-uploads").hidden'),false,'banner-to-panel corridor remains open');}
+ await hover('#push-zone');assert.equal(await evaluate('window.__pendingReads'),pendingReads,'re-entering Push does not reload an open panel');
+
  await evaluate(`document.querySelector('[data-pending-select="${mistake.id}"]').click()`);
  assert.equal(await evaluate('document.querySelector("#discard-pending").hidden'),false);
  assert.equal(await evaluate('!!document.querySelector(".pending-help,#pending-selection-count,#pending-actions")'),false);

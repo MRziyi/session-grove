@@ -302,11 +302,12 @@ test('Update tracks native titles by thread ID without replacing Grove aliases o
         db.prepare('INSERT INTO threads VALUES(?,?,?,?,?,0)').run(nativeId,file,cwd,'Same native title','Same native title');sources.push({nativeId,file,raw});
     }
     native.refreshLocal();const first=store.instances().find(i=>i.nativeId===sources[0].nativeId),second=store.instances().find(i=>i.nativeId===sources[1].nativeId);
-    store.edit(first.branchId,{name:'My Grove alias'});const head=store.get('branch',first.branchId).head;
-    db.prepare('UPDATE threads SET name=?,title=? WHERE id=?').run('Renamed in client','Renamed in client',sources[0].nativeId);
+    store.edit(first.branchId,{name:'My Grove alias'});store.put('branch',{...store.get('branch',first.branchId),sessionName:'Independent tree name',sessionNameOrigin:'manual',transcriptionTitle:'Same native title',transcriptionNameOrigin:'automatic'});const head=store.get('branch',first.branchId).head;
+    db.prepare('UPDATE threads SET title=? WHERE id=?').run('Renamed in client',sources[0].nativeId);
     native.refreshLocal();
-    assert.equal(store.get('branch',first.branchId).name,'My Grove alias');assert.equal(store.get('branch',first.branchId).head,head);
+    assert.equal(store.get('branch',first.branchId).sessionName,'Independent tree name');assert.equal(store.get('branch',first.branchId).transcriptionTitle,'Renamed in client');assert.equal(store.get('branch',first.branchId).transcriptionNameOrigin,'manual');assert.equal(store.get('branch',first.branchId).name,'My Grove alias');assert.equal(store.get('branch',first.branchId).head,head);
     assert.equal(store.treeGraph(first.branchId).paths.find(p=>p.branchId===first.branchId).originalTitle,'Renamed in client');
     assert.equal(store.treeGraph(second.branchId).paths.find(p=>p.branchId===second.branchId).originalTitle,'Same native title');
-    assert.equal(fs.readFileSync(sources[0].file,'utf8'),sources[0].raw);db.close();
+    assert.equal(fs.readFileSync(sources[0].file,'utf8'),sources[0].raw);
+    db.prepare('UPDATE threads SET title=NULL,name=NULL WHERE id=?').run(sources[1].nativeId);fs.writeFileSync(path.join(roots.codex,'session_index.jsonl'),[{id:sources[1].nativeId,thread_name:'Older index title'},{id:sources[1].nativeId,thread_name:'Latest index title'}].map(v=>JSON.stringify(v)+'\n').join(''));native.refreshLocal();assert.equal(store.treeGraph(second.branchId).paths[0].originalTitle,'Latest index title');db.close();
 });

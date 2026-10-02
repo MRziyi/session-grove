@@ -71,7 +71,8 @@ export class Native {
                     if (columns.includes('id') && columns.includes('title') && columns.includes('archived')) {
                         const optional = ['rollout_path', 'name', 'source', 'thread_source', 'cwd'].filter(c => columns.includes(c));
                         for (const row of db.prepare('SELECT id,title,archived' + optional.map(c => ',' + c).join('') + ' FROM threads').all()) {
-                            if (row.name || row.title) titles.set(row.id, row.name || row.title);
+                            // Official thread/name/set updates title; a legacy name column can remain stale.
+                            if (row.title || row.name) titles.set(row.id, row.title || row.name);
                             provenance.set(row.id, { source: row.source, threadSource: row.thread_source });
                             if (row.archived) archivedIds.add(row.id);
                             if (row.rollout_path && path.isAbsolute(row.rollout_path)) { canonicalPaths.set(row.id, path.resolve(row.rollout_path)); indexedFiles.set(path.resolve(row.rollout_path), row); }
@@ -81,14 +82,16 @@ export class Native {
                 finally { db?.close(); }
             }
             if (agent === 'codex' && fs.existsSync(path.join(root, 'session_index.jsonl'))) {
+                const indexedTitles=new Map();
                 for (const line of this.read(path.join(root, 'session_index.jsonl')).split('\n')) {
                     try {
                         const entry = JSON.parse(line);
-                        if (entry.id && entry.thread_name && !titles.has(entry.id))
-                            titles.set(entry.id, entry.thread_name);
+                        if (entry.id && typeof entry.thread_name==='string' && entry.thread_name.trim())
+                            indexedTitles.set(entry.id, entry.thread_name);
                     }
                     catch { }
                 }
+                for(const [id,title] of indexedTitles)if(!titles.has(id))titles.set(id,title);
             }
             const dirs = agent === 'codex' ? ['sessions', 'archived_sessions'] : ['projects'];
             for (const dir of dirs)
@@ -189,10 +192,12 @@ export class Native {
                 }
             }
             if (observed.title) {
+                const previousTitle=instance.observedTitle||(instance.adopted?branch.originalTitle:null);
+                const clientRenamed=previousTitle&&previousTitle!==observed.title;
                 instance.observedTitle = observed.title;
                 instance.title = observed.title;
                 if (observed.title !== branch.originalTitle) patch.originalTitle = observed.title;
-                if(branch.transcriptionTitle&&observed.title!==branch.transcriptionTitle){patch.transcriptionTitle=observed.title;patch.transcriptionNameOrigin='manual';}
+                if(clientRenamed||branch.transcriptionTitle&&observed.title!==branch.transcriptionTitle){patch.transcriptionTitle=observed.title;patch.transcriptionNameOrigin='manual';}
             }
             if (Object.keys(patch).length) this.store.put('branch', metadata(branch, patch));
         }

@@ -119,8 +119,8 @@ await evaluate('document.querySelector("[name=name]").value="Draft the introduct
 await wait('!document.querySelector("#dialog").open && !document.querySelector("#combine")');
 await evaluate('document.querySelector(".graph-node").click()');
 assert.equal(await evaluate('!!document.querySelector("#archive-path")'), false);
-await evaluate('document.querySelector("#rename-node").click()'); await wait('document.querySelector("[name=name]")');
-await evaluate('document.querySelector("[name=name]").value="Set up research context";document.querySelector("#dialog-form").requestSubmit()');
+await evaluate('document.querySelector(".graph-node.selected [data-name-kind=node]").dispatchEvent(new MouseEvent("dblclick",{bubbles:true}))'); await wait('document.querySelector(".inline-name-editor input")');
+await evaluate('document.querySelector(".inline-name-editor input").value="Set up research context";document.querySelector(".inline-name-editor").requestSubmit()');
 await wait('!document.querySelector("#dialog").open && [...document.querySelectorAll(".node-title")].some(e=>e.textContent==="Set up research context")');
 await screenshot('v8-workspace');
 await evaluate('[...document.querySelectorAll(".graph-node:not(.dimmed)")].at(-1).click()');
@@ -149,7 +149,7 @@ assert.ok(await evaluate('!document.querySelector("#transcripts").textContent.in
 assert.equal(await evaluate('document.querySelectorAll("[data-chat]").length'), 0);
 await screenshot('v8-archived-path');
 await evaluate('[...document.querySelectorAll(".graph-node")].at(-1).click()');
-assert.equal(await evaluate('!!document.querySelector("#rename-node") && !document.querySelector("#activate-node")'), true);
+assert.equal(await evaluate('!!document.querySelector(".graph-node [data-name-kind=node]") && !document.querySelector("#activate-node")'), true);
 await evaluate('document.querySelector("#restore-session").click()'); await wait('document.querySelector("#detail-page").hidden');
 await evaluate('[...document.querySelectorAll("[data-scope]")].find(e=>e.dataset.scope==="00000000-0000-4000-8000-000000000001").click()');
 await wait('document.querySelectorAll(".session-row").length >= 1');

@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.1.2
+
+- Remove Rename buttons in favor of double-click/F2 editing. Align the editor with the title and reduce single-click disambiguation from 320 ms to 200 ms.
+- Keep Pending uploads open across the banner and panel, share in-flight reads, and preserve content while refreshing changed upload state. Use consistent loading/error layouts.
+- Show compaction controls for every graph path and apply each toggle to its owning path. Add restrained, width-limited native transcription titles below endpoint nodes.
+- Observe client-side manual title edits during Update, preserve their ownership and keep whole-tree Session names independent.
+- Add working directory, transcript file paths and native session IDs to compact Source details.
+- Use the same accessible dropdown component throughout Settings, including context presets and concurrency, with consistent disabled and save-error states.
+
 ## 1.1.1
 
 - Add reusable inline renaming for project navigation/category names, session titles, graph nodes and transcript node captions. Hover reveals a subtle border; double-click or F2 edits, check/Enter saves, and outside click/Escape cancels. Concurrent edits are rejected instead of silently overwritten.

@@ -1487,3 +1487,10 @@ body{height:100dvh;display:flex;flex-direction:column;overflow:hidden}
 .source-history ul{list-style:none;padding:0;margin:0}.source-history li{display:flex;align-items:baseline;gap:14px;padding:8px 0;border-bottom:1px solid var(--border);font-size:12px}.source-history li:last-child{border-bottom:0}.source-history time{flex:0 0 auto;color:#70808b}.source-history li>span{min-width:0;flex:1}
 
 #startup-state{max-width:70%;text-align:right;white-space:normal;overflow-wrap:anywhere}#startup-settings h3{flex-shrink:0}
+
+.inline-name-editor{inset:auto;overflow:visible}.inline-name-editor input{box-sizing:border-box;padding:3px 6px;min-height:0}.inline-name-editing{visibility:hidden!important}
+.transcription-end{position:absolute;width:148px;box-sizing:border-box;padding:0 3px;font-size:9px;line-height:14px;color:#8a98a6;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;pointer-events:none}
+
+.settings-card input:not([type=checkbox]),.settings-card .select-trigger{box-sizing:border-box;height:32px;border-radius:5px;border-color:#cbd8e2;font-size:12px}.settings-card .select-trigger:disabled{opacity:.55;cursor:default}.settings-card input[type=checkbox]{accent-color:#477f9b}.settings-card .select-control{min-width:0}
+
+#pending-uploads .pending-heading{box-sizing:border-box;min-height:44px}

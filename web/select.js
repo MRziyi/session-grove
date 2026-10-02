@@ -5,10 +5,11 @@ document.addEventListener('pointerdown', e => { if (opened && !opened.root.conta
 document.addEventListener('keydown', e => { if (e.key === 'Escape' && opened) { const button = opened.trigger; close(); button.focus(); e.preventDefault(); } });
 export function enhanceSelect(select) {
     if (select._groveSelect) { select._groveSelect.update(); return; }
+    const accessible=select.getAttribute('aria-label')||[...(select.labels||[])].flatMap(label=>[...label.childNodes].filter(node=>node!==select&&!node.contains?.(select)).map(node=>node.textContent.trim())).filter(Boolean).join(' ')||select.name||select.id;
     const root = document.createElement('div'); root.className = 'select-control';
     select.before(root); root.append(select); select.hidden = true; select.tabIndex = -1;
     const trigger = document.createElement('button'); trigger.type = 'button'; trigger.className = 'select-trigger';
-    trigger.setAttribute('aria-haspopup', 'listbox'); trigger.setAttribute('aria-expanded', 'false'); trigger.setAttribute('aria-label', select.getAttribute('aria-label') || select.id);
+    trigger.setAttribute('aria-haspopup', 'listbox'); trigger.setAttribute('aria-expanded', 'false'); trigger.setAttribute('aria-label', accessible);
     const label = document.createElement('span'); trigger.append(label);
     const arrow = document.createElementNS('http://www.w3.org/2000/svg', 'svg'); arrow.setAttribute('viewBox', '0 0 16 16'); arrow.setAttribute('aria-hidden', 'true');
     const chevron = document.createElementNS(arrow.namespaceURI, 'path'); chevron.setAttribute('d', 'm4 6 4 4 4-4'); arrow.append(chevron); trigger.append(arrow);
@@ -44,5 +45,6 @@ export function enhanceSelect(select) {
             clearTimeout(reset); typed += e.key.toLocaleLowerCase(); reset = setTimeout(() => typed = '', 600); show(); items.find(i => i.textContent.toLocaleLowerCase().startsWith(typed))?.focus();
         }
     };
+    new MutationObserver(()=>{if(select.isConnected)component.update();}).observe(select,{attributes:true,attributeFilter:['disabled'],childList:true,subtree:true,characterData:true});
     select.addEventListener('change', component.update); select._groveSelect = component; component.update();
 }
