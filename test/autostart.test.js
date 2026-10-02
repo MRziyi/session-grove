@@ -25,6 +25,9 @@ test('Windows verification failure restores the previous shortcut or leaves star
  failRead=true;await assert.rejects(m.set(true),/Could not read/);assert.equal(fs.existsSync(m.file),false);
  failRead=false;await m.set(true);fs.writeFileSync(m.file,'previous shortcut');const run=m.run;m.run=async(...args)=>{const c=JSON.parse(args[2].env.GROVE_STARTUP_CONFIG);if(c.target){const result=await run(...args);failRead=true;return result;}return run(...args);};await assert.rejects(m.set(true),/Could not read/);assert.equal(fs.readFileSync(m.file,'utf8'),'previous shortcut');
 });
+test('Windows PowerShell receives an encoded script and closed stdin',async t=>{
+ let ended=false;const {manager:m}=fixture(t,{platform:'win32',run:(_cmd,args)=>{assert.equal(args[2],'-EncodedCommand');assert.equal(Buffer.from(args[3],'base64').toString('utf16le'),'Write-Output test');const pending=Promise.resolve({stdout:'test'});pending.child={stdin:{end(){ended=true;}}};return pending;}});await m.shortcut('Write-Output test',{});assert.equal(ended,true);
+});
 test('Windows native shortcut roundtrip uses the current user without creating an actual login item',{skip:process.platform!=='win32'},async t=>{
  const {manager:m}=fixture(t,{platform:'win32',run:undefined});let stage='enable';
  try{assert.equal((await m.set(true)).enabled,true);stage='status';assert.equal((await m.status()).enabled,true);stage='disable';assert.equal((await m.set(false)).enabled,false);}

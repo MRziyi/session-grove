@@ -27,7 +27,12 @@ export class Autostart {
         try{const stat=fs.lstatSync(this.file);assert(stat.isFile()&&!stat.isSymbolicLink(),'The startup entry is not a regular file.',409);assert(stat.size<128*1024,'The startup entry is too large to manage.',409);return true;}
         catch(e){if(e.code==='ENOENT')return false;throw e;}
     }
-    async shortcut(script,config){return this.run('powershell.exe',['-NoProfile','-NonInteractive','-Command',script],{env:{...process.env,GROVE_STARTUP_CONFIG:JSON.stringify(config)},windowsHide:true,timeout:30000,maxBuffer:128*1024});}
+    async shortcut(script,config){
+        const pending=this.run('powershell.exe',['-NoProfile','-NonInteractive','-EncodedCommand',Buffer.from(script,'utf16le').toString('base64')],{env:{...process.env,GROVE_STARTUP_CONFIG:JSON.stringify(config)},windowsHide:true,timeout:30000,maxBuffer:128*1024});
+        // execFile leaves a writable stdin pipe open; Windows PowerShell can
+        // keep waiting on it even though this script has no interactive input.
+        pending.child?.stdin?.end();return pending;
+    }
     async managed(){
         if(this.platform==='darwin'){
             const text=fs.readFileSync(this.file,'utf8'),library=/<key>GroveLibrary<\/key>\s*<string>([^<]*)<\/string>/.exec(text)?.[1];
