@@ -193,8 +193,9 @@ export function createApp({ root, roots, guard, demo = false, startupOptions = {
                     try{graph=await store.treeGraphAsync(tree[1],url.searchParams.get('view')||'in-use',{onProgress:report});break;}
                     catch(error){if(error.message!=='Session changed while loading. Please try again.'||attempt===2)throw error;await report({phase:'Session changed; refreshing history'});}
                 }
-                const graphVersion=store.version;await report({phase:'Preparing session display'});
-                return send(200,req.headers['x-grove-graph']==='shared-messages-v1'?(store.version===graphVersion?store.memo('wire:'+graph.id+':'+graph.view,()=>packGraph(graph)):packGraph(graph)):graph);
+                await report({phase:'Preparing session display'});
+                const current=store.graphCache?.value===graph&&store.graphCache.key.startsWith(store.version+':');
+                return send(200,req.headers['x-grove-graph']==='shared-messages-v1'?(current?store.memo('wire:'+graph.id+':'+graph.view,()=>packGraph(graph)):packGraph(graph)):graph);
             }
             if (req.method === 'POST' && tree && body.action==='rename-session') {
                 const root=rootOf(store,tree[1]);

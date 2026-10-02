@@ -1,5 +1,5 @@
 name: Tests
-on: [push, pull_request]
+on: [push, pull_request, workflow_dispatch]
 permissions:
   contents: read
 concurrency:
@@ -10,7 +10,14 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        include:
+          - { os: ubuntu-latest, suite: all }
+          - { os: macos-latest, suite: all }
+          - { os: windows-latest, suite: core }
+          - { os: windows-latest, suite: native }
+          - { os: windows-latest, suite: git-1 }
+          - { os: windows-latest, suite: git-2 }
+          - { os: windows-latest, suite: browser }
     runs-on: ${{ matrix.os }}
     timeout-minutes: 10
     steps:
@@ -20,9 +27,13 @@ jobs:
           node-version: '24'
       - run: npm install --global pnpm@10.13.1
       - run: pnpm install --frozen-lockfile
-      - run: node scripts/ci-test.js
-      - if: runner.os == 'Windows'
-        run: node scripts/ci-test.js --browser
+      - run: node scripts/ci-test.js --suite=${{ matrix.suite }}
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: timings-${{ matrix.os }}-${{ matrix.suite }}
+          path: test-results/ci/*.json
+          retention-days: 14
   release:
     if: startsWith(github.ref, 'refs/tags/v')
     needs: test

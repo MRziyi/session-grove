@@ -61,13 +61,14 @@ export function graphLayout(tree,selectedBranchId){
     const nodes=tree.nodes,byNode=new Map(nodes.map(n=>[n.id,n])),positions=new Map(),byChat=new Map();
     for(const n of nodes)for(const id of n.chatIds)byChat.set(id,n);
     let lane=0;
-    function place(n){
-        if(positions.has(n.id))return positions.get(n.id);
-        const children=n.childIds.map(id=>place(byNode.get(id)));
-        const pos={x:children.length?children.reduce((sum,p)=>sum+p.x,0)/children.length:lane++*174+12,y:0};
-        positions.set(n.id,pos);return pos;
+    // Explicit postorder preserves lane order without a recursive call per node.
+    const stack=nodes.filter(n=>!n.parentIds.length).reverse().map(n=>({n,expanded:false}));
+    while(stack.length){
+        const {n,expanded}=stack.pop();if(positions.has(n.id))continue;
+        if(!expanded&&n.childIds.length){stack.push({n,expanded:true});for(let i=n.childIds.length-1;i>=0;i--)stack.push({n:byNode.get(n.childIds[i]),expanded:false});continue;}
+        const children=n.childIds.map(id=>positions.get(id));
+        positions.set(n.id,{x:children.length?children.reduce((sum,p)=>sum+p.x,0)/children.length:lane++*174+12,y:0});
     }
-    nodes.filter(n=>!n.parentIds.length).forEach(place);
     const compactions=new Map();
     for(const owner of [...tree.paths.filter(p=>p.branchId!==selectedBranchId),...tree.paths.filter(p=>p.branchId===selectedBranchId)]){
         for(const e of owner.context?.compactions||[]){
@@ -90,10 +91,11 @@ export function graphLayout(tree,selectedBranchId){
     }
     const depthY=new Map(),bandY=new Map();let y=12;
     if(bands.has(-1)){bandY.set(-1,y);y+=bands.get(-1).length*28+12;}
-    const maxDepth=Math.max(0,...nodes.map(n=>n.depth));
+    let maxDepth=0;const endpointDepths=new Set();
+    for(const n of nodes){maxDepth=Math.max(maxDepth,n.depth);if(n.endBranchIds.length)endpointDepths.add(n.depth);}
     for(let depth=0;depth<=maxDepth;depth++){
         depthY.set(depth,y);
-        const body=nodes.some(n=>n.depth===depth&&n.endBranchIds.length)?110:80;
+        const body=endpointDepths.has(depth)?110:80;
         bandY.set(depth,y+body+8);
         y+=Math.max(116,body+16+(bands.get(depth)?.length||0)*28);
     }

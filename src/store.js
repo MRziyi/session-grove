@@ -301,7 +301,10 @@ export class Store {
         if(!this.memoCache.has(key)){
             // Keep the same one-tree cache policy as synchronous projections.
             if(this.graphRoot&&this.graphRoot!==root.id)this.memoCache.delete('graph:'+this.graphRoot);
-            const graph=await buildGraphAsync(this,root.id,onProgress);
+            const version=this.version,graph=await buildGraphAsync(this,root.id,onProgress);
+            // Awaiting the completed builder yields once more: another request
+            // can invalidate the library before this continuation publishes it.
+            assert(this.version===version,'Session changed while loading. Please try again.',409);
             this.memoCache.set(key,graph);
         }
         return this.treeGraph(id,view);

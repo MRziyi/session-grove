@@ -63,3 +63,11 @@ test('backend compaction groups occupy connection lanes once, with all target pa
  for(let a=0;a<layout.controls.length;a++)for(let b=a+1;b<layout.controls.length;b++){const x=layout.controls[a],y=layout.controls[b];assert.ok(Math.abs(x.x-y.x)>=140||Math.abs(x.y-y.y)>=24);}
  paths[7].context.compactions.push({id:'second-on-the-same-path',line:2.5,enabled:true});assert.equal(graphLayout(graph,'p7').controls.length,4,'consecutive compactions on one path stay distinct');
 });
+
+test('deep conversation layouts do not overflow the JavaScript stack',async()=>{
+ const {graphLayout}=await import('../web/library-view.js'),count=12000;
+ const nodes=Array.from({length:count},(_,i)=>({id:String(i),depth:i,chatIds:[],parentIds:i?[String(i-1)]:[],childIds:i+1<count?[String(i+1)]:[],endBranchIds:i+1===count?['p']:[]}));
+ const result=graphLayout({nodes,paths:[],edges:[]},'p');
+ assert.equal(result.positions.size,count);assert.equal(result.positions.get('0').x,12);
+ assert.ok(result.positions.get(String(count-1)).y>result.positions.get('0').y);
+});

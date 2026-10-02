@@ -61,3 +61,12 @@ test('async tree loading yields measured path progress and never caches a mixed 
  await assert.rejects(s.treeGraphAsync(b.id,'in-use',{onProgress:async()=>{if(!changed){changed=true;s.put('branch',{...s.get('branch',b.id),name:'Updated during load'});}}}),/Session changed while loading/);
  assert.ok(!s.memoCache.has('graph:'+b.id));assert.equal((await s.treeGraphAsync(b.id,'in-use')).name,'Updated during load');
 });
+
+test('a mutation after graph construction cannot publish a stale async cache',async t=>{
+ const s=setup(t),b=s.branch(null,'Before','codex',codexSample('/fixture',[['First','Done']]));
+ await assert.rejects(s.treeGraphAsync(b.id,'in-use',{onProgress:async progress=>{
+  if(progress.phase==='Building conversation tree')queueMicrotask(()=>queueMicrotask(()=>s.put('branch',{...s.get('branch',b.id),name:'After'})));
+ }}),/Session changed while loading/);
+ assert.ok(!s.memoCache.has('graph:'+b.id));
+ assert.equal(s.treeGraph(b.id,'in-use').name,'After');
+});

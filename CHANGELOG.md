@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.1.4
+
+- Reject obsolete async tree builds before caching them, and avoid caching a wire response after a concurrent update invalidates its graph.
+- Lay out deep trees without recursive stack growth and replace repeated depth scans with a single index, preserving existing node positions.
+- Isolate Windows core, native startup, Git and browser checks on separate runners. Split Git cases into two complete partitions without relaxing assertions or timeouts. Record per-file timings in job summaries and downloadable artifacts.
+- Add cache-race, deep-layout and CI coverage regressions.
+
 ## 1.1.3
 
 - Identify compactions from complete payloads and occurrence order rather than physical timestamps/ordinals. One shared control atomically updates all matching live paths, exposes mixed legacy settings and its path count, and keeps distinct compacted contexts on separate branches. Preserve old event IDs as read aliases.
