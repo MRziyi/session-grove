@@ -1,5 +1,5 @@
 // Extract prose for naming only; original transcripts and model context stay untouched.
-const injected = /^(?:\s*<(recommended_plugins|environment_context|ide_opened_file|ide_selection|system-reminder|local-command-caveat|local-command-stdout|command-name|command-message|command-args|skills_instructions|apps_instructions|plugins_instructions)>[\s\S]*?<\/\1>\s*)/;
+const injected = /^(?:\s*<(recommended_plugins|environment_context|external_codex_apps_open_page|ide_opened_file|ide_selection|system-reminder|local-command-caveat|local-command-stdout|command-name|command-message|command-args|skills_instructions|apps_instructions|plugins_instructions)>[\s\S]*?<\/\1>\s*)/;
 export function humanText(text) {
     let value = String(text || '').trim();
     if (/^# Context from my IDE setup:\s/.test(value)) {
@@ -43,4 +43,15 @@ export function shortenAssistant(text, limit=6000) {
     const points = [...text];
     if (points.length <= limit) return text;
     return points.slice(0,Math.floor(limit/3)).join('')+'\n[…middle omitted…]\n'+points.slice(-Math.floor(limit*2/3)).join('');
+}
+
+// A fork is named for its own work, not the inherited request of its parent.
+// Pair its first human request with the reply from the same exchange.
+export function sessionEvidence(records,agent,start=0) {
+    const all=namingMessages(records,agent),own=all.filter(m=>m.line>start);
+    const messages=start>0?own:all;
+    const first=messages.findIndex(m=>m.role==='user');if(first<0)return null;
+    const next=messages.findIndex((m,i)=>i>first&&m.role==='user');
+    const reply=messages.slice(first+1,next<0?undefined:next).findLast(m=>m.role==='assistant');
+    return reply?{user:messages[first].text,assistant:reply.text}:null;
 }

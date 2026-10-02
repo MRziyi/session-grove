@@ -1,3 +1,4 @@
+import {installInlineNames} from './inline-name.js';
 import { installSessionDrag } from './session-drag.js';
 import { foldedItems, pendingLabels, projectGroups, selectRange, inactiveProject, olderProject, transferStages } from './library-view.js';
 import { markdown } from './markdown.js';
@@ -137,14 +138,19 @@ function translateBanner() {
     $('#about').textContent = t('About'); $('#information').title = t('Information'); $('#information').setAttribute('aria-label', t('Information'));
     $('#search-icon').innerHTML = icon('search'); $('#search').placeholder = t('Search title or content…'); $('#search').setAttribute('aria-label', t('Search title or content…'));
     $('#back').innerHTML = icon('back'); $('#back').title = t('Back to list'); $('#back').setAttribute('aria-label', t('Back to list'));
-    $('#source').textContent = t('Source'); $('#source').title = t('Source & revisions'); $('#source').setAttribute('aria-label', t('Source & revisions'));
+    $('#source').innerHTML = icon('source')+'<span>'+t('Source')+'</span>'; $('#source').title = t('Source & revisions'); $('#source').setAttribute('aria-label', t('Source & revisions'));
     $('#transcripts-title').textContent = t('Transcripts'); $('#graph-title').textContent = t('Graph'); $('#graph-reset').textContent = t('Reset view'); $('#zoom-in').title = t('Zoom in'); $('#zoom-out').title = t('Zoom out');
     $('#graph-fit').textContent = t('Fit tree');
 }
+function editableName(kind,id,name,css='') {
+    return `<span class="editable-name ${css}" data-name-kind="${kind}" data-name-id="${esc(id)}" title="${esc(t('Double-click to rename'))}">${esc(name)}</span>`;
+}
+function projectName(id,name){const project=state.data.projects.find(p=>p.id===id);return project&&!project.builtin&&id!==INBOX?editableName('project',id,name):esc(name);}
+function listedSession(item){return item.sessions.find(s=>s.id===item.id)||item.sessions[0];}
 function renderNavigation() {
     const d = state.data, directoryScroll = $('.project-directory-scroll')?.scrollTop || 0;
     const selectedScope = state.scope === PROJECTS ? state.projectFocus : state.scope;
-    const entry = (scope, name, count, css = '') => `<button class="nav-entry ${css} ${selectedScope === scope ? 'selected' : ''}" data-scope="${esc(scope)}" ${selectedScope === scope ? 'aria-current="page"' : ''}><span class="nav-name">${esc(name)}</span><span class="count">${count}</span></button>`;
+    const entry = (scope, name, count, css = '') => `<button class="nav-entry ${css} ${selectedScope === scope ? 'selected' : ''}" data-scope="${esc(scope)}" ${selectedScope === scope ? 'aria-current="page"' : ''}><span class="nav-name">${state.data.projects.some(p=>p.id===scope)?projectName(scope,name):esc(name)}</span><span class="count">${count}</span></button>`;
     const directoryGroups=projectGroups(d.items.filter(i=>!i.archived).map(i=>({...i,updatedAt:i.sessions.filter(s=>!s.archived).map(s=>s.updatedAt).sort().at(-1)||i.updatedAt})), d.projects);
     const projectTimes=new Map(directoryGroups.map(g=>[g.id,g.updatedAt])),olderIds=new Set(directoryGroups.filter(g=>isOlder(g.items)).map(g=>g.id));
     const projects = d.projects.filter(p => !p.archived);
@@ -178,7 +184,7 @@ function renderIntelligence(){
     button.textContent=t(value?.error?'Smart organization needs attention':value?.phase||'Smart organization queued');
     button.title=value?.error?[value.current,errorText(value.error)].filter(Boolean).join(' · '):[value?.current,value?.pending?t('{count} remaining',{count:value.pending}):''].filter(Boolean).join(' · ');
     button.classList.toggle('has-error',!!value?.error);button.onclick=()=>settings();
-    const detail=$('#intelligence-status');if(detail)detail.textContent=value?.error?[t('Smart organization needs attention'),value.current,errorText(value.error)].filter(Boolean).join(' · '):value?.pending||value?.running?[phase,value.current,value.activeRequests?t('{count} active',{count:value.activeRequests}):'',t('{count} remaining',{count:value.pending})].filter(Boolean).join(' · '):'';
+    const detail=$('#intelligence-status');if(detail)detail.textContent=value?.error?[t('Smart organization needs attention'),value.current,errorText(value.error)].filter(Boolean).join(' · '):value?.pending||value?.running?[phase,value.current,value.activeRequests?t('{count} active',{count:value.activeRequests}):'',t('{count} remaining',{count:value.pending})].filter(Boolean).join(' · '):value?.waitingForEvidence?t('{count} sessions are waiting for their own first request and reply.',{count:value.waitingForEvidence}):'';
     if($('#retry-intelligence'))$('#retry-intelligence').hidden=!value?.error;
 }
 
@@ -241,7 +247,7 @@ function renderTransfer() {
     if(state.syncOperation&&cloud.manualOperation?.id===state.syncOperation&&cloud.manualOperation.state!=='running'){
         const done=cloud.manualOperation;state.syncOperation=null;
         toast(t(done.state==='error'?'Sync failed':done.direction==='pull'?(done.summary?.unchanged?'Already up to date':'Pull complete'):'Push complete'));
-        if(!$('#dialog').open&&!working)queueMicrotask(()=>refresh().catch(e=>toast(e.message)));
+        if(!$('#dialog').open&&!working&&!inlineNames.editing)queueMicrotask(()=>refresh().catch(e=>toast(e.message)));
     }
 }
 function renderTrashProgress() {
@@ -359,14 +365,14 @@ function renderList() {
     const activeIds=[...new Set(selected.flatMap(i=>(state.data.items.find(v=>v.id===i.id)||i).sessions.filter(s=>s.active).map(s=>s.id)))];
     const organizing = state.scope !== 'archived';
     $('#list-actions').innerHTML = '<button id="select-all"></button>' + (selected.length ? `<span class="selection-count">${t('{count} selected',{count:selected.length})}</span>${selected.length===1?'<button id="rename-items"></button>':''}${state.scope==='archived'?'<button id="restore-items"></button>':organizing?'<button id="move-items"></button>':''}<button id="archive-items"></button>`:'');
-    button('#rename-items', 'Rename', () => renameSession(selected[0]));
+    button('#rename-items', 'Rename', () => inlineNames.begin($$('[data-item]').find(el=>el.dataset.item===selected[0].id).querySelector('[data-name-kind=session]')));
     button('#select-all',state.selected.size?'Deselect':'Select all',()=>{state.selected=state.selected.size?new Set():new Set(state.list.items.map(i=>i.id));renderList();});
     button('#move-items','Move to project',()=>moveDialog([...state.selected]));
     button('#archive-items',activeIds.length?t('Deactivate ({count})',{count:activeIds.length}):'Move to Trash',()=>activeIds.length?run(async()=>{await api('/manage','POST',{action:'deactivate',branchIds:activeIds});if(state.scope.startsWith('active:')){state.scope=PROJECTS;state.projectFocus=selected[0]?.projectId||INBOX;}}):trashDialog({itemIds:[...state.selected],view:state.scope==='archived'?'archived':'in-use'},selected.length));
     button('#restore-items','Restore',()=>restore({itemIds:[...state.selected]}));
     button('#deactivate-items','Deactivate',()=>run(()=>api('/manage','POST',{action:'deactivate',itemIds:[...state.selected],agent:state.scope.slice(7)})));
-    const row=i=>`<article class="session-row ${state.selected.has(i.id)?'checked':''}" data-item="${esc(i.id)}" draggable="${organizing?'true':'false'}"><button class="row-open" data-open="${esc(i.id)}">${icon(i.kind)}<span class="row-text"><span class="row-title">${esc(i.name)} ${cloudMark(i)}</span><span class="row-meta">${itemMeta(i)} ${sourceTags(i)}</span></span><time class="row-date">${date(i.updatedAt)}</time></button>${`<input type="checkbox" data-select="${esc(i.id)}" aria-label="${esc(t('Select {name}',{name:i.name}))}" ${state.selected.has(i.id)?'checked':''}>`}</article>`;
-    const groupHtml = g=>{const {limited,expanded,shown}=projectRows(g);return `<section class="list-group project-group" data-project-group="${esc(g.id||INBOX)}"><h2>${esc(g.name==='Scheduled & background'?t(g.name):g.name)}<span class="group-actions"><span>${g.items.length}</span><input type="checkbox" data-group-select="${esc(g.id)}" aria-label="${esc(t('Select group {name}',{name:g.name}))}"></span></h2>${shown.map(row).join('')}${foldButton(g,limited,expanded)}</section>`;};
+    const row=i=>`<article class="session-row ${state.selected.has(i.id)?'checked':''}" data-item="${esc(i.id)}" draggable="${organizing?'true':'false'}"><button class="row-open" data-open="${esc(i.id)}">${icon(i.kind)}<span class="row-text"><span class="row-title">${editableName('session',listedSession(i)?.id||i.id,i.name)} ${cloudMark(i)}</span><span class="row-meta">${itemMeta(i)} ${sourceTags(i)}</span></span><time class="row-date">${date(i.updatedAt)}</time></button>${`<input type="checkbox" data-select="${esc(i.id)}" aria-label="${esc(t('Select {name}',{name:i.name}))}" ${state.selected.has(i.id)?'checked':''}>`}</article>`;
+    const groupHtml = g=>{const {limited,expanded,shown}=projectRows(g);return `<section class="list-group project-group" data-project-group="${esc(g.id||INBOX)}"><h2>${projectName(g.id,g.name==='Scheduled & background'?t(g.name):g.name)}<span class="group-actions"><span>${g.items.length}</span><input type="checkbox" data-group-select="${esc(g.id)}" aria-label="${esc(t('Select group {name}',{name:g.name}))}"></span></h2>${shown.map(row).join('')}${foldButton(g,limited,expanded)}</section>`;};
     const allGroups = groups(), older = state.scope===PROJECTS&&!state.query ? allGroups.filter(g=>isOlder(g.items)) : [], olderIds = new Set(older.map(g=>g.id));
     $('#session-list').innerHTML = allGroups.filter(g=>!olderIds.has(g.id)).map(groupHtml).join('') + (older.length ? `<section class="older-projects">${olderToggle(older.length)}${state.olderProjects?older.map(groupHtml).join(''):''}</section>` : '') || `<p class="empty">${t(state.query?'No matching sessions':'No sessions here.')}</p>`;
     bindOlderProjects();
@@ -380,7 +386,7 @@ function renderList() {
 
 function renderRail() {
     const top=$('#session-rail').scrollTop;
-    const group=g=>{const {limited,expanded,shown}=projectRows(g);return `<section data-rail-project="${esc(g.id)}"><h2 class="rail-heading">${esc(g.name)}</h2>${shown.map(i=>`<button class="rail-row ${state.tree?.id===i.id?'selected':''}" data-rail="${esc(i.id)}" ${state.tree?.id===i.id?'aria-current="true"':''}>${icon(i.kind)}<span class="row-text"><span class="row-title">${esc(i.name)} ${cloudMark(i)}</span><span class="row-meta">${itemMeta(i)} ${sourceTags(i)}</span></span></button>`).join('')}${foldButton(g,limited,expanded)}</section>`;};
+    const group=g=>{const {limited,expanded,shown}=projectRows(g);return `<section data-rail-project="${esc(g.id)}"><h2 class="rail-heading">${projectName(g.id,g.name)}</h2>${shown.map(i=>`<button class="rail-row ${state.tree?.id===i.id?'selected':''}" data-rail="${esc(i.id)}" ${state.tree?.id===i.id?'aria-current="true"':''}>${icon(i.kind)}<span class="row-text"><span class="row-title">${editableName('session',listedSession(i)?.id||i.id,i.name)} ${cloudMark(i)}</span><span class="row-meta">${itemMeta(i)} ${sourceTags(i)}</span></span></button>`).join('')}${foldButton(g,limited,expanded)}</section>`;};
     const all=groups(),older=state.scope===PROJECTS&&!state.query?all.filter(g=>isOlder(g.items)):[],ids=new Set(older.map(g=>g.id));
     $('#rail-content').innerHTML=all.filter(g=>!ids.has(g.id)).map(group).join('')+(older.length?olderToggle(older.length)+(state.olderProjects?older.map(group).join(''):''):'');
     $('#session-rail').scrollTop=top;
@@ -417,11 +423,11 @@ function render() {
 }
 function renderDetail() {
     const tree = state.tree, p = route(); if (!p) { state.tree = null; render(); return; }
-    $('#session-title').textContent = tree.name;
+    $('#session-title').innerHTML = editableName('session',p.branchId,p.name);
     const tokens = p.nodeIds.reduce((sum, id) => sum + (tree.nodes.find(n => n.id === id)?.tokens?.recordedEstimate || 0), 0);
     $('#session-meta').textContent = `${p.agent === 'codex' ? 'Codex' : 'Claude'} · ≈ ${compactNumber(tokens)} tokens${p.context?.compactions.length ? ' · ' + t('{count} compactions', { count: p.context.compactions.length }) : ''}`;
     $('#detail-count').textContent = `${t('{count} branches', { count: tree.paths.length })} · ${t('{count} chats', { count: tree.chatCount })} · ${t('{count} pending', { count: tree.pendingCount })}`;
-    $('#branch-picker').innerHTML = tree.paths.map(v => `<option value="${esc(v.branchId)}" ${v.branchId === p.branchId ? 'selected' : ''}>${esc(v.originalTitle || v.name)}</option>`).join('');
+    $('#branch-picker').innerHTML = tree.paths.map(v => `<option value="${esc(v.branchId)}" ${v.branchId === p.branchId ? 'selected' : ''}>${esc(v.name || v.originalTitle)}</option>`).join('');
     enhanceSelect($('#branch-picker'));
     renderDetailActions(); renderTranscript(); renderGraph(); scheduleRibbons();
 }
@@ -492,7 +498,7 @@ function renderTranscript() {
     const p = route();
     $('#transcripts').innerHTML = contextBreakdown(p) + p.nodeIds.map(id => {
         const n = state.tree.nodes.find(n => n.id === id), messages = p.messages.filter(m => n.chatIds.includes(m.id));
-        return `${compactionsAt(n, p).map(e => `<div class="compaction-marker">${t('Context compacted here')}${compactionButton(e)}</div>`).join('')}<section class="transcript-segment ${mutedNode(n, p) ? 'context-muted' : ''} ${n.pending ? 'pending' : ''}" data-segment="${esc(n.id)}" style="${style(n)}"><div class="segment-caption"><button data-focus-node="${esc(n.id)}">${esc(nodeName(n))} · ${t('{count} chats', { count: messages.length })}</button><span class="token-estimate">${tokenLabel(n)}</span></div>${messages.map(m => `<article class="chat ${m.role} ${state.chats.has(m.id) ? 'checked' : ''}">${state.scope === 'archived' ? '' : `<input type="checkbox" data-chat="${esc(m.id)}" aria-label="${esc(t('Select chat {number}', { number: p.messages.findIndex(x => x.id === m.id) + 1 }))}" ${state.chats.has(m.id) ? 'checked' : ''}>`}<div class="bubble"><span class="speaker">${m.role === 'user' ? t('You') : p.agent === 'codex' ? 'Codex' : 'Claude'}</span>${excerpt(m.text, state.expanded.has(m.id))}${activityHtml(m.activity,p)}${m.text.length >= 380 ? `<button class="expand-chat" data-expand="${esc(m.id)}">${t(state.expanded.has(m.id) ? 'Collapse' : 'Expand')}</button>` : ''}</div></article>`).join('')}</section>`;
+        return `${compactionsAt(n, p).map(e => `<div class="compaction-marker">${t('Context compacted here')}${compactionButton(e)}</div>`).join('')}<section class="transcript-segment ${mutedNode(n, p) ? 'context-muted' : ''} ${n.pending ? 'pending' : ''}" data-segment="${esc(n.id)}" style="${style(n)}"><div class="segment-caption"><button data-focus-node="${esc(n.id)}">${editableName('node',n.id,nodeName(n))} · ${t('{count} chats', { count: messages.length })}</button><span class="token-estimate">${tokenLabel(n)}</span></div>${messages.map(m => `<article class="chat ${m.role} ${state.chats.has(m.id) ? 'checked' : ''}">${state.scope === 'archived' ? '' : `<input type="checkbox" data-chat="${esc(m.id)}" aria-label="${esc(t('Select chat {number}', { number: p.messages.findIndex(x => x.id === m.id) + 1 }))}" ${state.chats.has(m.id) ? 'checked' : ''}>`}<div class="bubble"><span class="speaker">${m.role === 'user' ? t('You') : p.agent === 'codex' ? 'Codex' : 'Claude'}</span>${excerpt(m.text, state.expanded.has(m.id))}${activityHtml(m.activity,p)}${m.text.length >= 380 ? `<button class="expand-chat" data-expand="${esc(m.id)}">${t(state.expanded.has(m.id) ? 'Collapse' : 'Expand')}</button>` : ''}</div></article>`).join('')}</section>`;
     }).join('') || `<p class="empty">${t('No chats yet.')}</p>`;
     const trailing = (p.context?.compactions || []).filter(e => !p.messages.some(m => m.line > e.line));
     $('#transcripts').insertAdjacentHTML('beforeend', trailing.map(e => `<div class="compaction-marker">${t('Context compacted here')}${compactionButton(e)}</div>`).join(''));
@@ -556,7 +562,7 @@ function renderGraph() {
     if (camera.newView) { const view = $('#graph-scroll'); camera.zoom = Math.max(.02, Math.min(1, (view.clientWidth-32)/width, (view.clientHeight-32)/height)); camera.x = (view.clientWidth-width*camera.zoom)/2; camera.y = (view.clientHeight-height*camera.zoom)/2; camera.newView = false; }
     $('#graph').style.width = `${width}px`; $('#graph').style.height = `${height}px`;
     if (drawnTree !== state.tree) {
-    $('#graph').innerHTML = `<svg class="graph-edges" width="${width}" height="${height}" aria-hidden="true">${state.tree.edges.map(e => { const a = positions.get(e.from), b = positions.get(e.to), n = byNode.get(e.to), color = palette[n.color][0]; return `<path d="M${a.x + 74},${a.y + 80} C${a.x + 74},${a.y + 102} ${b.x + 74},${b.y - 25} ${b.x + 74},${b.y}" fill="none" stroke="${color}" stroke-width="2" ${n.pending ? 'stroke-dasharray="4 4"' : ''}/>`; }).join('')}</svg>${nodes.map(n => { const pos = positions.get(n.id); return `<button class="graph-node ${mutedNode(n, p) ? 'context-muted' : ''} ${n.pending ? 'pending' : ''} ${n.id === state.nodeId ? 'selected' : ''} ${p.nodeIds.includes(n.id) ? '' : 'dimmed'}" data-node="${esc(n.id)}" style="${style(n)};left:${pos.x}px;top:${pos.y}px" aria-pressed="${n.id === state.nodeId}"><span class="node-tools">${toolTags(n.agents || [p.agent],true)}</span><span class="node-title">${esc(nodeName(n))}</span><span class="node-meta">${t('{count} chats', { count: n.count })} · <span>${tokenLabel(n)}</span></span>${n.endBranchIds.some(id => state.tree.paths.find(p => p.branchId === id)?.active) ? `<span class="active-node-dot" aria-label="${t('Active on this device')}" title="${t('Active on this device')}"></span>` : ''}</button>`; }).join('')}`;
+    $('#graph').innerHTML = `<svg class="graph-edges" width="${width}" height="${height}" aria-hidden="true">${state.tree.edges.map(e => { const a = positions.get(e.from), b = positions.get(e.to), n = byNode.get(e.to), color = palette[n.color][0]; return `<path d="M${a.x + 74},${a.y + 80} C${a.x + 74},${a.y + 102} ${b.x + 74},${b.y - 25} ${b.x + 74},${b.y}" fill="none" stroke="${color}" stroke-width="2" ${n.pending ? 'stroke-dasharray="4 4"' : ''}/>`; }).join('')}</svg>${nodes.map(n => { const pos = positions.get(n.id); return `<button class="graph-node ${mutedNode(n, p) ? 'context-muted' : ''} ${n.pending ? 'pending' : ''} ${n.id === state.nodeId ? 'selected' : ''} ${p.nodeIds.includes(n.id) ? '' : 'dimmed'}" data-node="${esc(n.id)}" style="${style(n)};left:${pos.x}px;top:${pos.y}px" aria-pressed="${n.id === state.nodeId}"><span class="node-tools">${toolTags(n.agents || [p.agent],true)}</span><span class="node-title">${editableName('node',n.id,nodeName(n))}</span><span class="node-meta">${t('{count} chats', { count: n.count })} · <span>${tokenLabel(n)}</span></span>${n.endBranchIds.some(id => state.tree.paths.find(p => p.branchId === id)?.active) ? `<span class="active-node-dot" aria-label="${t('Active on this device')}" title="${t('Active on this device')}"></span>` : ''}</button>`; }).join('')}`;
         drawnTree = state.tree;
     } else {
         for (const el of $$('[data-node]')) {
@@ -648,7 +654,7 @@ async function refresh({ checkCloud = false } = {}) {
     if (scope === 'trash') {
         const [trash, status] = await Promise.all([api('/trash'), api('/status')]);
         if (id !== requestId || scope !== state.scope || document.body.classList.contains('session-dragging')) return;
-        Object.assign(state.data, trash, status); state.list = { items: [], sessionCount: 0 }; render(); return;
+        Object.assign(state.data, status, trash); state.list = { items: [], sessionCount: 0 }; render(); return;
     }
     const [data, list, tree] = await Promise.all([api('/state'), api('/list?scope=' + encodeURIComponent(state.scope) + '&q=' + encodeURIComponent(state.query) + (checkCloud ? '&check=1' : '')), state.tree ? api('/trees/' + encodeURIComponent(state.tree.id) + '?view=' + (state.scope === 'archived' ? 'archived' : 'in-use')) : null]);
     if (id !== requestId || scope !== state.scope || document.body.classList.contains('session-dragging')) return;
@@ -679,20 +685,8 @@ function moveDialog(itemIds, restoreTarget = null) {
 function restore(target) { return run(async()=>{const result=await trashRequest('/manage',{...target,action:'restore'},'restore');state.restoredBranchIds=result.branchIds;state.tree=null;state.scope=PROJECTS;state.query='';$('#search').value='';state.selected.clear();}); }
 
 function clearRange() { state.chats.clear(); state.rangeStart = null; state.rangeEnd = null; }
-function renameSession(item) {
-    const sessions = item.sessions, initial = sessions.find(s => s.name === item.name) || sessions[0];
-    modal('Rename session', (sessions.length > 1 ? `<label class="field">${t('Session')}<select name="sessionId" id="rename-session-picker">${sessions.map(s => `<option value="${esc(s.id)}" ${s.id === initial.id ? 'selected' : ''}>${esc(s.name)}</option>`).join('')}</select></label>` : '') + field('Session name', 'name', initial.name), async form => {
-        await api('/trees/' + encodeURIComponent(item.id) + '?view=all');
-        await api('/branches/' + encodeURIComponent(form.get('sessionId') || initial.id), 'PATCH', { name: form.get('name') });
-    }, 'Rename');
-    const picker = $('#rename-session-picker');
-    if (picker) { picker.onchange = () => { $('#dialog-content [name=name]').value = sessions.find(s => s.id === picker.value).name; }; enhanceSelect(picker); }
-}
 function renameNode() {
-    const n = selectedNode(); if (!n) return;
-    modal('Rename node', field('Node title', 'name', n.name || ''), async form => {
-        await api('/trees/' + state.tree.id, 'POST', { action: 'rename', nodeId: n.id, pathId: state.branchId, version: state.tree.version, name: form.get('name') });
-    }, n.pending ? 'Save node' : 'Rename');
+    const n=selectedNode();if(n)inlineNames.begin($$('.graph-node [data-name-kind=node]').find(el=>el.dataset.nameId===n.id));
 }
 function trashDialog(target,count=1){
     const days=state.data.preferences?.trashRetentionDays||30;
@@ -703,7 +697,7 @@ function recoveryCategories(rows){
     return projectGroups(rows.flatMap(r=>(r.projectIds?.length?r.projectIds:[INBOX]).map(projectId=>({...r,projectId,updatedAt:r.at||''}))),state.data.projects);
 }
 function recoveryGroups(rows,row,kind){
-    return recoveryCategories(rows).map(g=>`<section class="list-group project-group" data-recovery-project="${esc(g.id)}"><h2>${esc(g.id===INBOX?t('Ungrouped'):g.name)}<span class="group-actions"><span>${g.items.length}</span><input type="checkbox" data-${kind}-group="${esc(g.id)}" aria-label="${esc(t('Select group {name}',{name:g.name}))}"></span></h2>${g.items.map(row).join('')}</section>`).join('');
+    return recoveryCategories(rows).map(g=>`<section class="list-group project-group" data-recovery-project="${esc(g.id)}"><h2>${projectName(g.id,g.id===INBOX?t('Ungrouped'):g.name)}<span class="group-actions"><span>${g.items.length}</span><input type="checkbox" data-${kind}-group="${esc(g.id)}" aria-label="${esc(t('Select group {name}',{name:g.name}))}"></span></h2>${g.items.map(row).join('')}</section>`).join('');
 }
 function bindRecoveryGroups(rows,kind,render){
     const groups=recoveryCategories(rows);
@@ -863,7 +857,11 @@ function combineDialog() {
 async function showSource() {
     try {
         const d = await api('/branches/' + state.branchId);
-        modal('Source & revisions', `${d.agent==='claude'?'<p class="dialog-copy">'+t('Native title source')+': '+t(({custom:'Custom title',automatic:'Automatic title','first-prompt':'First prompt'})[d.nativeTitleSource]||'Unknown')+'</p>':''}${d.warnings.map(w => `<p class="warning">${esc(errorText(w))}</p>`).join('')}${d.lineage.map(r => `<div class="source-entry">${esc(r.source.deviceName || t('Unknown device'))} · ${date(r.createdAt)}<br>${esc(r.source.cwd || d.cwd)}<br>${esc(r.source.client || '')}</div>`).join('')}`, null);
+        const knownClient=value=>({vscode:'VS Code',cli:'CLI',codex_cli_rs:'Codex CLI',codex_vscode:'VS Code',desktop:'Codex App'})[value]||null;
+        const operation=value=>t(({import:'Imported history',capture:'Captured client changes',fork:'Created continuation','native-settings':'Client settings update',conversion:'Converted context','shared-prefix':'Shared history','native-fork-snapshot':'Shared history'})[value]||'Saved revision');
+        const field=(label,value)=>`<dt>${esc(t(label))}</dt><dd>${esc(value)}</dd>`;
+        const originalTitle=d.originalTitle||d.nativeObservedTitle||d.instances.find(i=>i.observedTitle)?.observedTitle;
+        modal('Source & revisions', `${originalTitle||d.automaticName?`<dl class="source-original-title">${originalTitle?field('Original client title',originalTitle):''}${d.automaticName?field('Automatic name',d.automaticName.name):''}</dl>`:''}<p class="dialog-copy">${t('These records describe where Grove obtained the history and how it changed. Some sessions do not record a client application.')}</p>${d.warnings.map(w=>`<p class="warning">${esc(errorText(w))}</p>`).join('')}${d.lineage.map(r=>{const source=r.source||{},device=source.deviceName||(source.deviceId===state.data.device.id?state.data.device.name:null),client=knownClient(source.client)||knownClient(d.nativeClient);return `<section class="source-entry"><strong>${esc(operation(source.operation))}</strong><time> · ${esc(date(r.createdAt))}</time><dl>${field('Agent',d.agent==='codex'?'Codex':'Claude Code')}${field(source.operation==='import'?'Imported on':'Recorded on',device||t('Device not recorded'))}${field('Working directory',source.cwd||d.cwd||t('Directory not recorded'))}${field('Client application',client||t('Not recorded by the session'))}</dl></section>`;}).join('')}`, null);
     } catch (e) { toast(e.message); }
 }
 function contextSelect(name,value,context,compact=false) {
@@ -874,8 +872,9 @@ function contextSelect(name,value,context,compact=false) {
 async function settings(options = {}) {
     try {
         const c = await api('/settings'), edit = options.editConnection || !c.verified;
-        const p = c.preferences, smart=c.intelligence||{},contexts=c.context||{};
+        const p = c.preferences, smart=c.intelligence||{},contexts=c.context||{},startup=c.autostart||{supported:false,enabled:false};
         modal('Settings', `
+          <section class="settings-card" id="startup-settings"><div class="settings-section-heading"><h3>${t('Local service')}</h3><span id="startup-state" class="setting-state" data-state="${startup.busy?'saving':startup.error?'error':!startup.supported?'unavailable':startup.enabled?'on':'off'}">${t(startup.busy?'Updating':startup.error?'Failed':!startup.supported?'Unavailable':startup.enabled?'Enabled':'Disabled')}</span></div><label class="timer-row"><span>${t('Start automatically at login')}</span><input type="checkbox" name="startAtLogin" ${startup.enabled?'checked':''} ${!startup.supported||startup.error||startup.busy?'disabled':''}></label><p class="dialog-copy" id="startup-status" role="status">${esc(t(startup.error||startup.reason||(startup.busy?'Updating login startup…':startup.enabled?'Enabled for next sign-in.':'Disabled for next sign-in.')))}</p></section>
           <section class="settings-card"><div class="settings-section-heading"><h3>${t('Git repository')}</h3>${!edit ? `<span class="setting-ok">✓ ${t('Connected')}</span><button type="button" id="modify-connection">${t('Modify')}</button>` : ''}</div>
           <div class="settings-input-action"><label class="field">${t('Repository address')}<input name="url" type="text" value="${esc(c.url)}" placeholder="git@github.com:owner/repository.git" ${!edit ? 'disabled' : ''}></label>
 
@@ -884,7 +883,7 @@ async function settings(options = {}) {
           <section class="settings-card" id="intelligence-settings"><div class="settings-section-heading"><h3>${t('Smart organization')}</h3><span class="context-limit">GPT-6 Luna</span></div>
           <div class="settings-input-action"><label class="field">${t('OpenAI API key')}<input type="password" name="intelligenceKey" autocomplete="off" placeholder="${t(smart.hasKey?'Key saved':'Add an API key')}" value="" ${smart.hasKey?'disabled':''}></label>
           ${smart.hasKey?`<button type="button" id="remove-intelligence-key">${t('Remove key')}</button>`:`<button type="button" id="save-intelligence-key" disabled>${t('Verify key')}</button>`}</div><p class="settings-error" id="key-settings-error" role="alert"></p>
-          <label class="timer-row"><span>${t('Classify and name new sessions')}</span><input type="checkbox" name="smartClassify" ${smart.classify?'checked':''} ${!smart.hasKey?'disabled':''}></label>
+          <label class="timer-row"><span>${t('Name sessions and classify new inbox entries')}</span><input type="checkbox" name="smartClassify" ${smart.classify?'checked':''} ${!smart.hasKey?'disabled':''}></label>
           <label class="timer-row"><span>${t('Name new branch points')}</span><input type="checkbox" name="smartNodes" ${smart.nameNodes?'checked':''} ${!smart.hasKey?'disabled':''}></label>
           <label class="timer-row smart-scheduling"><span>${t('Concurrent requests')}</span><select name="smartConcurrency">${[1,2,3,4].map(n=>`<option value="${n}" ${n===(smart.concurrency??2)?'selected':''}>${n===1?t('1 (serial)'):n}</option>`).join('')}</select></label>
           <label class="timer-row"><span>${t('Minimum request interval')}</span><span class="timer-interval"><input type="number" name="smartInterval" min="0" max="60" step="0.1" value="${smart.minIntervalSeconds??0}" aria-label="${t('Minimum request interval')}"><span>${t('seconds')}</span></span></label>
@@ -914,6 +913,12 @@ async function settings(options = {}) {
                 catch(error){contextStatus.textContent=error.message;if(window.value===(values.window==null?'':String(values.window)))window.value=contexts[agent].window??'';if(agent==='codex'&&compact.value===(values.compactAt==null?'':String(values.compactAt)))compact.value=contexts[agent].compactAt??'';throw error;}
             });
         }
+        $('[name=startAtLogin]').onchange=async e=>{
+            const input=e.currentTarget,status=$('#startup-status'),before=startup.enabled;input.disabled=true;status.textContent=t('Updating login startup…');const badge=$('#startup-state');badge.textContent=t('Updating');badge.dataset.state='saving';
+            try{Object.assign(startup,await api('/settings/autostart','POST',{enabled:input.checked}));input.checked=startup.enabled;badge.textContent=t(startup.enabled?'Enabled':'Disabled');badge.dataset.state=startup.enabled?'on':'off';status.classList.remove('settings-error');status.textContent=t(startup.enabled?'Enabled for next sign-in.':'Disabled for next sign-in.');}
+            catch(error){input.checked=before;badge.textContent=t('Failed');badge.dataset.state='error';status.classList.add('settings-error');status.textContent=error.message+' '+t(before?'Login startup remains on.':'Login startup remains off.');}
+            finally{input.disabled=!startup.supported||!!startup.error;}
+        };
         if($('#save-intelligence-key')){
             $('[name=intelligenceKey]').oninput=e=>{$('#save-intelligence-key').disabled=!e.target.value.trim();};
             $('#save-intelligence-key').onclick=e=>busy(e.currentTarget,()=>saveSmart({apiKey:$('[name=intelligenceKey]').value.trim()}));
@@ -947,7 +952,7 @@ async function settings(options = {}) {
     } catch(e) { toast(e.message); }
 }
 function information() {
-    modal('Information', `<details><summary>${t('Using Grove')}</summary><ul class="action-guide"><li>${t('Update reads your local sessions. Pull gets changes from your other devices. Push sends your changes after pulling.')}</li><li>${t('Activate opens the selected node and its preceding context in your tool. Deactivate is available at the active endpoint.')}</li><li>${t('Renaming changes the Grove label. Your conversation keeps the same identity.')}</li></ul></details><details><summary>${t('Sync and recovery')}</summary><p>${t('Sessions are stored as readable files in your Git repository. Earlier versions remain in Git history.')}</p><p>${t('Changes made during upload remain queued for the next upload.')}</p><p>${t('Trash keeps a recovery copy on this device until its displayed expiry date.')}</p><p>${t('Discard restores the last synced version. New unsynced sessions are removed from Grove. A local recovery copy is kept.')}</p></details><details><summary>${t('Smart organization')}</summary><p>${t('Smart organization handles new sessions and new branch points. Existing names are preserved.')}</p><p>${t('Classification uses the first human request, project names and a short workspace hint. Node naming uses the first human request and last assistant reply in that node.')}</p><p>${t('Your API key and switches stay on this device. User messages are kept complete; long assistant replies are shortened in the middle.')}</p></details><details><summary>${t('Tokens and tools')}</summary><p>${t('Token counts estimate the selected conversation and recorded tool context. Model capacity and compaction thresholds come from available model settings.')}</p>${['lean','full','messages'].map(m=>`<p><strong>${t(modeName(m))}</strong> — ${contextCopy(m)}</p>`).join('')}<p>${t('Switching tools creates a new session. Thinking and attachments remain in the original.')}</p></details>${(state.data.plan?.pendingRecovery||[]).map(id=>`<button type="button" data-recover="${esc(id)}">${t('Recover interrupted operation')}</button>`).join('')}${state.data.conflicts.map((c,i)=>`<div class="conflict">${t('Conflict')}: ${esc(c.local.name)}<button type="button" data-conflict="${i}" data-choice="local">${t('Keep local')}</button><button type="button" data-conflict="${i}" data-choice="remote">${t('Use remote')}</button></div>`).join('')}`,null);
+    modal('Information', `<details><summary>${t('Using Grove')}</summary><ul class="action-guide"><li>${t('Update reads your local sessions. Pull gets changes from your other devices. Push sends your changes after pulling.')}</li><li>${t('Activate opens the selected node and its preceding context in your tool. Deactivate is available at the active endpoint.')}</li><li>${t('Renaming changes the Grove label. Your conversation keeps the same identity.')}</li></ul></details><details><summary>${t('Sync and recovery')}</summary><p>${t('Sessions are stored as readable files in your Git repository. Earlier versions remain in Git history.')}</p><p>${t('Changes made during upload remain queued for the next upload.')}</p><p>${t('Trash keeps a recovery copy on this device until its displayed expiry date.')}</p><p>${t('Discard restores the last synced version. New unsynced sessions are removed from Grove. A local recovery copy is kept.')}</p></details><details><summary>${t('Smart organization')}</summary><p>${t('Smart organization names each session once, including existing sessions and forks. Manual names are preserved. Automatic node names are checked again when their range changes.')}</p><p>${t('Classification uses the first human request, project names and a short workspace hint. Node naming uses the first human request and last assistant reply in that node.')}</p><p>${t('Your API key and switches stay on this device. User messages are kept complete; long assistant replies are shortened in the middle.')}</p></details><details><summary>${t('Tokens and tools')}</summary><p>${t('Token counts estimate the selected conversation and recorded tool context. Model capacity and compaction thresholds come from available model settings.')}</p>${['lean','full','messages'].map(m=>`<p><strong>${t(modeName(m))}</strong> — ${contextCopy(m)}</p>`).join('')}<p>${t('Switching tools creates a new session. Thinking and attachments remain in the original.')}</p></details>${(state.data.plan?.pendingRecovery||[]).map(id=>`<button type="button" data-recover="${esc(id)}">${t('Recover interrupted operation')}</button>`).join('')}${state.data.conflicts.map((c,i)=>`<div class="conflict">${t('Conflict')}: ${esc(c.local.name)}<button type="button" data-conflict="${i}" data-choice="local">${t('Keep local')}</button><button type="button" data-conflict="${i}" data-choice="remote">${t('Use remote')}</button></div>`).join('')}`,null);
     const operation=state.data.cloud.operation;
     if (operation) $('#dialog-content').insertAdjacentHTML('beforeend', `<details id="transfer-diagnostics"><summary>${t('Last transfer')}</summary><dl><dt>${t('Elapsed')}</dt><dd>${Math.round(((operation.finishedAt||Date.now())-operation.startedAt)/1000)} s</dd>${operation.summary?`<dt>${t('Sessions checked')}</dt><dd>${operation.summary.checked||0}</dd><dt>${t('Items pushed')}</dt><dd>${operation.summary.published||0}</dd>`:''}</dl></details>`);
     $$('[data-conflict]').forEach(el=>el.onclick=()=>run(async()=>{await api('/conflicts/resolve','POST',{index:Number(el.dataset.conflict),choice:el.dataset.choice});$('#dialog').close();}));
@@ -1005,6 +1010,22 @@ $('#graph-scroll').addEventListener('wheel', e => {
 }, { passive: false });
 // Window focus never performs remote I/O; Sync explicitly refreshes the cloud directory.
 window.addEventListener('resize', () => scheduleRibbons());
+const inlineNames=installInlineNames({translate:t,saved:()=>refresh(),onError:e=>toast(e.message),describe:anchor=>{
+    if(working||state.connected===false)return null;
+    const {nameKind:kind,nameId:id}=anchor.dataset;
+    if(kind==='project'){
+        const project=state.data.projects.find(p=>p.id===id);if(!project||project.builtin)return null;
+        return {value:project.name,label:t('Project name'),save:name=>api('/projects/'+id,'PATCH',{name,metaVersion:project.metaVersion})};
+    }
+    if(kind==='session'){
+        const branch=state.data.branches.find(b=>b.id===id);if(!branch)return null;
+        return {value:branch.name,label:t('Session name'),save:name=>api('/branches/'+id,'PATCH',{name,metaVersion:branch.metaVersion})};
+    }
+    const graph=state.tree,node=graph?.nodes.find(n=>n.id===id);if(!node)return null;
+    const pathId=node.branchIds.includes(state.branchId)?state.branchId:node.branchIds[0];
+    return {value:node.name||'',label:t('Node title'),save:name=>api('/trees/'+graph.id,'POST',{action:'rename',nodeId:id,pathId,version:graph.version,name})};
+}});
+
 try {
     const boot = await (await fetch('/api/bootstrap')).json(); if (boot.error) throw new Error(errorText(boot.error));
     state.token = boot.token; state.data = boot; state.roots = boot.roots; $('#demo-badge').textContent = boot.demo ? 'DEMO' : '';
@@ -1019,7 +1040,7 @@ try {
             if(next.discardOperation&&working)showOperation('discard',next.discardOperation);
             if(next.trashOperation)showOperation('trash',next.trashOperation);
             if(next.update.operation)showOperation('update',next.update.operation);
-            const canRefresh = !working && !opening && !$('#dialog').open && !state.chats.size;
+            const canRefresh = !working && !inlineNames.editing && !opening && !$('#dialog').open && !state.chats.size;
             if (next.stateVersion !== state.data.stateVersion && canRefresh) await refresh();
             else { state.data.cloud = next.cloud; state.data.update = next.update; state.data.trashOperation = next.trashOperation; renderCloudStatus(); }
         } catch { /* Explicit Update reports connection errors. */ }

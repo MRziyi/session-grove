@@ -305,7 +305,7 @@ export class Native {
                 }
                 const suffix = physicalClaude ? resolved.startsWith(baseline) ? resolved.slice(baseline.length) : null : base.endsWith('\n') && logical.startsWith(base) ? logical.slice(base.length) : null;
                 const conversationChanged = suffix === null || suffix.split('\n').filter(Boolean).some(line => { const v = JSON.parse(line); return i.agent === 'codex' ? ['response_item','compacted'].includes(v.type) || v.type === 'event_msg' && ['task_started','user_message','agent_message'].includes(v.payload?.type) : ['user','assistant'].includes(v.type) || v.subtype === 'compact_boundary'; });
-                let b = this.store.ingest(i.branchId, logical, i.baseRevision, { agent: i.agent, nativeId: i.nativeId, cwd: i.cwd, client: 'unknown', operation: conversationChanged ? 'capture' : 'native-settings' });
+                let b = this.store.ingest(i.branchId, logical, i.baseRevision, { agent: i.agent, nativeId: i.nativeId, cwd: i.cwd, client: typeof p.meta?.source==='string'?p.meta.source:'unknown', operation: conversationChanged ? 'capture' : 'native-settings' });
                 if(physicalPrefixLength!==null&&b.id!==beforeBranch.id)b=this.store.put('branch',{...b,forkEnd:physicalPrefixLength,forkParentEnd:this.store.get('revision',i.baseRevision).refs.length});
                 else if(mappedForkEnd!==undefined)b=this.store.put('branch',{...b,forkEnd:mappedForkEnd});
                 i.branchId = b.id;

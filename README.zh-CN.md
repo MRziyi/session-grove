@@ -33,7 +33,7 @@ Session Grove 是面向 **Claude Code 和 Codex** 的本地会话管理工具，
 
 ![项目列表中的共享分支树、Claude 与 Codex 会话和未分类收纳箱](docs/images/library.png)
 
-新对话会留在 **Pending**。选中一段，命名为“项目背景”“比较方案”或“原型反馈”。这些名称组织历史，不会改写原始对话。
+新对话会留在 **Pending**。选中一段，命名为“项目背景”“比较方案”或“原型反馈”。这些名称组织历史，不会改写原始对话。双击项目名、会话名或节点标题即可原位编辑；勾选保存，点击外部或按 Esc 取消。
 
 ## 从有价值的节点继续
 
@@ -45,7 +45,7 @@ Session Grove 是面向 **Claude Code 和 Codex** 的本地会话管理工具，
 
 ## 少一些整理负担
 
-可选的 **Smart Organization** 会分类、命名新会话，并为新分叉节点起名。填入自己的 OpenAI API key 后，两项功能可以独立开启；已有名称由你掌握。
+可选的 **Smart Organization** 会为已有和新会话补齐模型命名、分类新会话，并为分叉节点起名。填入自己的 OpenAI API key 后，会话整理和节点命名可以独立开启；手动名称会保留。
 
 默认同时处理两个请求，可在 Settings 改为串行或最多四个并发，并设置请求最小间隔。进度会说明正在做什么、还剩多少，以及需要处理的问题。只有启用功能时才会把选取的消息发送给 OpenAI。
 
@@ -67,6 +67,16 @@ pnpm run demo
 管理自己的会话时，先停止 Demo，运行 `pnpm start`，再点击 **Update**。Grove 会读取本机 Claude Code 和 Codex 会话目录。浏览、整理和创建续接时，可以继续运行原生 Agent。
 
 也可以使用 npm：`npm install`、`npm run demo`、`npm start`。左下角可切换中英文。
+
+## 登录自启动
+
+自启**默认关闭**。打开 Grove 后，进入 **Settings → 本地服务 → 登录后自动启动**：
+
+1. 打开开关，下次登录 macOS 或 Windows 时就会自动启动 Grove。
+2. 查看旁边的状态：**已关闭、已开启、正在更新或设置失败**。失败时保留原设置，并显示原因。
+3. 关闭开关即可取消之后的登录自启，当前正在运行的服务仍保持可用。
+
+Grove 会自动配置当前用户的 macOS LaunchAgent 或 Windows 启动快捷方式，无需手写配置文件或执行终端命令。演示模式会禁用这个开关。移动仓库或更换 Node 安装位置后，把开关关掉再打开即可更新保存的路径。后台输出日志位于 `~/.session-grove/logs/server.log`，Windows 对应 `%USERPROFILE%\.session-grove\logs\server.log`。
 
 ## 资料在自己手中，工作在设备间继续
 

@@ -6,7 +6,7 @@ const tests=fs.readdirSync('test').filter(file=>file.endsWith('.test.js')).flatM
     return [...source.matchAll(/\btest\(\s*(['"])([^\r\n]+?)\1/g)].map(match=>({name:match[2],file:'test/'+file,line:source.slice(0,match.index).split('\n').length}));
 });
 const browser=process.argv.includes('--browser');
-const files=browser?['scripts/node-browser-smoke.js','scripts/sync-browser-smoke.js','scripts/session-drag-browser-smoke.js']:fs.readdirSync('test').filter(file=>file.endsWith('.test.js')).map(file=>'test/'+file);let cursor=0,failedFiles=0;
+const files=browser?['scripts/node-browser-smoke.js','scripts/sync-browser-smoke.js','scripts/session-drag-browser-smoke.js','scripts/inline-name-browser-smoke.js']:fs.readdirSync('test').filter(file=>file.endsWith('.test.js')).map(file=>'test/'+file);let cursor=0,failedFiles=0;
 function run(file){return new Promise(resolve=>{
     console.log('Testing '+file);
     const child=spawn(process.execPath,browser?[file]:['--test','--test-timeout=90000','--test-reporter=spec',file],{stdio:['ignore','pipe','pipe'],windowsHide:true,detached:process.platform!=='win32'});

@@ -193,13 +193,14 @@ export class Store {
         assert(parsed.checkpoints.some(c => c.end === end) || nodeBoundary && Number.isInteger(end) && end > 0 && end <= rev.refs.length && !prefixParsed.errors.length && !prefixParsed.pendingToolCalls, '只能从已完成的轮次或有效节点边界创建分支');
         const contextPolicy = parent.contextPolicy ? { disabled: parent.contextPolicy.disabled.filter(id => parsed.context.compactions.some(e => e.id === id && e.line <= end)) } : undefined;
         const revision = this.revision(this.raw(rev.id, end), rev.id, { agent: parent.agent, operation: 'fork', ...(nodeBoundary ? { nodeBoundary: true } : {}), ...(parent.agent === 'claude' && parsed.checkpoints.some(c=>c.end===end) ? { claudeCheckpoint: parsed.checkpoints.find(c => c.end === end).turnId } : {}) });
-        return this.put('branch', { ...parent, contextPolicy, id: id(), name: text(name), head: revision.id, nodeHead: null, layoutHead: null, endpointName: null, chatIdentity: null, parentId: parent.id, forkRevision: rev.id, forkEnd: end, forkParentEnd: end, archived: false, synthetic: false, inferred: false, nativeLinked: false, prefixUnavailable: false, createdViaGroveFork: true, contentUpdatedAt: now(), createdAt: now(), updatedAt: now(), metaVersion: id(), metaAncestors: [] });
+        return this.put('branch', { ...parent, contextPolicy, id: id(), name: text(name), head: revision.id, nodeHead: null, layoutHead: null, endpointName: null, automaticName:null, nameOrigin:null, groveNamed:false, chatIdentity: null, parentId: parent.id, forkRevision: rev.id, forkEnd: end, forkParentEnd: end, archived: false, synthetic: false, inferred: false, nativeLinked: false, prefixUnavailable: false, createdViaGroveFork: true, contentUpdatedAt: now(), createdAt: now(), updatedAt: now(), metaVersion: id(), metaAncestors: [] });
     }
-    edit(branchId, patch) {
+    edit(branchId, patch, {automatic=false} = {}) {
         const b = this.get('branch', branchId), previous = structuredClone(b);
         if ('name' in patch) {
             const name = text(patch.name);
-            if (name !== b.name) { b.name = name; b.groveNamed = true; }
+            if (name !== b.name) { b.name = name; b.groveNamed = true; b.nameOrigin=automatic?'automatic':'manual'; }
+            if(!automatic&&b.nameOrigin==='automatic'){b.nameOrigin='manual';b.groveNamed=true;}
         }
         if ('endpointName' in patch) b.endpointName = text(patch.endpointName, 'Node title');
         if ('group' in patch)
@@ -257,7 +258,7 @@ export class Store {
         if (lineage.some(r => r.source.requiresAuxiliary))
             if (!lineage.some(r => r.source.auxiliary) && !(b.agent === 'claude' && lineage[0]?.source.operation === 'fork')) p.warnings.push('来源含尚未收纳的伴随目录；当前版本禁止激活或移除原生实例');
         if (b.prefixUnavailable) p.warnings.push('Native parent is known, but its shared prefix was changed or compacted. Ancestry is retained without merging unverifiable chats.');
-        return { ...b, nativeTitleSource: this.summary(b.head,b.agent).titleSource, ...pendingDetail(this, b, p), messages: p.messages, checkpoints: p.checkpoints, warnings: p.warnings, cwd: p.cwd, records: p.records.length, lineage, instances: this.instances().filter(i => i.branchId === b.id).map(({ baseline, baselineRef, observedHash, ...i }) => i) };
+        return { ...b, nativeClient:typeof p.meta?.source==='string'?p.meta.source:null, nativeTitleSource: this.summary(b.head,b.agent).titleSource, ...pendingDetail(this, b, p), messages: p.messages, checkpoints: p.checkpoints, warnings: p.warnings, cwd: p.cwd, records: p.records.length, lineage, instances: this.instances().filter(i => i.branchId === b.id).map(({ baseline, baselineRef, observedHash, ...i }) => i) };
     }
     setCompaction(branchId, { eventId, enabled, head }) {
         const b = this.get('branch', branchId); assert(!isTrashed(this,b.id)&&!b.archived && !b.excluded && !(b.projectId && this.get('project', b.projectId).archived), 'Restore this session before organizing.');

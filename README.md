@@ -33,7 +33,7 @@ Named projects hold ongoing work. **Ungrouped** keeps everyday questions close u
 
 ![Project library with a shared conversation tree, Claude and Codex sessions, and an Ungrouped inbox](docs/images/library.png)
 
-New conversation stays in **Pending**. Select a range to give it a name such as “Project brief”, “Compare approaches” or “Prototype feedback”. Those names organize your history without rewriting the conversation.
+New conversation stays in **Pending**. Select a range to give it a name such as “Project brief”, “Compare approaches” or “Prototype feedback”. Those names organize your history without rewriting the conversation. Double-click a project, session or node title to edit it in place; the check mark saves, while clicking elsewhere or pressing Escape cancels.
 
 ## Continue from a useful point
 
@@ -45,7 +45,7 @@ Same-agent activation preserves supported native records, including recorded too
 
 ## Less housekeeping
 
-Optional **Smart Organization** classifies and names new sessions and labels new branch points. Enable either feature independently with your own OpenAI API key. Existing names stay yours.
+Optional **Smart Organization** names existing and new sessions, classifies new inbox entries and labels branch points. Enable session organization and node naming independently with your own OpenAI API key. Manually chosen names stay yours.
 
 Requests default to two at a time. Settings lets you choose serial operation or up to four concurrent requests, and set a minimum request interval. Progress shows what is running, what remains and anything that needs attention. Selected messages are sent to OpenAI only when enabled.
 
@@ -67,6 +67,16 @@ Open **http://127.0.0.1:7421**. Demo mode uses sample sessions and does not read
 To use your own history, stop the demo, run `pnpm start`, then click **Update**. Grove reads the local Claude Code and Codex session folders. You can keep the agents running while browsing, organizing or creating a new continuation.
 
 Prefer npm? Use `npm install`, `npm run demo` and `npm start`. Switch between English and Chinese at the bottom of the sidebar.
+
+## Start automatically at login
+
+Login startup is **off by default**. After opening Grove, go to **Settings → Local service → Start automatically at login**:
+
+1. Turn the switch on to start Grove automatically when you next sign in to macOS or Windows.
+2. Check the status beside it: **Disabled**, **Enabled**, **Updating**, or **Failed**. Failed changes keep the previous setting and show the reason.
+3. Turn it off to disable future login startup. The currently running service stays available.
+
+Grove sets up the current user's macOS LaunchAgent or Windows Startup shortcut for you; no terminal configuration is required. Demo mode disables this control. If you move the repository or change your Node installation, turn the switch off and on again to refresh its saved paths. Background output is in `~/.session-grove/logs/server.log` (Windows: `%USERPROFILE%\.session-grove\logs\server.log`).
 
 ## Your history, across your computers
 

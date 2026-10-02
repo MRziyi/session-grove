@@ -120,7 +120,7 @@ test('node previews reject stale selections and accept intermediate message boun
 test('Trash listing does not compute the library graph or cloud directory', async t => {
     const { app, api } = await setup(t);
     app.store.snapshot = app.autoSync.listing = app.autoSync.decorate = () => { throw Error('Full library traversal'); };
-    const result = await api('trash', null, 'GET'); assert.equal(result.status, 200); assert.deepEqual(result.value, { trashEntries: [], trashNative: [] });
+    const result = await api('trash', null, 'GET'); assert.equal(result.status, 200); const {stateVersion,...snapshot}=result.value;assert.equal(typeof stateVersion,'string');assert.deepEqual(snapshot, { trashEntries: [], trashNative: [] });
 });
 test('switching tools from an internal node converts only its prefix and previews the native title', async t => {
     const { app, root, api } = await setup(t), store = app.store;

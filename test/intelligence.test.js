@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';import os from 'node:os';import path from 'node:path';
 import {Store} from '../src/store.js';
 import {Intelligence,nodeEvidence} from '../src/intelligence.js';
-import {namingMessages,namingEvidence,humanText,shortenAssistant} from '../src/intelligence-text.js';
+import {namingMessages,namingEvidence,sessionEvidence,humanText,shortenAssistant} from '../src/intelligence-text.js';
 import {requestSpec,requestName} from '../src/intelligence-api.js';
 import {codexSample,codexTurn,claudeSample} from '../src/demo.js';
 import {parse} from '../src/transcript.js';
@@ -15,7 +15,7 @@ function setup(t,request=async()=>({project_id:null,new_project:null,name:'New n
  fs.writeFileSync(path.join(root,'intelligence.json'),JSON.stringify({apiKey:'test-local-secret',classify:true,nameNodes:true}));
  const changes=[],smart=new Intelligence(store,{request,onChange:id=>changes.push(id)});
  t.after(async()=>{smart.close();await smart.pending;store.close();fs.rmSync(root,{recursive:true,force:true});});
- const flush=async()=>{clearTimeout(smart.timer);await smart.run();clearTimeout(smart.timer);};
+ const flush=async()=>{for(let i=0;i<100&&smart.data.jobs.length&&!smart.error;i++){clearTimeout(smart.timer);await smart.run();await smart.pending;}clearTimeout(smart.timer);};
  return {root,store,smart,flush,changes};
 }
 test('Codex naming selects human prose without deleting user-authored XML',()=>{
@@ -62,7 +62,7 @@ test('manual changes during a request win and assistant appends do not cancel cl
  assert.equal(f.store.get('branch',b.id).name,'Automatic');assert.equal(f.store.all('project')[0].name,'Topic');
 });
 test('new split names the shared node, preserves native text, and leaves manual names alone',async t=>{
- let evidence,calls=0;const f=setup(t,async(key,kind,value)=>{calls++;assert.equal(kind,'node');evidence=value;return {name:'引言结构定稿'};});const p=f.store.project('Paper');
+ let evidence,calls=0;const f=setup(t,async(key,kind,value)=>{calls++;assert.equal(kind,'node');evidence=value;return {name:'引言结构定稿'};});await f.smart.save({classify:false});const p=f.store.project('Paper');
  const b=f.store.branch(p.id,'Session','codex',codexSample(f.root,[['请设计引言','引言结构已整理'],['Later','Later answer']]));f.smart.observe();await f.flush();assert.equal(calls,0);
  const child=f.store.fork(b.id,{name:'Fork',end:f.store.detail(b.id).checkpoints[0].end});f.store.ingest(child.id,f.store.raw(child.head)+codexTurn('Different','Different answer').map(v=>JSON.stringify(v)+'\n').join(''),child.head,{});
  f.smart.observe();await f.flush();assert.equal(calls,1);assert.deepEqual(evidence,{user:'请设计引言',assistant:'引言结构已整理'});
@@ -80,19 +80,19 @@ test('provider errors remain visible and retry the job without changing metadata
  assert.equal(f.store.get('branch',b.id).name,'Original');assert.match(f.smart.status().error,/Cannot reach/);assert.equal(f.smart.status().pending,1);
  f.smart.retry();await f.flush();assert.equal(f.store.get('branch',b.id).name,'Retried');assert.equal(f.smart.status().pending,0);
 });
-test('existing sessions and fork points are baselined when enabling; manually named nodes are preserved',async t=>{
+test('enabling backfills existing sessions and keeps manually named nodes',async t=>{
  const f=setup(t);await f.smart.save({classify:false,nameNodes:false});
  const p=f.store.project('Existing'),b=f.store.branch(p.id,'Existing','codex',codexSample(f.root,[['Start','Done'],['Later','Answer']]));
  const child=f.store.fork(b.id,{name:'Child',end:f.store.detail(b.id).checkpoints[0].end});
  f.store.ingest(child.id,f.store.raw(child.head)+codexTurn('Other','Answer').map(v=>JSON.stringify(v)+'\n').join(''),child.head,{});
  f.store.branch(null,'Old ungrouped','claude',claudeSample(f.root,[['Hello','Hi']]));
- await f.smart.save({classify:true,nameNodes:true});f.smart.observe();assert.equal(f.smart.status().pending,0);
+ await f.smart.save({classify:true,nameNodes:true});f.smart.observe();assert.ok(f.smart.status().pending>=3);
  const g=f.store.treeGraph(b.id),split=g.nodes.find(n=>n.childIds.length>1);f.store.organize(b.id,{version:g.version,pathId:b.id,nodeId:split.id,action:'rename',name:'Manual title'});
  f.smart.data.trees={};f.smart.observe();await f.flush();assert.equal(f.store.treeGraph(b.id).nodes.find(n=>n.id===split.id).name,'Manual title');
 });
 test('new empty sessions remain eligible until their first real exchange arrives',async t=>{
  const f=setup(t),raw=codexSample(f.root,[['First request','Answer']]),b=f.store.branch(null,'Empty','codex',raw.split('\n')[0]+'\n');
- f.store.put('branch',{...b,excluded:'empty'});f.smart.observe();assert.ok(f.smart.data.waiting.includes(b.id));assert.equal(f.smart.status().pending,0);
+ f.store.put('branch',{...b,excluded:'empty'});f.smart.observe();assert.ok(f.smart.data.waiting.includes(b.id));assert.equal(f.smart.status().pending,0);assert.equal(f.smart.status().waitingForEvidence,1);
  f.store.ingest(b.id,raw,b.head,{});f.store.put('branch',{...f.store.get('branch',b.id),excluded:null});f.smart.observe();await f.flush();assert.equal(f.store.get('branch',b.id).name,'New name');
 });
 test('API key is verified before replacement and disabling removes queued jobs',async t=>{
@@ -103,7 +103,7 @@ test('API key is verified before replacement and disabling removes queued jobs',
  await f.smart.save({apiKey:'new-local-secret'});assert.equal(privateFile(f.smart.file),true);assert.equal(f.smart.status().classify,true);assert.equal(f.smart.status().nameNodes,true);
 });
 test('Claude fork evidence excludes sibling replies and names only the shared segment',async t=>{
- let observed;const f=setup(t,async(k,kind,e)=>{observed=e;return {name:'Shared result'};}),p=f.store.project('Paper');
+ let observed;const f=setup(t,async(k,kind,e)=>{observed=e;return {name:'Shared result'};});await f.smart.save({classify:false});const p=f.store.project('Paper');
  const b=f.store.branch(p.id,'Claude','claude',claudeSample(f.root,[['First task','Shared answer'],['Sibling task','Sibling answer']]));f.smart.observe();
  const child=f.store.fork(b.id,{name:'Other path',end:f.store.detail(b.id).checkpoints[0].end});
  f.smart.observe();await f.flush();assert.deepEqual(observed,{user:'First task',assistant:'Shared answer'});
@@ -150,4 +150,32 @@ test('removing a key aborts every active request and prevents late names',async 
  f.smart.observe();await waitFor(()=>f.smart.status().activeRequests===2);const pending=f.smart.pending;
  await f.smart.save({removeKey:true});await pending;
  assert.equal(aborted,2);assert.equal(f.smart.status().pending,0);assert.equal(f.smart.status().activeRequests,0);assert.equal(f.smart.status().error,null);assert.ok(f.store.all('branch').every(b=>b.name.startsWith('Original')));
+});
+
+test('session evidence waits for a forks own exchange and ignores page metadata',()=>{
+ const records=[row('user','Parent task'),row('assistant','Parent result'),row('user','<external_codex_apps_open_page>{"page_id":null}</external_codex_apps_open_page>'),row('user','Branch request'),row('assistant','Branch result'),row('user','Later unrelated request'),row('assistant','Unrelated result')];
+ assert.deepEqual(sessionEvidence(records,'codex',2),{user:'Branch request',assistant:'Branch result'});
+ assert.equal(sessionEvidence(records.slice(0,4),'codex',2),null);
+ assert.equal(sessionEvidence(records.slice(0,2),'codex',2),null);
+});
+test('already-seen filed sessions and fork suffixes receive one model name without moving projects',async t=>{
+ const requests=[],f=setup(t,async(_key,kind,e)=>{requests.push({kind,...e});return {name:e.user==='Own branch request'?'Branch-specific name':'Root-specific name'};});
+ const p=f.store.project('Filed'),root=f.store.branch(p.id,'Native (5)','codex',codexSample(f.root,[['Root request','Root reply'],['Later topic','Later reply']]));
+ const child=f.store.fork(root.id,{name:'Native (6)',end:f.store.detail(root.id).checkpoints[0].end});f.store.ingest(child.id,f.store.raw(child.head)+codexTurn('Own branch request','Own branch reply').map(v=>JSON.stringify(v)+'\n').join(''),child.head,{});
+ f.smart.data.seen[root.id]=true;f.smart.data.seen[child.id]=true;await f.smart.save({nameNodes:false});f.smart.observe();await f.flush();
+ assert.deepEqual(requests.map(r=>r.kind),['session','session']);assert.equal(f.store.get('branch',child.id).name,'Branch-specific name');assert.equal(f.store.get('branch',root.id).name,'Root-specific name');assert.ok([root,child].every(b=>f.store.get('branch',b.id).projectId===p.id&&f.store.get('branch',b.id).automaticName));
+ f.smart.observe();await f.flush();assert.equal(requests.length,2);
+});
+test('manual names receive a recorded model result but remain unchanged, including same-text confirmation',async t=>{
+ const f=setup(t,async()=>({name:'Model suggestion'})),p=f.store.project('Filed'),b=f.store.branch(p.id,'Native','codex',codexSample(f.root,[['Request','Reply']]));f.store.edit(b.id,{name:'My name'});f.smart.observe();await f.flush();
+ assert.equal(f.store.get('branch',b.id).name,'My name');assert.equal(f.store.get('branch',b.id).automaticName.name,'Model suggestion');
+ const other=f.store.branch(p.id,'Native 2','codex',codexSample(f.root,[['Second','Reply']]));f.smart.observe();await f.flush();assert.equal(f.store.get('branch',other.id).nameOrigin,'automatic');f.store.edit(other.id,{name:'Model suggestion'});assert.equal(f.store.get('branch',other.id).nameOrigin,'manual');
+});
+test('an automatically named long node is renamed when a new fork shortens its range',async t=>{
+ const seen=[],f=setup(t,async(_key,kind,e)=>{assert.equal(kind,'node');seen.push(e);return {name:e.assistant.includes('Release done')?'Release complete':'Story revision'};});await f.smart.save({classify:false});
+ const root=f.store.branch(null,'Source','codex',codexSample(f.root,[['Implement release','Release done'],['Draft story','Story done'],['Later','Later answer']]));
+ const first=f.store.fork(root.id,{name:'First fork',end:f.store.detail(root.id).checkpoints[1].end});f.smart.observe();await f.flush();let graph=f.store.treeGraph(root.id);assert.equal(graph.nodes[0].name,'Story revision');
+ const second=f.store.fork(root.id,{name:'Release fork',end:f.store.detail(root.id).checkpoints[0].end});f.smart.observe();await f.flush();graph=f.store.treeGraph(root.id);
+ assert.equal(graph.nodes[0].name,'Release complete');assert.ok(seen.some(e=>e.user==='Implement release'&&e.assistant==='Release done'));assert.ok(!graph.paths.find(p=>p.branchId===second.id).messages.some(m=>m.text==='Story done'));
+ const node=graph.nodes[0];f.store.organize(root.id,{version:graph.version,pathId:root.id,nodeId:node.id,action:'rename',name:'My release label'});f.smart.data.trees={};f.smart.observe();await f.flush();assert.equal(f.store.treeGraph(root.id).nodes[0].name,'My release label');
 });

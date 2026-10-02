@@ -221,13 +221,13 @@ export function treeGraph(store, branchId, view = 'all') {
     return { ...graph, view, projectArchived: !!projectArchived, paths, nodes, edges: graph.edges.filter(e => nodeIds.has(e.from) && nodeIds.has(e.to)), assignments: Object.fromEntries(Object.entries(graph.assignments).filter(([id]) => chats.has(id))), name: paths.find(p => p.branchId === root.id)?.name || paths[0]?.name || graph.name, chatCount: chats.size, pendingCount: nodes.filter(n => n.pending).reduce((sum, n) => sum + n.count, 0) };
 }
 
-export function organize(store, branchId, { version, pathId, chatIds, action, name, nodeId }) {
+export function organize(store, branchId, { version, pathId, chatIds, action, name, nodeId, nameOrigin, evidenceHash }) {
     return store.transaction(() => {
         const graph = treeGraph(store, branchId, action === 'rename' ? 'all' : 'in-use');
         assert(version === graph.version, 'Conversation changed. Refresh before organizing.', 409);
         const path = graph.paths.find(p => p.branchId === pathId);
         assert(path && (action === 'rename' || !path.archived && !(graph.projectId && store.get('project', graph.projectId).archived)), 'Restore this session before organizing.');
-        if (action === 'rename') { const node = graph.nodes.find(n => n.id === nodeId && n.branchIds.includes(pathId)); assert(node, 'Select a node to rename.'); if (node.name && node.name === String(name || '').trim()) return { layoutHead: graph.layoutHead }; if (node.empty) { store.edit(pathId, { endpointName: name }); return { layoutHead: graph.layoutHead }; } chatIds = node.chatIds; }
+        if (action === 'rename') { const node = graph.nodes.find(n => n.id === nodeId && n.branchIds.includes(pathId)); assert(node, 'Select a node to rename.'); if (node.name && node.name === String(name || '').trim() && graph.assignments[node.chatIds[0]]?.nameOrigin!=='automatic' && nameOrigin!=='automatic') return { layoutHead: graph.layoutHead }; if (node.empty) { store.edit(pathId, { endpointName: name }); return { layoutHead: graph.layoutHead }; } chatIds = node.chatIds; }
         const selected = new Set(chatIds);
         assert(Array.isArray(chatIds) && selected.size && selected.size === chatIds.length, 'Select chats to organize.');
         const route = graph.paths.find(p => p.branchId === pathId);
@@ -246,7 +246,7 @@ export function organize(store, branchId, { version, pathId, chatIds, action, na
             }
         }
         const root = store.get('branch', graph.id), assignments = { ...graph.assignments };
-        const annotation = action !== 'dissolve' ? { id: newId(), name: String(name || '').trim() } : null;
+        const annotation = action !== 'dissolve' ? { id: newId(), name: String(name || '').trim(), ...(nameOrigin==='automatic'?{nameOrigin,chatHash:hash(JSON.stringify([...selected])),evidenceHash}: {}) } : null;
         if (annotation) assert(annotation.name.length > 0 && annotation.name.length <= 200, 'Enter a node title (1–200 characters).');
         for (const id of selected) assignments[id] = annotation;
         const layout = { id: newId(), rootId: root.id, parent: root.layoutHead || null, assignments, createdAt: nextModifiedAt(...treeMembers(store, root.id)) };

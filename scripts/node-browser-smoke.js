@@ -116,7 +116,7 @@ try{
    assert.equal(app.settings.status().preferences.localUpdateMinutes,7);
    assert.ok(await evaluate('(()=>{const a=document.querySelector("[name=intelligenceKey]").getBoundingClientRect(),b=document.querySelector("#save-intelligence-key").getBoundingClientRect();return b.left>=a.right&&Math.abs(a.bottom-b.bottom)<2})()'));
    assert.equal(await evaluate('!!document.querySelector("#language")'),false);
-   assert.ok(await evaluate('(()=>{const h=document.querySelector(".settings-section-heading h3").getBoundingClientRect(),b=document.querySelector("#modify-connection").getBoundingClientRect();return b.left>h.right&&Math.abs(h.y+h.height/2-b.y-b.height/2)<2})()'));
+   assert.ok(await evaluate('(()=>{const h=document.querySelector("#modify-connection").closest(".settings-section-heading").querySelector("h3").getBoundingClientRect(),b=document.querySelector("#modify-connection").getBoundingClientRect();return b.left>h.right&&Math.abs(h.y+h.height/2-b.y-b.height/2)<2})()'));
    assert.ok(await evaluate('[...document.querySelectorAll(".settings-card")].every(c=>{const style=getComputedStyle(c),h=c.querySelector("h3");return style.paddingTop===style.paddingBottom&&style.paddingTop===style.paddingLeft&&getComputedStyle(h).marginTop==="0px"})'));
    assert.ok(await evaluate('[...document.querySelectorAll(".settings-card")].every(c=>{const v=[...c.children].filter(e=>getComputedStyle(e).display!=="none"),r=c.getBoundingClientRect();return Math.abs((v[0].getBoundingClientRect().top-r.top)-(r.bottom-v.at(-1).getBoundingClientRect().bottom))<2})'));
    fs.mkdirSync('test-results',{recursive:true});fs.writeFileSync('test-results/settings-spacing.png',Buffer.from((await call('Page.captureScreenshot',{format:'png'})).data,'base64'));

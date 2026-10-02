@@ -1464,3 +1464,19 @@ body{height:100dvh;display:flex;flex-direction:column;overflow:hidden}
 #pending-uploads .pending-summary{grid-column:1/-1;min-width:0}
 #pending-uploads .pending-summary time{float:right;margin-left:10px;font-size:10px;line-height:18px;color:var(--muted);white-space:nowrap}
 #pending-uploads .pending-summary .pending-changes{margin:0;padding-left:15px}
+
+/* Text remains quiet until hover/focus; one portal editor serves all title types. */
+.editable-name{border:1px solid transparent;border-radius:4px;padding:1px 3px;margin:-1px -3px;cursor:text;transition:border-color .12s,background .12s}
+.editable-name:hover,button:focus-visible>.editable-name,button:focus-visible .editable-name{border-color:#a5bac8;background:#f5f9fc}
+.inline-name-editing{visibility:hidden}
+.inline-name-editor{position:fixed;z-index:220;display:flex;align-items:stretch;gap:0;margin:0;padding:0;border:1px solid #6f98ae;border-radius:5px;background:#fff;color:#294354;box-shadow:0 2px 8px #173a4b18}
+.inline-name-editor input{width:0;min-width:0;flex:1;border:0;border-radius:5px;padding:3px 6px;outline:none;background:transparent;font:inherit;font-size:13px;color:inherit}
+.inline-name-editor button{flex:0 0 28px;width:28px;padding:2px;border:0;border-left:1px solid #d6e1e8;border-radius:0 4px 4px 0;background:#edf5f8;color:#347a68;font-size:16px}
+.inline-name-editor button:hover{background:#dfedf2}
+.inline-name-error:not(:empty){position:absolute;top:100%;left:0;right:0;padding:5px 7px;background:#fff4ee;border:1px solid #e5cabb;color:#8b4733;font-size:12px;border-radius:4px}
+.detail-heading #source{display:inline-flex;align-items:center;gap:5px;border:1px solid #c6d4de;border-radius:6px;padding:5px 8px;background:#fff;color:#486576;cursor:pointer}
+.detail-heading #source:hover{background:#eaf2f7;border-color:#91afc1}
+.detail-heading #source .icon{width:14px;height:14px}
+.source-entry dl{display:grid;grid-template-columns:auto 1fr;gap:4px 12px;margin:6px 0}.source-entry dt{color:#6e8090}.source-entry dd{margin:0;overflow-wrap:anywhere}
+
+.setting-state{font-size:11px;color:#70808b}.setting-state[data-state=on]{color:#28724f}.setting-state[data-state=saving]{color:#3c728d}.setting-state[data-state=error]{color:#a54b34}

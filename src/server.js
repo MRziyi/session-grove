@@ -1,3 +1,4 @@
+import {Autostart} from './autostart.js';
 import {installedClientLinks} from './client-links.js';
 import {repairLegacyRecoveries} from './recovery-lineage.js';
 import { discardChanges } from './discard-changes.js';
@@ -32,10 +33,10 @@ import { metadata, treeMembers } from './organization.js';
 import { isActive } from './workspace.js';
 import { assert, atomic, json, text, now, id, hash } from './util.js';
 const webRoot = fileURLToPath(new URL('../web/', import.meta.url));
-export function createApp({ root, roots, guard, demo = false }) {
+export function createApp({ root, roots, guard, demo = false, startupOptions = {} }) {
     const store = new Store(root), native = new Native(store, { roots, guard }), token = randomBytes(32).toString('hex');
     const lineageRepair=repairLegacyRecoveries(store);
-    const webAssets = new Map(['index.html', 'app.js', 'library-view.js', 'session-drag.js', 'select.js', 'markdown.js', 'i18n.js', 'style.css'].map(file => [file, fs.readFileSync(path.join(webRoot, file))]));
+    const webAssets = new Map(['index.html', 'app.js', 'library-view.js', 'session-drag.js', 'inline-name.js', 'select.js', 'markdown.js', 'i18n.js', 'style.css'].map(file => [file, fs.readFileSync(path.join(webRoot, file))]));
     const configFile = path.join(root, 'git-sync.json');
     const diagnostics = new Diagnostics(root);
     if(lineageRepair.repaired.length||lineageRepair.skipped.length)diagnostics.record('recovery-lineage-repair',lineageRepair);
@@ -56,6 +57,7 @@ export function createApp({ root, roots, guard, demo = false }) {
     const streams = new Set(); let updateOperation = null, trashOperation = null, trashPromise = null;
     let stopping = false, discardPromise = null, discardOperation = null, discardRequest = null;
     const instance = id(),clientLinks=installedClientLinks();
+    const autostart=new Autostart({...startupOptions,root,roots:native.roots,demo,port:()=>server.address()?.port||7421});
     const operation = (kind, value) => { for (const res of streams) res.write('event: operation\ndata: ' + JSON.stringify({kind, ...value}) + '\n\n'); };
     autoSync.onOperation = value => operation('sync', {...value, status:autoSync.status()});
     const intelligence = new Intelligence(store, { onChange: id => autoSync.schedule([id]), onStatus: value => operation('intelligence', value), canApply: () => !capturePromise && !trashPromise && !discardPromise && !stopping });
@@ -77,7 +79,7 @@ export function createApp({ root, roots, guard, demo = false }) {
             assert(!req.headers['sec-fetch-site'] || ['same-origin', 'none'].includes(req.headers['sec-fetch-site']), '不允许跨站请求', 403);
             const url = new URL(req.url, `http://${expected}`), route = url.pathname;
             if (req.method === 'GET' && route === '/api/service') return send(200, { pid: process.pid, instance, stopping });
-            if (req.method === 'GET' && ['/', '/app.js', '/library-view.js', '/session-drag.js', '/i18n.js', '/select.js', '/markdown.js', '/style.css'].includes(route)) {
+            if (req.method === 'GET' && ['/', '/app.js', '/library-view.js', '/session-drag.js', '/inline-name.js', '/i18n.js', '/select.js', '/markdown.js', '/style.css'].includes(route)) {
                 const file = route === '/' ? 'index.html' : route.slice(1);
                 return send(200, webAssets.get(file), file.endsWith('.css') ? 'text/css' : file.endsWith('.js') ? 'text/javascript' : 'text/html; charset=utf-8');
             }
@@ -153,7 +155,7 @@ export function createApp({ root, roots, guard, demo = false }) {
             }
 
             if (req.method === 'POST' && route === '/api/synchronize/transfer') return send(202, autoSync.startTransfer(body.direction));
-            if (req.method === 'GET' && route === '/api/trash') return send(200, trashSnapshot());
+            if (req.method === 'GET' && route === '/api/trash') return send(200, {...trashSnapshot(),stateVersion:timing().stateVersion});
             if (req.method === 'POST' && route === '/api/synchronize/plan') return send(200, await autoSync.prepareSync());
             if (req.method === 'POST' && route === '/api/synchronize/start') return send(202, autoSync.startSync(body.planId, body.confirmed));
             if (req.method === 'GET' && route === '/api/state')
@@ -161,7 +163,8 @@ export function createApp({ root, roots, guard, demo = false }) {
             if (req.method === 'GET' && route === '/api/diagnostics') return send(200, { ...diagnostics.report(), git: { commit: autoSync.cloud.connection?.remote.head || null, progress: autoSync.status().operation?.progress || null }, fallbackMinutes: autoSync.status().fallbackMinutes });
             if (req.method === 'GET' && route === '/api/discover')
                 return send(200, native.discover());
-            if (req.method === 'GET' && ['/api/webdav', '/api/settings'].includes(route)) return send(200, { ...settings.status(), intelligence: intelligence.status(), context:contextSettings.status() });
+            if (req.method === 'GET' && ['/api/webdav', '/api/settings'].includes(route)) return send(200, { ...settings.status(), intelligence: intelligence.status(), context:contextSettings.status(),autostart:await autostart.status() });
+            if (req.method === 'POST' && route === '/api/settings/autostart') return send(200,await autostart.set(body.enabled));
             if (req.method === 'POST' && route === '/api/settings/context') return send(200,contextSettings.save(body));
             if (req.method === 'POST' && route === '/api/settings/intelligence') return send(200, await intelligence.save(body));
             if (req.method === 'POST' && route === '/api/intelligence/retry') return send(200, intelligence.retry());
@@ -176,7 +179,7 @@ export function createApp({ root, roots, guard, demo = false }) {
             }
             const tree = route.match(/^\/api\/trees\/([^/]+)$/);
             if (req.method === 'GET' && tree) { await autoSync.openTree(tree[1], { check: url.searchParams.get('check') === '1' }); const graph = store.treeGraph(tree[1], url.searchParams.get('view') || 'in-use'); return send(200, req.headers['x-grove-graph'] === 'shared-messages-v1' ? store.memo('wire:' + graph.id + ':' + graph.view, () => packGraph(graph)) : graph); }
-            if (req.method === 'POST' && tree) return send(200, store.organize(tree[1], body));
+            if (req.method === 'POST' && tree) return send(200, store.organize(tree[1], {...body,nameOrigin:'manual'}));
             if(req.method==='POST'&&route==='/api/trash'){
                 const requestedTrees=body.itemIds||[];for(const id of requestedTrees)await autoSync.openTree(id);
                 const archived=b=>b.archived||b.projectId&&store.get('project',b.projectId).archived;
@@ -352,6 +355,8 @@ export function createApp({ root, roots, guard, demo = false }) {
             const project = route.match(/^\/api\/projects\/([^/]+)$/);
             if (req.method === 'PATCH' && project) {
                 const p = store.get('project', project[1]), previous = structuredClone(p);
+                assert(!p.builtin&&project[1]!==INBOX_ID,'The built-in project cannot be renamed.');
+                assert(!body.metaVersion||body.metaVersion===p.metaVersion,'The name changed. Refresh and try again.',409);
                 if ('name' in body)
                     p.name = text(body.name);
                 if ('description' in body)
@@ -362,6 +367,7 @@ export function createApp({ root, roots, guard, demo = false }) {
             if (req.method === 'POST' && route === '/api/branches')
                 return send(400, { error: 'Start new sessions in Codex or Claude Code.' });
             if (req.method === 'PATCH' && detail) {
+                assert(!body.metaVersion||body.metaVersion===store.get('branch',detail[1]).metaVersion,'The name changed. Refresh and try again.',409);
                 const b = store.edit(detail[1], body);
                 if (body.archived)
                     native.setActive(b.id, null, false);
@@ -479,14 +485,14 @@ export function createApp({ root, roots, guard, demo = false }) {
     }
     configureCapture();
     server.on('close', () => { clearInterval(interval);clearTimeout(expiryTimer); autoSync.close(); store.close(); });
-    const app = { server, store, native, autoSync, diagnostics, settings, intelligence, token, instance, quiesce() {
+    const app = { server, store, native, autoSync, diagnostics, settings, intelligence, autostart, token, instance, quiesce() {
         stopping = true; intelligence.close(); clearTimeout(interval);clearTimeout(expiryTimer); autoSync.closed = true;
         clearTimeout(autoSync.timer); clearTimeout(autoSync.retryTimer); clearTimeout(autoSync.interval);
         if (settings.job?.state !== 'running') autoSync.cloud.connection?.dav.controller?.abort(new Error('Server is stopping.'));
     }, close(callback) {
         app.quiesce();
         for(const res of streams)res.end(); streams.clear();
-        if(capturePromise||trashPromise||intelligence.pending||discardRequest)Promise.allSettled([capturePromise,trashPromise,intelligence.pending,discardRequest]).finally(()=>server.close(callback)); else server.close(callback);
+        if(capturePromise||trashPromise||intelligence.pending||discardRequest||autostart.pending)Promise.allSettled([capturePromise,trashPromise,intelligence.pending,discardRequest,autostart.pending]).finally(()=>server.close(callback)); else server.close(callback);
     } };
     return app;
 }

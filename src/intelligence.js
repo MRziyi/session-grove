@@ -1,13 +1,14 @@
 import {writePrivateFile} from './private-file.js';
 import path from 'node:path';
-import { json, assert, hash } from './util.js';
+import { json, assert, hash, now } from './util.js';
 import { rootOf } from './organization.js';
 import { isTrashed } from './trash.js';
 import { INBOX_ID } from './inbox.js';
 import { BACKGROUND_PROJECT } from './session-kind.js';
-import { namingEvidence } from './intelligence-text.js';
+import { namingEvidence, sessionEvidence } from './intelligence-text.js';
 import { MODEL, requestName } from './intelligence-api.js';
 const ungrouped = b => !b.projectId || b.projectId === INBOX_ID;
+const nameable=(store,b)=>b&&!b.synthetic&&!b.excluded&&!b.background&&!b.scheduled&&!isTrashed(store,b.id);
 const active = (store,b) => b && !b.archived && !b.excluded && !isTrashed(store,b.id) && !(b.projectId && store.find('project',b.projectId)?.archived);
 export function nodeEvidence(store, graph, node) {
     for (const branchId of node.branchIds) {
@@ -26,12 +27,12 @@ export class Intelligence {
         this.file=path.join(store.root,'intelligence.json');
         this.data=store.local('intelligenceState') || {seen:{},trees:{},waiting:[],jobs:[]};
         this.running=false;this.closed=false;this.error=this.data.error||null;this.timer=null;this.generation=0;this.tasks=new Map();this.lastStartedAt=0;
-        // Seed existing sessions and fork points without retroactively renaming the library.
-        this.observe(false);
+        // Preserve existing node labels; backfill missing session-name provenance when enabled.
+        this.observe(false);this.kick();
     }
     config(){return {classify:false,nameNodes:false,concurrency:2,minIntervalSeconds:0,...json(this.file,{})};}
     get pending(){return this.tasks.size?Promise.allSettled([...this.tasks.values()].map(task=>task.promise)):null;}
-    status(){const c=this.config();return {model:MODEL,hasKey:!!c.apiKey,classify:c.classify,nameNodes:c.nameNodes,concurrency:c.concurrency,minIntervalSeconds:c.minIntervalSeconds,activeRequests:this.tasks.size,running:this.running,pending:this.data.jobs.length,phase:this.phase||null,current:this.current||null,error:this.error,completed:this.completed||0};}
+    status(){const c=this.config();return {model:MODEL,hasKey:!!c.apiKey,classify:c.classify,nameNodes:c.nameNodes,concurrency:c.concurrency,minIntervalSeconds:c.minIntervalSeconds,activeRequests:this.tasks.size,running:this.running,pending:this.data.jobs.length,waitingForEvidence:c.classify?this.data.waiting.filter(id=>!this.data.jobs.some(j=>j.kind!=='node'&&j.id===id)).length:0,phase:this.phase||null,current:this.current||null,error:this.error,completed:this.completed||0};}
     publish(){this.onStatus(this.status());}
     persist(){this.data.error=this.error;this.store.local('intelligenceState',this.data);}
     async save(body){
@@ -45,8 +46,8 @@ export class Intelligence {
         assert(!(next.classify||next.nameNodes)||next.apiKey,'Add an API key first.');
         writePrivateFile(this.file,JSON.stringify(next));
         if(['apiKey','classify','nameNodes'].some(key=>next[key]!==previous[key])){this.generation++;for(const task of this.tasks.values())task.controller.abort();}
-        if(next.classify&&!previous.classify || next.nameNodes&&!previous.nameNodes)this.observe(false);
-        this.error=null;this.data.jobs=this.data.jobs.filter(j=>next[j.kind==='classify'?'classify':'nameNodes']);
+        if(next.classify&&!previous.classify || next.nameNodes&&!previous.nameNodes)this.observe();
+        this.error=null;this.data.jobs=this.data.jobs.filter(j=>next[j.kind==='node'?'nameNodes':'classify']);
         this.persist();this.publish();this.kick();return this.status();
     }
     observe(enqueue=true){
@@ -57,24 +58,28 @@ export class Intelligence {
             this.data.seen[b.id]=true;
             if(active(this.store,b)&&!b.synthetic&&b.head){const root=rootOf(this.store,b.id);if(!roots.has(root.id))roots.set(root.id,[]);roots.get(root.id).push(b);}
         }
-        this.data.waiting=[...new Set(this.data.waiting)].filter(id=>{const b=this.store.find('branch',id);return b&&!b.archived&&!isTrashed(this.store,b.id)&&ungrouped(b)&&!b.parentId;});
-        if(enqueue&&c.classify)for(const id of this.data.waiting){
-            if(this.data.jobs.some(j=>j.key==='classify:'+id))continue;
-            const b=this.store.get('branch',id);if(!active(this.store,b)||!this.store.find('revision',b.head))continue;
-            const evidence=namingEvidence(this.store.parsed(b.head,b.agent).records,b.agent);
-            if(evidence)this.data.jobs.push({key:'classify:'+id,kind:'classify',id,name:b.name,metaVersion:b.metaVersion,userHash:hash(evidence.user)});
+        // Seeing or filing a session is not evidence of a successful naming pass.
+        // Every normal session receives one result, including old sessions and forks.
+        this.data.waiting=branches.filter(b=>(nameable(this.store,b)||b.excluded==='empty'&&!isTrashed(this.store,b.id))&&!b.automaticName).map(b=>b.id);
+        if(c.classify)for(const id of this.data.waiting){
+            if(this.data.jobs.some(j=>j.id===id&&j.kind!=='node'))continue;
+            const b=this.store.get('branch',id);if(!this.store.find('revision',b.head))continue;
+            const evidence=sessionEvidence(this.store.parsed(b.head,b.agent).records,b.agent,b.forkEnd||0);
+            const kind=active(this.store,b)&&ungrouped(b)&&!b.parentId&&!b.groveNamed?'classify':'session';
+            if(evidence)this.data.jobs.push({key:kind+':'+id,kind,id,name:b.name,metaVersion:b.metaVersion,userHash:hash(evidence.user)});
         }
         // Only build changed graphs while node naming is enabled.
         if(c.nameNodes)for(const [id,members] of roots){
-            const signature=hash(JSON.stringify(members.map(b=>[b.id,b.head,b.layoutHead,b.endpointName,b.parentId,b.forkEnd])));
+            const signature=hash(JSON.stringify([this.store.get('branch',id).layoutHead,members.map(b=>[b.id,b.head,b.layoutHead,b.endpointName,b.parentId,b.forkEnd])]));
             if(this.data.trees[id]?.signature===signature)continue;
             if(members.length<2){this.data.trees[id]={signature,splits:[]};continue;}
             let graph;try{graph=this.store.treeGraph(id,'in-use');}catch{continue;}
-            const before=new Set(this.data.trees[id]?.splits||[]),splits=graph.nodes.filter(n=>n.childIds.length>1);
+            const before=new Set(this.data.trees[id]?.splits||[]),splits=graph.nodes.filter(n=>n.childIds.length>1||graph.assignments[n.chatIds[0]]?.nameOrigin==='automatic');
             for(const node of splits){
-                if(!enqueue||before.has(node.id)||node.name||node.empty)continue;
+                const annotation=graph.assignments[node.chatIds[0]],changed=annotation?.nameOrigin==='automatic'&&annotation.chatHash!==hash(JSON.stringify(node.chatIds));
+                if(!enqueue||node.empty||!changed&&(before.has(node.id)||node.name))continue;
                 const key='node:'+id+':'+node.id;
-                if(!this.data.jobs.some(j=>j.key===key))this.data.jobs.push({key,kind:'node',id,nodeId:node.id,chats:node.chatIds});
+                if(!this.data.jobs.some(j=>j.key===key))this.data.jobs.push({key,kind:'node',id,nodeId:node.id,chats:node.chatIds,name:node.name||null});
             }
             this.data.trees[id]={signature,splits:splits.map(n=>n.id)};
         }
@@ -82,16 +87,17 @@ export class Intelligence {
     }
     prepare(job){
         const b=this.store.find('branch',job.id);
-        if(!active(this.store,b))return null;
-        if(job.kind==='classify'){
-            if(!ungrouped(b)||b.parentId||b.name!==job.name||b.metaVersion!==job.metaVersion)return null;
-            const parsed=this.store.parsed(b.head,b.agent),evidence=namingEvidence(parsed.records,b.agent);
+        if(job.kind==='node'?!b:!nameable(this.store,b))return null;
+        if(job.kind!=='node'){
+            if(b.automaticName||b.name!==job.name||b.metaVersion!==job.metaVersion)return null;
+            if(job.kind==='classify'&&(!ungrouped(b)||b.parentId))return null;
+            const parsed=this.store.parsed(b.head,b.agent),evidence=sessionEvidence(parsed.records,b.agent,b.forkEnd||0);
             if(!evidence||hash(evidence.user)!==job.userHash)return null;
             evidence.workspace=parsed.cwd?.split(/[\\/]/).filter(Boolean).slice(-2).join('/')||'';
             return {evidence,branch:b,projects:this.store.all('project').filter(p=>!p.archived&&p.id!==BACKGROUND_PROJECT&&p.id!==INBOX_ID).map(p=>({id:p.id,name:p.name}))};
         }
         const graph=this.store.treeGraph(job.id,'in-use'),node=graph.nodes.find(n=>n.id===job.nodeId);
-        if(!node||node.name||node.childIds.length<2||JSON.stringify(node.chatIds)!==JSON.stringify(job.chats))return null;
+        if(!node||(node.name||null)!==(job.name||null)||JSON.stringify(node.chatIds)!==JSON.stringify(job.chats))return null;
         const evidence=nodeEvidence(this.store,graph,node);
         return evidence?{...evidence,graph,node}:null;
     }
@@ -109,7 +115,7 @@ export class Intelligence {
         if(!this.canApply())return;
         const job=this.data.jobs.find(job=>!this.tasks.has(job.key));if(!job)return;
         const c=this.config();if(!c.apiKey||this.tasks.size>=c.concurrency)return;
-        if(!c[job.kind==='classify'?'classify':'nameNodes']){this.finish(job);return;}
+        if(!c[job.kind==='node'?'nameNodes':'classify']){this.finish(job);return;}
         let prepared;
         try{prepared=this.prepare(job);}catch{prepared=null;}
         if(!prepared){this.finish(job);return;}
@@ -122,20 +128,31 @@ export class Intelligence {
             while(!this.canApply()) {await new Promise(r=>setTimeout(r,100));if(this.closed||generation!==this.generation)return;}
             const latest=this.prepare(job);
             const evidenceHash=value=>hash(JSON.stringify(job.kind==='classify'?{user:value.user,workspace:value.workspace}:value));
-            if(!latest||evidenceHash(latest.evidence)!==evidenceHash(prepared.evidence)){this.finish(job);return;}
-            if(job.kind==='classify'){
-                if(result.project_id&&!latest.projects.some(p=>p.id===result.project_id)){this.finish(job);return;}
+            if(!latest||evidenceHash(latest.evidence)!==evidenceHash(prepared.evidence)){
+                // A manual rename/move wins, but a completed model pass is still
+                // recorded rather than silently scheduling the same paid work again.
+                const branch=this.store.find('branch',job.id);
+                if(job.kind!=='node'&&nameable(this.store,branch)&&!branch.automaticName){
+                    const evidence=sessionEvidence(this.store.parsed(branch.head,branch.agent).records,branch.agent,branch.forkEnd||0);
+                    if(evidence&&hash(evidence.user)===job.userHash){this.recordName(job.id,result,prepared.evidence);this.onChange(job.id);}
+                }
+                this.finish(job);return;
+            }
+            if(job.kind!=='node'){
+                if(job.kind==='classify'&&result.project_id&&!latest.projects.some(p=>p.id===result.project_id)){this.finish(job);return;}
                 // Keep names established manually; classification changes Grove metadata only.
-                if(result.project_id)this.store.moveItems({itemIds:[job.id],projectId:result.project_id});
-                else if(result.new_project){const existing=latest.projects.find(p=>p.name.normalize('NFKC').toLocaleLowerCase()===result.new_project.trim().normalize('NFKC').toLocaleLowerCase());this.store.moveItems({itemIds:[job.id],...(existing?{projectId:existing.id}:{projectName:result.new_project.trim()})});}
-                if(!latest.branch.groveNamed)this.store.edit(job.id,{name:result.name});
-            }else this.store.organize(job.id,{version:latest.graph.version,pathId:latest.branchId,nodeId:latest.node.id,action:'rename',name:result.name});
+                if(job.kind==='classify'&&result.project_id)this.store.moveItems({itemIds:[job.id],projectId:result.project_id});
+                else if(job.kind==='classify'&&result.new_project){const existing=latest.projects.find(p=>p.name.normalize('NFKC').toLocaleLowerCase()===result.new_project.trim().normalize('NFKC').toLocaleLowerCase());this.store.moveItems({itemIds:[job.id],...(existing?{projectId:existing.id}:{projectName:result.new_project.trim()})});}
+                if(!latest.branch.groveNamed||latest.branch.nameOrigin==='automatic')this.store.edit(job.id,{name:result.name},{automatic:true});
+                this.recordName(job.id,result,prepared.evidence);
+            }else this.store.organize(job.id,{version:latest.graph.version,pathId:latest.branchId,nodeId:latest.node.id,action:'rename',name:result.name,nameOrigin:'automatic',evidenceHash:evidenceHash(prepared.evidence)});
             this.onChange(job.id);this.completed=(this.completed||0)+1;this.finish(job);
         }catch(error){if(!this.closed&&generation===this.generation){this.error=error.message;this.errorCurrent=task.name;}}
         finally{this.tasks.delete(job.key);this.updateActivity();this.persist();this.publish();this.kick();}
         })();return task.promise;
     }
-    updateActivity(){const tasks=[...this.tasks.values()];this.running=tasks.length>0;this.phase=tasks.length?(tasks.every(t=>t.job.kind==='node')?'Naming branch point':tasks.every(t=>t.job.kind==='classify')?'Classifying session':'Smart organization'):null;this.current=this.error?this.errorCurrent:tasks.map(t=>t.name).join(' · ')||null;}
-    finish(job){this.data.jobs=this.data.jobs.filter(j=>j.key!==job.key);if(job.kind==='classify')this.data.waiting=this.data.waiting.filter(id=>id!==job.id);this.persist();}
+    recordName(id,result,evidence){this.store.put('branch',{...this.store.get('branch',id),automaticName:{name:result.name,model:MODEL,at:now(),evidenceHash:hash(JSON.stringify(evidence))}});}
+    updateActivity(){const tasks=[...this.tasks.values()];this.running=tasks.length>0;this.phase=tasks.length?(tasks.every(t=>t.job.kind==='node')?'Naming branch point':tasks.every(t=>t.job.kind==='classify')?'Classifying session':tasks.every(t=>t.job.kind==='session')?'Naming session':'Smart organization'):null;this.current=this.error?this.errorCurrent:tasks.map(t=>t.name).join(' · ')||null;}
+    finish(job){this.data.jobs=this.data.jobs.filter(j=>j.key!==job.key);if(job.kind!=='node')this.data.waiting=this.data.waiting.filter(id=>id!==job.id);this.persist();}
     close(){this.closed=true;this.generation++;clearTimeout(this.timer);for(const task of this.tasks.values())task.controller.abort();}
 }
