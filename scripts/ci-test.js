@@ -38,5 +38,10 @@ function run(file){return new Promise(resolve=>{
     resolve();
     });
 });}
-await Promise.all(Array.from({length:browser?1:3},async()=>{for(;;){const file=files[cursor++];if(!file)return;await run(file);}}));
+// Native PowerShell/COM startup and Git integration spawn many subprocesses.
+// Run these Windows suites without competing test workers; keep their existing
+// watchdogs and every assertion, rather than extending a timeout after failure.
+const exclusive=!browser&&process.platform==='win32'?['test/autostart.test.js','test/git-cloud.test.js']:[];
+for(const file of exclusive)await run(file);
+await Promise.all(Array.from({length:browser?1:3},async()=>{for(;;){const file=files[cursor++];if(!file)return;if(exclusive.includes(file))continue;await run(file);}}));
 process.exitCode=failedFiles?1:0;
