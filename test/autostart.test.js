@@ -20,6 +20,11 @@ test('Windows shortcut creation uses literal arguments and stages outside the St
  assert.equal((await m.set(true)).enabled,true);assert.ok(!saved.file.startsWith(directory+path.sep));assert.ok(saved.arguments.includes(windowsArgument(entry)));assert.ok(saved.arguments.endsWith('"--background"'));assert.equal(fs.readFileSync(m.file,'utf8'),'shortcut bytes');assert.ok(!fs.existsSync(saved.file));assert.equal((await m.set(false)).enabled,false);
  assert.equal(windowsArgument('C:\\folder with spaces\\'),'"C:\\folder with spaces\\\\"');
 });
+test('Windows verification failure restores the previous shortcut or leaves startup disabled',async t=>{
+ let saved,failRead=false;const {manager:m}=fixture(t,{platform:'win32',run:async(_command,_args,{env})=>{const c=JSON.parse(env.GROVE_STARTUP_CONFIG);if(c.target){saved=c;fs.writeFileSync(c.file,'new shortcut');return {stdout:''};}if(failRead)throw Error('Read failed');return {stdout:JSON.stringify({description:saved.description})};}});
+ failRead=true;await assert.rejects(m.set(true),/Could not read/);assert.equal(fs.existsSync(m.file),false);
+ failRead=false;await m.set(true);fs.writeFileSync(m.file,'previous shortcut');const run=m.run;m.run=async(...args)=>{const c=JSON.parse(args[2].env.GROVE_STARTUP_CONFIG);if(c.target){const result=await run(...args);failRead=true;return result;}return run(...args);};await assert.rejects(m.set(true),/Could not read/);assert.equal(fs.readFileSync(m.file,'utf8'),'previous shortcut');
+});
 test('Windows native shortcut roundtrip uses the current user without creating an actual login item',{skip:process.platform!=='win32'},async t=>{
  const {manager:m}=fixture(t,{platform:'win32',run:undefined});let stage='enable';
  try{assert.equal((await m.set(true)).enabled,true);stage='status';assert.equal((await m.status()).enabled,true);stage='disable';assert.equal((await m.set(false)).enabled,false);}

@@ -12,6 +12,8 @@
 - Document the default-off Settings startup switch and its On/Off/Updating/Failed states in both READMEs.
 - Keep Trash snapshots and their state version together so a concurrent change cannot leave the list stale.
 
+- Node titles use the full card width, with tool icons overlaid. Compaction boundaries now name completed nodes on standalone paths as well as trees. Settings removes redundant static hints and keeps startup errors beside its status. Windows startup tolerates slower PowerShell initialization and restores the previous shortcut when verification fails.
+
 ## 1.1.0
 
 - Preserve complete tree ancestry and shared node labels when client archives enter Trash. Restore individual paths into their surviving family, including separately restored parents/children and families moved between projects. Repair provable 1.0.x transcript-only recoveries using saved branch identities and verified history, with a local repair journal.

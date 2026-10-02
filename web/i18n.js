@@ -1,5 +1,6 @@
 let language = localStorage.getItem('grove-language') === 'zh' ? 'zh' : 'en';
 const dictionary = {
+"Name branch points and compacted nodes":"为分叉点和压缩完成的节点命名",
 "Update transcription titles on new nodes":"新增节点时更新 Transcription 标题",
 "Transcription updates are unavailable in demo mode.":"演示模式不支持更新 Transcription 标题。",
 "Updating transcription title":"正在更新 Transcription 标题",

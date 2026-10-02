@@ -89,12 +89,16 @@ export class Intelligence {
         if(c.nameNodes)for(const [id,members] of roots){
             const signature=hash(JSON.stringify([this.store.get('branch',id).layoutHead,members.map(b=>[b.id,b.head,b.layoutHead,b.endpointName,b.parentId,b.forkEnd])]));
             if(this.data.trees[id]?.signature===signature)continue;
-            if(members.length<2){this.data.trees[id]={signature,splits:[]};continue;}
             let graph;try{graph=this.store.treeGraph(id,'in-use');}catch{continue;}
-            const before=new Set(this.data.trees[id]?.splits||[]),splits=graph.nodes.filter(n=>n.childIds.length>1||graph.assignments[n.chatIds[0]]?.nameOrigin==='automatic');
+            const compacted=new Set();
+            for(const route of graph.paths)for(const event of route.context.compactions){
+                const last=route.messages.findLast(m=>m.line<event.line),node=last&&graph.nodes.find(n=>n.chatIds.includes(last.id));
+                if(node)compacted.add(node.id);
+            }
+            const before=new Set(this.data.trees[id]?.splits||[]),splits=graph.nodes.filter(n=>n.childIds.length>1||compacted.has(n.id)||graph.assignments[n.chatIds[0]]?.nameOrigin==='automatic');
             for(const node of splits){
                 const annotation=graph.assignments[node.chatIds[0]],changed=annotation?.nameOrigin==='automatic'&&annotation.chatHash!==hash(JSON.stringify(node.chatIds));
-                if(!enqueue||node.empty||!changed&&(before.has(node.id)||node.name))continue;
+                if(!enqueue||node.empty||!changed&&(before.has(node.id)&&!compacted.has(node.id)||node.name))continue;
                 const key='node:'+id+':'+node.id;
                 if(!this.data.jobs.some(j=>j.key===key))this.data.jobs.push({key,kind:'node',id,nodeId:node.id,chats:node.chatIds,name:node.name||null});
             }

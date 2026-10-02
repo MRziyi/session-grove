@@ -188,3 +188,15 @@ test('automatic session titles follow first-node renames while manual session ti
  rename('v1.1 verified');assert.equal(f.store.get('branch',b.id).sessionName,'v1.1 verified');
  f.store.put('branch',{...f.store.get('branch',b.id),sessionName:'My chosen session name',sessionNameOrigin:'manual'});rename('New node label');assert.equal(f.store.get('branch',b.id).sessionName,'My chosen session name');
 });
+
+test('compaction names completed nodes in a single path without renaming its changing tail',async t=>{
+ const calls=[],f=setup(t,async(_key,kind,e)=>{calls.push({kind,e});return {name:'Closed context'};});await f.smart.save({classify:false});
+ const b=f.store.branch(null,'Native title','codex',codexSample(f.root,[['Before compaction','Finished result']]));f.smart.observe();await f.flush();assert.equal(calls.length,0);
+ const compact={type:'compacted',payload:{message:'Context retained',replacement_history:[]}};
+ let head=f.store.get('branch',b.id).head;f.store.ingest(b.id,f.store.raw(head)+JSON.stringify(compact)+'\n'+codexTurn('New context','New reply').map(r=>JSON.stringify(r)+'\n').join(''),head,{});
+ f.smart.observe();await f.flush();assert.equal(calls.length,1);assert.equal(calls[0].kind,'node');assert.deepEqual(calls[0].e,{user:'Before compaction',assistant:'Finished result'});
+ let graph=f.store.treeGraph(b.id);assert.equal(graph.nodes[0].name,'Closed context');assert.equal(graph.nodes.at(-1).pending,true);
+ head=f.store.get('branch',b.id).head;f.store.ingest(b.id,f.store.raw(head)+codexTurn('Changing tail','Tail result').map(r=>JSON.stringify(r)+'\n').join(''),head,{});f.smart.observe();await f.flush();assert.equal(calls.length,1);
+ graph=f.store.treeGraph(b.id);const tail=graph.nodes.at(-1);f.store.organize(b.id,{version:graph.version,pathId:b.id,nodeId:tail.id,action:'rename',name:'Manual tail',nameOrigin:'manual'});
+ head=f.store.get('branch',b.id).head;f.store.ingest(b.id,f.store.raw(head)+JSON.stringify(compact)+'\n',head,{});f.smart.observe();await f.flush();assert.equal(calls.length,1);assert.ok(f.store.treeGraph(b.id).nodes.some(n=>n.name==='Manual tail'));
+});

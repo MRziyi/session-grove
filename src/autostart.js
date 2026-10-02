@@ -27,7 +27,7 @@ export class Autostart {
         try{const stat=fs.lstatSync(this.file);assert(stat.isFile()&&!stat.isSymbolicLink(),'The startup entry is not a regular file.',409);assert(stat.size<128*1024,'The startup entry is too large to manage.',409);return true;}
         catch(e){if(e.code==='ENOENT')return false;throw e;}
     }
-    async shortcut(script,config){return this.run('powershell.exe',['-NoProfile','-NonInteractive','-Command',script],{env:{...process.env,GROVE_STARTUP_CONFIG:JSON.stringify(config)},windowsHide:true,timeout:10000,maxBuffer:128*1024});}
+    async shortcut(script,config){return this.run('powershell.exe',['-NoProfile','-NonInteractive','-Command',script],{env:{...process.env,GROVE_STARTUP_CONFIG:JSON.stringify(config)},windowsHide:true,timeout:30000,maxBuffer:128*1024});}
     async managed(){
         if(this.platform==='darwin'){
             const text=fs.readFileSync(this.file,'utf8'),library=/<key>GroveLibrary<\/key>\s*<string>([^<]*)<\/string>/.exec(text)?.[1];
@@ -84,9 +84,12 @@ export class Autostart {
                 catch{if(previous)atomic(this.file,previous);else fs.unlinkSync(this.file);throw Error('Could not enable login startup. The previous setting was kept.');}
             }else{
                 const staging=path.join(this.root,'startup-staging');fs.mkdirSync(staging,{recursive:true,mode:0o700});
+                const previous=exists?fs.readFileSync(this.file):null;
                 temporary=path.join(staging,id()+'.lnk');
                 await this.shortcut(writeShortcut,{file:temporary,target:this.executable,arguments:[...this.args(),'--background'].map(windowsArgument).join(' '),directory:path.dirname(path.dirname(this.entry)),description:'Session Grove · '+this.root});
                 assert(fs.existsSync(temporary),'The startup shortcut could not be created.');atomic(this.file,fs.readFileSync(temporary));fs.unlinkSync(temporary);temporary=null;
+                try{const status=await this.status();assert(status.enabled&&!status.error,status.error||'Login startup could not be verified.');return {...status,busy:false};}
+                catch(error){if(previous)atomic(this.file,previous);else fs.rmSync(this.file,{force:true});throw error;}
             }
             const status=await this.status();assert(status.enabled&&!status.error,status.error||'Login startup could not be verified.');return {...status,busy:false};
         }finally{if(temporary)fs.rmSync(temporary,{force:true});this.busy=false;}
