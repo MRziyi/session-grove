@@ -21,7 +21,9 @@ test('Windows shortcut creation uses literal arguments and stages outside the St
  assert.equal(windowsArgument('C:\\folder with spaces\\'),'"C:\\folder with spaces\\\\"');
 });
 test('Windows native shortcut roundtrip uses the current user without creating an actual login item',{skip:process.platform!=='win32'},async t=>{
- const {manager:m}=fixture(t,{platform:'win32',run:undefined});assert.equal((await m.set(true)).enabled,true);assert.equal((await m.status()).enabled,true);assert.equal((await m.set(false)).enabled,false);
+ const {manager:m}=fixture(t,{platform:'win32',run:undefined});let stage='enable';
+ try{assert.equal((await m.set(true)).enabled,true);stage='status';assert.equal((await m.status()).enabled,true);stage='disable';assert.equal((await m.set(false)).enabled,false);}
+ catch(error){const detail=String(error.stderr||error.message),code=/^[A-Z_0-9]+$/.test(String(error.code))?error.code:'none',category=/Could not read login startup/.test(detail)?'read-status':/another installation/.test(detail)?'ownership':/could not be verified/.test(detail)?'verify':/Command failed/.test(detail)?'powershell':/shortcut could not be created/.test(detail)?'missing-shortcut':'other',qualified=/FullyQualifiedErrorId\s*:\s*([A-Za-z0-9_.]+)/.exec(detail)?.[1]||'none';console.error(`::error file=test/autostart.test.js,title=Native shortcut diagnostic::stage=${stage}; category=${category}; code=${code}; killed=${!!error.killed}; qualified=${qualified}`);throw error;}
 });
 test('custom libraries use separate startup entries and simultaneous saves are rejected',async t=>{
  const {manager:m,home}=fixture(t);const other=new Autostart({root:path.join(home,'other'),roots:m.roots,home,platform:'darwin'});assert.notEqual(m.label,other.label);
