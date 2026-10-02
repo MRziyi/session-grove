@@ -14,6 +14,8 @@
 
 - Node titles use the full card width, with tool icons overlaid. Compaction boundaries now name completed nodes on standalone paths as well as trees. Settings removes redundant static hints and keeps startup errors beside its status. Windows startup tolerates slower PowerShell initialization and restores the previous shortcut when verification fails.
 
+- Preserve transcript reading position during background naming and Update. Reuse unchanged transcript sections; keep the visible message, selected node, expanded details and graph camera when the current tree changes.
+
 ## 1.1.0
 
 - Preserve complete tree ancestry and shared node labels when client archives enter Trash. Restore individual paths into their surviving family, including separately restored parents/children and families moved between projects. Repair provable 1.0.x transcript-only recoveries using saved branch identities and verified history, with a local repair journal.

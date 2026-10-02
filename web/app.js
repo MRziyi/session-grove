@@ -414,11 +414,11 @@ async function openTree(id) {
     finally { if (ticket === requestId) { opening = false; $('#main').removeAttribute('aria-busy');$$('[data-loading]').forEach(el=>el.removeAttribute('data-loading')); } }
 }
 
-function render() {
+function render({keepDetail=false} = {}) {
     translateBanner(); renderNavigation(); renderList();
     const detail = !!state.tree;
     $('#layout').classList.toggle('detail', detail); $('#list-page').hidden = detail; $('#detail-page').hidden = !detail; $('#session-rail').hidden = !detail;
-    if (detail) { renderRail(); renderDetail(); }
+    if (detail) { renderRail(); if(keepDetail)renderDetailActions();else renderDetail(); }
     else { drawnTree = null; $('#branch-picker').replaceChildren(); $('#transcripts').replaceChildren(); $('#graph').replaceChildren(); $('#ribbons').replaceChildren(); }
 }
 function renderDetail() {
@@ -493,15 +493,31 @@ function bindCompactions(root) { root.querySelectorAll('[data-compaction]').forE
     state.compactionId = event.id; state.nodeId = null; clearRange();
     run(() => api('/branches/' + p.branchId + '/compaction', 'POST', { eventId: event.id, enabled: !event.enabled, head: p.head }));
 }); }
+function reconcileTranscript(markup) {
+    const pane=$('#transcripts'),template=document.createElement('template');template.innerHTML=markup;
+    const old=new Map([...pane.querySelectorAll(':scope > [data-segment]')].map(el=>[el.dataset.segment,el]));
+    const desired=[...template.content.children].map(next=>{
+        if(!next.dataset.segment)return next;
+        const previous=old.get(next.dataset.segment),body=[...next.children].slice(1).map(el=>el.outerHTML).join('');
+        next._chatMarkup=body;
+        if(!previous||previous._chatMarkup!==body)return next;
+        previous.className=next.className;previous.setAttribute('style',next.getAttribute('style'));
+        const caption=next.querySelector('.segment-caption');if(previous.firstElementChild.outerHTML!==caption.outerHTML)previous.firstElementChild.replaceWith(caption);
+        return previous;
+    });
+    const retained=new Set(desired);for(const node of [...pane.children])if(!retained.has(node))node.remove();
+    let cursor=pane.firstElementChild;
+    for(const node of desired){if(node===cursor)cursor=cursor.nextElementSibling;else pane.insertBefore(node,cursor);}
+}
 function renderTranscript() {
     activityGroups=[];
     const p = route();
-    $('#transcripts').innerHTML = contextBreakdown(p) + p.nodeIds.map(id => {
+    const markup = contextBreakdown(p) + p.nodeIds.map(id => {
         const n = state.tree.nodes.find(n => n.id === id), messages = p.messages.filter(m => n.chatIds.includes(m.id));
-        return `${compactionsAt(n, p).map(e => `<div class="compaction-marker">${t('Context compacted here')}${compactionButton(e)}</div>`).join('')}<section class="transcript-segment ${mutedNode(n, p) ? 'context-muted' : ''} ${n.pending ? 'pending' : ''}" data-segment="${esc(n.id)}" style="${style(n)}"><div class="segment-caption"><button data-focus-node="${esc(n.id)}">${editableName('node',n.id,nodeName(n))} · ${t('{count} chats', { count: messages.length })}</button><span class="token-estimate">${tokenLabel(n)}</span></div>${messages.map(m => `<article class="chat ${m.role} ${state.chats.has(m.id) ? 'checked' : ''}">${state.scope === 'archived' ? '' : `<input type="checkbox" data-chat="${esc(m.id)}" aria-label="${esc(t('Select chat {number}', { number: p.messages.findIndex(x => x.id === m.id) + 1 }))}" ${state.chats.has(m.id) ? 'checked' : ''}>`}<div class="bubble"><span class="speaker">${m.role === 'user' ? t('You') : p.agent === 'codex' ? 'Codex' : 'Claude'}</span>${excerpt(m.text, state.expanded.has(m.id))}${activityHtml(m.activity,p)}${m.text.length >= 380 ? `<button class="expand-chat" data-expand="${esc(m.id)}">${t(state.expanded.has(m.id) ? 'Collapse' : 'Expand')}</button>` : ''}</div></article>`).join('')}</section>`;
+        return `${compactionsAt(n, p).map(e => `<div class="compaction-marker">${t('Context compacted here')}${compactionButton(e)}</div>`).join('')}<section class="transcript-segment ${mutedNode(n, p) ? 'context-muted' : ''} ${n.pending ? 'pending' : ''}" data-segment="${esc(n.id)}" style="${style(n)}"><div class="segment-caption"><button data-focus-node="${esc(n.id)}">${editableName('node',n.id,nodeName(n))} · ${t('{count} chats', { count: messages.length })}</button><span class="token-estimate">${tokenLabel(n)}</span></div>${messages.map(m => `<article data-message="${esc(m.id)}" class="chat ${m.role} ${state.chats.has(m.id) ? 'checked' : ''}">${state.scope === 'archived' ? '' : `<input type="checkbox" data-chat="${esc(m.id)}" aria-label="${esc(t('Select chat {number}', { number: p.messages.findIndex(x => x.id === m.id) + 1 }))}" ${state.chats.has(m.id) ? 'checked' : ''}>`}<div class="bubble"><span class="speaker">${m.role === 'user' ? t('You') : p.agent === 'codex' ? 'Codex' : 'Claude'}</span>${excerpt(m.text, state.expanded.has(m.id))}${activityHtml(m.activity,p)}${m.text.length >= 380 ? `<button class="expand-chat" data-expand="${esc(m.id)}">${t(state.expanded.has(m.id) ? 'Collapse' : 'Expand')}</button>` : ''}</div></article>`).join('')}</section>`;
     }).join('') || `<p class="empty">${t('No chats yet.')}</p>`;
     const trailing = (p.context?.compactions || []).filter(e => !p.messages.some(m => m.line > e.line));
-    $('#transcripts').insertAdjacentHTML('beforeend', trailing.map(e => `<div class="compaction-marker">${t('Context compacted here')}${compactionButton(e)}</div>`).join(''));
+    reconcileTranscript(markup+trailing.map(e => `<div class="compaction-marker">${t('Context compacted here')}${compactionButton(e)}</div>`).join(''));
     bindCompactions($('#transcripts'));
     $('#transcripts').onclick=async event=>{
         const el=event.target.closest('[data-record]');if(!el)return;
@@ -518,8 +534,7 @@ function renderTranscript() {
             }catch(e){if($('#dialog').open)$('#dialog-error').textContent=e.message;}
         } await load();
     };
-    $$('[data-activity]').forEach(el=>el.addEventListener('toggle',()=>{if(el.open && !el.dataset.loaded){const group=activityGroups[Number(el.dataset.activity)];el.querySelector('.activity-body').innerHTML=activityEntries(group.entries,group.p);el.dataset.loaded='true';scheduleRibbons();}}));
-    $$('#transcripts details').forEach(el=>el.addEventListener('toggle',scheduleRibbons));
+    $$('#transcripts details').forEach(el=>el.ontoggle=()=>{if(el.hasAttribute('data-activity')&&el.open&&!el.dataset.loaded){const group=activityGroups[Number(el.dataset.activity)];el.querySelector('.activity-body').innerHTML=activityEntries(group.entries,group.p);el.dataset.loaded='true';}scheduleRibbons();});
     updateRangeSelection();
     $$('[data-chat]').forEach(el => el.onclick = e => {
         const index = p.messages.findIndex(m => m.id === el.dataset.chat);
@@ -648,6 +663,29 @@ function revealNode(id) {
     camera.y += view.top + (view.height - rect.height) / 2 - rect.top;
     applyCamera();
 }
+let readingIntent=0;
+for(const event of ['wheel','touchstart','pointerdown','keydown'])document.addEventListener(event,()=>readingIntent++,{passive:true,capture:true});
+function readingPosition() {
+    const pane=$('#transcripts'),top=pane.getBoundingClientRect().top;
+    const segment=[...pane.querySelectorAll('[data-segment]')].find(el=>el.getBoundingClientRect().bottom>top);
+    const message=segment&&[...segment.querySelectorAll('[data-message]')].find(el=>el.getBoundingClientRect().bottom>top);
+    const target=message||segment;
+    return {branchId:state.branchId,scroll:pane.scrollTop,key:message?'message':'segment',id:target?.dataset[message?'message':'segment'],offset:target?target.getBoundingClientRect().top-top:0,
+        heights:new Map([...pane.querySelectorAll('[data-segment]')].map(el=>[el.dataset.segment,el.getBoundingClientRect().height])),
+        details:[...pane.querySelectorAll('details[open]')].map(el=>{const chat=el.closest('[data-message]'),parent=chat||pane;return {chat:chat?.dataset.message,index:[...parent.querySelectorAll('details')].indexOf(el)};})};
+}
+function restoreReadingPosition(saved) {
+    if(!saved||saved.branchId!==state.branchId)return;
+    const pane=$('#transcripts');
+    for(const el of pane.querySelectorAll('[data-segment]')){const height=saved.heights.get(el.dataset.segment);if(height)el.style.containIntrinsicSize='auto '+height+'px';}
+    for(const item of saved.details){const parent=item.chat?[...pane.querySelectorAll('[data-message]')].find(el=>el.dataset.message===item.chat):pane,detail=parent?.querySelectorAll('details')[item.index];if(detail){detail.open=true;detail.dispatchEvent(new Event('toggle'));}}
+    const align=()=>{const target=[...pane.querySelectorAll('[data-'+saved.key+']')].find(el=>el.dataset[saved.key]===saved.id),offset=target?target.getBoundingClientRect().top-pane.getBoundingClientRect().top:null;pane.scrollTo({top:offset===null?saved.scroll:pane.scrollTop+offset-saved.offset,behavior:'instant'});};
+    align();const intent=readingIntent,ticket=requestId;
+    const settle=remaining=>requestAnimationFrame(()=>{if(ticket===requestId&&saved.branchId===state.branchId&&readingIntent===intent){align();scheduleRibbons();if(remaining>1)settle(remaining-1);}});settle(2);
+}
+function sameDetail(a,b) {
+    return a&&b&&a.id===b.id&&a.version===b.version&&a.name===b.name&&a.view===b.view&&a.projectArchived===b.projectArchived&&JSON.stringify(a.paths.map(p=>[p.branchId,p.originalTitle,p.transcriptionTitle]))===JSON.stringify(b.paths.map(p=>[p.branchId,p.originalTitle,p.transcriptionTitle]));
+}
 async function refresh({ checkCloud = false } = {}) {
     if (opening || document.body.classList.contains('session-dragging')) return;
     const id = ++requestId, scope = state.scope;
@@ -658,17 +696,18 @@ async function refresh({ checkCloud = false } = {}) {
     }
     const [data, list, tree] = await Promise.all([api('/state'), api('/list?scope=' + encodeURIComponent(state.scope) + '&q=' + encodeURIComponent(state.query) + (checkCloud ? '&check=1' : '')), state.tree ? api('/trees/' + encodeURIComponent(state.tree.id) + '?view=' + (state.scope === 'archived' ? 'archived' : 'in-use')) : null]);
     if (id !== requestId || scope !== state.scope || document.body.classList.contains('session-dragging')) return;
+    const keepDetail=sameDetail(state.tree,tree),reading=state.tree&&!keepDetail?readingPosition():null,oldNode=selectedNode();
     state.data = data; state.list = list;
     state.selected = new Set([...state.selected].filter(id => list.items.some(i => i.id === id)||scope==='archived'&&(data.trashNative||[]).some(i=>'client:'+i.id===id)));
     if (tree && tree.view !== (scope === 'archived' ? 'archived' : 'in-use')) return;
     if (tree) {
-        state.tree = tree.paths.length ? tree : null;
+        state.tree = tree.paths.length ? (keepDetail?Object.assign(state.tree,{sessionNameVersion:tree.sessionNameVersion}):tree) : null;
         if (!state.tree) { clearRange(); render(); return; } if (!route()) state.branchId = tree.paths[0]?.branchId;
-        if (!tree.nodes.some(n => n.id === state.nodeId)) state.nodeId = route()?.nodeIds.at(-1) || null;
+        if (state.nodeId&&!tree.nodes.some(n => n.id === state.nodeId)) state.nodeId = tree.nodes.find(n=>n.branchIds.includes(state.branchId)&&n.chatIds.some(id=>oldNode?.chatIds.includes(id)))?.id || oldNode?.parentIds.find(id=>tree.nodes.some(n=>n.id===id&&n.branchIds.includes(state.branchId))) || null;
         state.chats = new Set([...state.chats].filter(id => route()?.messages.some(m => m.id === id)));
     }
-    const listTop = $('#session-list').scrollTop, scroll = $('#transcripts').scrollTop, graphTop = $('#graph-scroll').scrollTop, graphLeft = $('#graph-scroll').scrollLeft;
-    render(); $('#session-list').scrollTo({top:listTop,behavior:'instant'}); $('#transcripts').scrollTo({top:scroll,behavior:'instant'}); $('#graph-scroll').scrollTo({top:graphTop,left:graphLeft,behavior:'instant'}); scheduleRibbons();revealRestored();
+    const listTop = $('#session-list').scrollTop, graphTop = $('#graph-scroll').scrollTop, graphLeft = $('#graph-scroll').scrollLeft;
+    render({keepDetail}); $('#session-list').scrollTo({top:listTop,behavior:'instant'}); restoreReadingPosition(reading); $('#graph-scroll').scrollTo({top:graphTop,left:graphLeft,behavior:'instant'}); scheduleRibbons();revealRestored();
 }
 function moveDialog(itemIds, restoreTarget = null) {
     const selectedItems=state.data.items.filter(i=>itemIds.includes(i.id));
