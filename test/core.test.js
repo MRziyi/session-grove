@@ -304,6 +304,7 @@ test('Update tracks native titles by thread ID without replacing Grove aliases o
     native.refreshLocal();const first=store.instances().find(i=>i.nativeId===sources[0].nativeId),second=store.instances().find(i=>i.nativeId===sources[1].nativeId);
     store.edit(first.branchId,{name:'My Grove alias'});store.put('branch',{...store.get('branch',first.branchId),sessionName:'Independent tree name',sessionNameOrigin:'manual',transcriptionTitle:'Same native title',transcriptionNameOrigin:'automatic'});const head=store.get('branch',first.branchId).head;
     db.prepare('UPDATE threads SET title=? WHERE id=?').run('Renamed in client',sources[0].nativeId);
+    fs.writeFileSync(path.join(roots.codex,'session_index.jsonl'),[{id:sources[0].nativeId,thread_name:'Same native title'},{id:sources[0].nativeId,thread_name:'Renamed in client'}].map(v=>JSON.stringify(v)+'\n').join(''));
     native.refreshLocal();
     assert.equal(store.get('branch',first.branchId).sessionName,'Independent tree name');assert.equal(store.get('branch',first.branchId).transcriptionTitle,'Renamed in client');assert.equal(store.get('branch',first.branchId).transcriptionNameOrigin,'manual');assert.equal(store.get('branch',first.branchId).name,'My Grove alias');assert.equal(store.get('branch',first.branchId).head,head);
     assert.equal(store.treeGraph(first.branchId).paths.find(p=>p.branchId===first.branchId).originalTitle,'Renamed in client');

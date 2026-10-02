@@ -71,8 +71,8 @@ export class Native {
                     if (columns.includes('id') && columns.includes('title') && columns.includes('archived')) {
                         const optional = ['rollout_path', 'name', 'source', 'thread_source', 'cwd'].filter(c => columns.includes(c));
                         for (const row of db.prepare('SELECT id,title,archived' + optional.map(c => ',' + c).join('') + ' FROM threads').all()) {
-                            // Official thread/name/set updates title; a legacy name column can remain stale.
-                            if (row.title || row.name) titles.set(row.id, row.title || row.name);
+                            // Older clients can keep a display name separate from the title/preview.
+                            if (row.name || row.title) titles.set(row.id, row.name || row.title);
                             provenance.set(row.id, { source: row.source, threadSource: row.thread_source });
                             if (row.archived) archivedIds.add(row.id);
                             if (row.rollout_path && path.isAbsolute(row.rollout_path)) { canonicalPaths.set(row.id, path.resolve(row.rollout_path)); indexedFiles.set(path.resolve(row.rollout_path), row); }
@@ -91,7 +91,9 @@ export class Native {
                     }
                     catch { }
                 }
-                for(const [id,title] of indexedTitles)if(!titles.has(id))titles.set(id,title);
+                // Official thread/name/set appends the current name here; the SQLite
+                // legacy name column may retain an earlier value. Last valid entry wins.
+                for(const [id,title] of indexedTitles)titles.set(id,title);
             }
             const dirs = agent === 'codex' ? ['sessions', 'archived_sessions'] : ['projects'];
             for (const dir of dirs)
