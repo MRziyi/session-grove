@@ -1,3 +1,4 @@
+import {createHash} from 'node:crypto';
 import {bodyRefs,retainedGraph} from './retention.js';
 import {applyTrashState,deletedIds,isTrashed} from './trash.js';
 import {withVaultLock} from './dav-lock.js';
@@ -11,6 +12,24 @@ import { assert, hash, now, mapConcurrent } from './util.js';
 import { uploadPacks, downloadRecords } from './record-packs.js';
 import { rootOf } from './organization.js';
 const digest = value => hash(JSON.stringify(value));
+// Graph fields are plain JSON. Hash arrays one row at a time so a status check
+// never allocates a second, library-sized serialized history alongside the graph.
+export function graphFingerprint(graph) {
+    if(!graph)return digest(graph);
+    const h=createHash('sha256');h.update('{');let first=true;
+    for(const [key,value] of Object.entries(graph)){
+        if(value===undefined)continue;
+        if(!first)h.update(',');first=false;
+        h.update(JSON.stringify(key)+':');
+        if(Array.isArray(value)){
+            h.update('[');
+            for(let i=0;i<value.length;i++){if(i)h.update(',');h.update(JSON.stringify(value[i])??'null');}
+            h.update(']');
+        }else h.update(JSON.stringify(value));
+    }
+    return h.update('}').digest('hex');
+}
+
 const sorted = rows => [...rows].sort((a, b) => a.id.localeCompare(b.id));
 export function treeSnapshot(store, treeId) { return store.memo('cloud-tree:' + treeId, () => buildSnapshot(store, treeId)); }
 function buildSnapshot(store, treeId) {
@@ -194,7 +213,16 @@ export class Cloud {
     }
     dirtyIds() {
         this.useSavedCache(); const ack = this.cache().ack;
-        return this.store.syncCollections().items.filter(i => this.store.memo('fingerprint:' + i.id, () => digest(treeSnapshot(this.store, i.id))) !== ack[i.id]).map(i => i.id);
+        const transient = key => key==='exportGraph'||key==='cloud-snapshot-index'||key.startsWith('cloud-tree:');
+        const existing = new Set([...this.store.memoCache.keys()].filter(transient));
+        try {
+            return this.store.syncCollections().items.filter(i => this.store.memo('fingerprint:' + i.id, () => graphFingerprint(treeSnapshot(this.store, i.id))) !== ack[i.id]).map(i => i.id);
+        } finally {
+            // Status polling retains only small fingerprints. Full export graphs
+            // can contain millions of refs and are rebuilt only for changed data
+            // or an actual transfer. Leave a caller's pre-existing snapshots alone.
+            for(const key of this.store.memoCache.keys())if(transient(key)&&!existing.has(key))this.store.memoCache.delete(key);
+        }
     }
     async transferPlan(passphrase) {
         await this.catalog(passphrase);

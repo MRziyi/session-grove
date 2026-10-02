@@ -106,7 +106,9 @@ For local context configuration, warning acknowledgement and diagnostic logging,
 
 ## Selecting original or compacted context
 
-Each path has a synchronized `contextPolicy` listing disabled compaction event IDs. These IDs refer to immutable recorded events. The newest enabled event determines which earlier graph Nodes are superseded in the preview. Raw history and organization remain unchanged.
+Each path retains a synchronized `contextPolicy` listing disabled compaction IDs. From 1.1.3, IDs derive from the complete recorded compaction payload and its occurrence order, excluding physical timestamps and ordinals. This tracks inherited compactions even when older native clients reserialize a fork. The original timestamp-based IDs remain readable aliases for saved choices; new choices use stable IDs.
+
+A control represents one identified compaction at a shared history boundary and applies atomically to all matching live paths in the tree. Its path count is visible. Existing differing choices display Mixed and are preserved until an explicit choice; archived paths retain their settings. Different compaction results or unidentifiable results do not share a control, and distinct resulting contexts are not merged merely because their visible prose matches. The newest enabled event determines which earlier graph Nodes are superseded in the preview. Raw history remains unchanged.
 
 Apply is explicit for active paths; inactive paths use the choice on Activate. For adopted native sessions, a changed context is materialized into a new native instance and the previous instance is parked under the normal journal/rollback mechanism. Capturing subsequent native updates reattaches the new suffix to the retained original revision, so toggling does not destroy earlier history.
 
@@ -114,7 +116,7 @@ Codex legacy materialization preserves all recorded response items, tool inputs/
 
 For recognized Claude boundaries, expanding omits the boundary/summary and reconnects known parent UUIDs to the retained prefix. Real Claude-client verification is still outstanding. The UI cannot offer expansion when no recorded prefix is available.
 
-All writing devices should use 0.7.1+ to honor path context policies. A native agent may compact again during later work; the switch does not change its global auto-compaction configuration. Expanded-history token estimates can differ substantially from the previous compacted input usage and are checked again at activation.
+All devices editing context policies should use 1.1.3+ to honor stable compaction identities and shared control groups. A native agent may compact again during later work; the switch does not change its global auto-compaction configuration. Expanded-history token estimates can differ substantially from the previous compacted input usage and are checked again at activation.
 
 
 ## Optional encryption and key changes

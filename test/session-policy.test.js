@@ -41,13 +41,13 @@ function compacted(cwd) {
     values[0].payload.history_mode = 'legacy';
     return lines([...values, { type: 'world_state', payload: { full: true, state: { permissions: { source: 'must-not-replay' } } } }, { type: 'compacted', payload: { message: 'Readable summary marker', replacement_history: [{ type: 'message', role: 'user', content: [{ type: 'input_text', text: 'Readable summary marker' }] }] } }, ...codexTurn('Post compact question', 'Post compact answer')]);
 }
-test('compaction preview is per path; cold apply rebuilds a native copy, preserving original history and capturing new suffixes', t => {
+test('shared compaction policy controls inherited paths; cold apply rebuilds a native copy, preserving original history and capturing new suffixes', t => {
     const { store, native, roots, cwd } = setup(t), raw = compacted(cwd), file = path.join(roots.codex, 'sessions', 'original.jsonl'); fs.writeFileSync(file, raw); native.refreshLocal();
     const b = store.all('branch').find(b => !b.synthetic), graph = store.treeGraph(b.id), event = graph.paths[0].context.compactions[0];
     const sibling = store.fork(b.id, { name: 'Other path', end: store.detail(b.id).checkpoints.at(-1).end });
     store.setCompaction(b.id, { eventId: event.id, enabled: false, head: b.head });
     assert.equal(fs.readFileSync(file, 'utf8'), raw);
-    let g = store.treeGraph(b.id); assert.equal(g.paths.find(p => p.branchId === b.id).context.compactions[0].enabled, false); assert.equal(g.paths.find(p => p.branchId === sibling.id).context.compactions[0].enabled, true);
+    let g = store.treeGraph(b.id); assert.equal(g.paths.find(p => p.branchId === b.id).context.compactions[0].enabled, false); assert.equal(g.paths.find(p => p.branchId === sibling.id).context.compactions[0].enabled, false);
     assert.equal(g.paths.find(p => p.branchId === b.id).contextPending, true);
     assert.equal(activationInfo(store, native, b.id, cwd, {}).basis, 'expanded-history-estimate');
     native.setActive(b.id, cwd, true); native.apply([b.id]);

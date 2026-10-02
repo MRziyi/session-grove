@@ -1,3 +1,4 @@
+import {compactionDisabled,compactionPaths} from './compaction-identity.js';
 import {isTrashed} from './trash.js';
 import { modifiedAt as modified, nextModifiedAt } from './session-time.js';
 import { preferences } from './preferences.js';
@@ -68,12 +69,24 @@ export function listing(store, scope = 'active:codex', query = '') {
 
 // IDs are derived from the owning native thread and the semantic prefix. Metadata
 // and materialized path changes never invalidate a user's organization.
-export function buildGraph(store, branchId) {
-    const root = rootOf(store, branchId), members = treeMembers(store, root.id), cache = new Map(), messages = new Map(), aliases = new Map();
+function* graphSteps(store, branchId) {
+    const root = rootOf(store, branchId), members = treeMembers(store, root.id), cache = new Map(), messages = new Map(), aliases = new Map(), contextAliases = new Map();
+    // Graphs need messages and derived activity, not every raw tool result.
+    // Keep one lightweight projection per revision/prefix during this build;
+    // oversized transcripts deliberately do not fit in the Store parse cache.
+    const projections=new Map();
+    function projection(revisionId,agent,end){
+        const key=agent+':'+revisionId+':'+(end??'all');
+        if(!projections.has(key)){
+            const p=store.parsed(revisionId,agent,end),inventory=store.activity(revisionId,agent,end,p);
+            projections.set(key,{p:{messages:p.messages,context:p.context,checkpoints:p.checkpoints,supported:supportedHistory(p)},inventory});
+        }
+        return projections.get(key);
+    }
     function pathFor(b, revisionId = b.head, end) {
         const key = `${b.id}:${revisionId}:${end??"all"}`;
         if (cache.has(key)) return cache.get(key);
-        const p = store.parsed(revisionId, b.agent, end), inventory = store.activity(revisionId, b.agent, end), visible = p.messages.filter(m => m.role !== 'tool');
+        const {p,inventory}=projection(revisionId,b.agent,end), visible = p.messages.filter(m => m.role !== 'tool');
         const byChat = new Map();
         for (const e of inventory.entries) { if (!byChat.has(e.chatLine)) byChat.set(e.chatLine, []); byChat.get(e.chatLine).push(e); }
         let inherited = [];
@@ -89,22 +102,30 @@ export function buildGraph(store, branchId) {
             if (childPrefix.length === parentPrefix.length && childPrefix.every((m, i) => m.role === parentPrefix[i].role && m.text === parentPrefix[i].text))
                 inherited = parentPrefix.map((m, i) => ({ ...m, line: childPrefix[i].line }));
         }
-        let prefix = '';
+        let prefix = '',contextKey='',eventIndex=0;
         const path = visible.map((m, index) => {
+            while(eventIndex<p.context.compactions.length&&p.context.compactions[eventIndex].line<m.line){const event=p.context.compactions[eventIndex++];contextKey=hash(contextKey+event.id+(event.shareable===false?b.id:''));}
+            const inheritedMessage=inherited[index],sameContext=!inheritedMessage||inheritedMessage.contextKey===contextKey;
             prefix = hash(prefix + JSON.stringify([m.role, m.text]));
-            const message = inherited[index] || { ...m, id: `${b.chatIdentity || b.id}:${prefix.slice(0, 24)}`, ownerId: b.id, agent: b.agent, origin: contentOrigin(store, revisionId) };
+            const message = sameContext&&inheritedMessage || { ...m, id: `${b.chatIdentity || b.id}:${(contextKey?hash(prefix+contextKey):prefix).slice(0, 24)}`, ownerId: b.id, agent: b.agent, origin: contentOrigin(store, revisionId) };
             const ownId = `${b.chatIdentity || b.id}:${prefix.slice(0, 24)}`;
             if (ownId !== message.id) aliases.set(ownId, message.id);
-            const value = { ...message, line: m.line, toolTokens: (byChat.get(m.line) || []).filter(e => ['tool-call', 'tool-result'].includes(e.kind)).reduce((n,e) => n + e.tokens, 0), activity: byChat.get(m.line) || [] };
+            const oldIds=contextAliases.get(message.id)||new Set();if(ownId!==message.id)oldIds.add(ownId);if(inheritedMessage&&!sameContext)oldIds.add(inheritedMessage.id);contextAliases.set(message.id,oldIds);
+            const value = { ...message, contextKey, line: m.line, toolTokens: (byChat.get(m.line) || []).filter(e => ['tool-call', 'tool-result'].includes(e.kind)).reduce((n,e) => n + e.tokens, 0), activity: byChat.get(m.line) || [] };
             if (!messages.has(value.id)) messages.set(value.id, value);
             return value;
         });
         cache.set(key, path);
         return path;
     }
-    const paths = members.filter(b => visibleSession(store, b)).map(b => { const parsed = store.parsed(b.head,b.agent), inventory = store.activity(b.head,b.agent); return { branchId: b.id, name: b.name, transcriptionTitle:b.transcriptionTitle||null, originalTitle: store.instances().find(i=>i.branchId===b.id && i.applied)?.observedTitle || b.originalTitle || store.instances().find(i=>i.branchId===b.id)?.title || store.summary(b.head,b.agent).nativeTitle || b.nativeObservedTitle || b.name, agent: b.agent, archived: !!b.archived, parentBranchId: b.parentId, prefixUnavailable: !!b.prefixUnavailable,
-        head: b.head, canRewriteContext: supportedHistory(parsed), canActivate: store.summary(b.head,b.agent).complete && !store.summary(b.head,b.agent).external && (supportedHistory(parsed) || store.instances().some(i => i.branchId === b.id && i.adopted && i.baseRevision === b.head && (i.contextPolicyHash || policyHash(null)) === policyHash(b.contextPolicy))), active: store.instances().some(i => i.branchId === b.id && isActive(i)),
-        context: { ...parsed.context, ledger: (() => { const l = inventory; return { ...l, entries: l.entries.filter(e => e.chatLine === null) }; })(), compactions: parsed.context.compactions.map(e => ({ ...e, enabled: !(b.contextPolicy?.disabled || []).includes(e.id) })) }, contextPolicy: b.contextPolicy || null, contextPending: store.instances().some(i => i.branchId === b.id && isActive(i) && ((i.contextPolicyHash || policyHash(null)) !== policyHash(b.contextPolicy) || i.baseRevision !== b.head)), messages: pathFor(b), checkpoints: parsed.checkpoints }; });
+    const visibleMembers=members.filter(b => visibleSession(store,b)),paths=[];
+    for(const b of visibleMembers){
+        yield {phase:'Reading conversation paths',completed:paths.length,total:visibleMembers.length};
+        const {p:parsed,inventory}=projection(b.head,b.agent);paths.push({ branchId: b.id, name: b.name, transcriptionTitle:b.transcriptionTitle||null, originalTitle: store.instances().find(i=>i.branchId===b.id && i.applied)?.observedTitle || b.originalTitle || store.instances().find(i=>i.branchId===b.id)?.title || store.summary(b.head,b.agent).nativeTitle || b.nativeObservedTitle || b.name, agent: b.agent, archived: !!b.archived, parentBranchId: b.parentId, prefixUnavailable: !!b.prefixUnavailable,
+        head: b.head, canRewriteContext: parsed.supported, canActivate: store.summary(b.head,b.agent).complete && !store.summary(b.head,b.agent).external && (parsed.supported || store.instances().some(i => i.branchId === b.id && i.adopted && i.baseRevision === b.head && (i.contextPolicyHash || policyHash(null)) === policyHash(b.contextPolicy))), active: store.instances().some(i => i.branchId === b.id && isActive(i)),
+        context: { ...parsed.context, ledger: (() => { const l = inventory; return { ...l, entries: l.entries.filter(e => e.chatLine === null) }; })(), compactions: parsed.context.compactions.map(e => ({ ...e, enabled: !compactionDisabled(b.contextPolicy,e) })) }, contextPolicy: b.contextPolicy || null, contextPending: store.instances().some(i => i.branchId === b.id && isActive(i) && ((i.contextPolicyHash || policyHash(null)) !== policyHash(b.contextPolicy) || i.baseRevision !== b.head)), messages: pathFor(b), checkpoints: parsed.checkpoints });
+    }
+    yield {phase:'Building conversation tree',completed:paths.length,total:visibleMembers.length};
     const assignments = {};
     for (const b of members.filter(b => b.endpointName && b.parentId))
         for (const m of pathFor(b)) if (m.line > b.forkEnd) assignments[m.id] = { id: 'endpoint-' + b.id, name: b.endpointName };
@@ -120,6 +141,7 @@ export function buildGraph(store, branchId) {
     if (layout) for (const [id, value] of Object.entries(layout.assignments)) assignments[id] = value;
     // Existing annotations may address the formerly unshared child identity.
     for (const [oldId, canonical] of aliases) if (assignments[oldId] && !assignments[canonical]) assignments[canonical] = assignments[oldId];
+    for(const [id,oldIds] of contextAliases)if(!assignments[id]){const previous=[...oldIds].find(old=>assignments[old]);if(previous)assignments[id]=assignments[previous];}
     const next = new Map(), previous = new Map(), endpoints = new Set(), compactStarts = new Set();
     for (const p of paths) for (const event of p.context.compactions) {
         const first = p.messages.find(m => m.line > event.line);
@@ -199,11 +221,25 @@ export function buildGraph(store, branchId) {
         store.parseCache.clear(); store.parseBytes = 0; store.recordCache.clear(); store.recordBytes = 0;
     }
     return { id: root.id, sessionName:root.sessionName||null, sessionNameVersion:root.metaVersion, projectId: root.projectId, layoutHead: root.layoutHead || null,
-        version: hash(JSON.stringify([members.map(b => [b.id, b.head, b.nodeHead, b.parentId, b.archived, b.contextPolicy, b.name, b.endpointName]), root.layoutHead || null,root.sessionName||null, paths.map(p=>[p.branchId,p.active])])),
+        version: hash(JSON.stringify(['compaction-v2',members.map(b => [b.id, b.head, b.nodeHead, b.parentId, b.archived, b.contextPolicy, b.name, b.endpointName]), root.layoutHead || null,root.sessionName||null, paths.map(p=>[p.branchId,p.active])])),
         name: store.collections().items.find(i => i.id === root.id)?.name || root.name,
-        nodes: ordered, edges: [...edges.values()], paths, assignments,
+        nodes: ordered, edges: [...edges.values()], paths:compactionPaths(paths), assignments,
         chatCount: new Set(paths.flatMap(p => p.messages.map(m => m.id))).size,
         pendingCount: ordered.filter(n => n.pending).reduce((n, s) => n + s.count, 0) };
+}
+
+export function buildGraph(store,branchId){
+    const steps=graphSteps(store,branchId);let step;
+    do{step=steps.next();}while(!step.done);
+    return step.value;
+}
+export async function buildGraphAsync(store,branchId,onProgress){
+    const version=store.version,steps=graphSteps(store,branchId);
+    for(;;){
+        assert(store.version===version,'Session changed while loading. Please try again.',409);
+        const step=steps.next();if(step.done)return step.value;
+        await onProgress(step.value);
+    }
 }
 
 export function treeGraph(store, branchId, view = 'all') {
@@ -215,7 +251,7 @@ export function treeGraph(store, branchId, view = 'all') {
     const graph = store.memo('graph:' + root.id, () => buildGraph(store, root.id));
     if (view === 'all') return graph;
     const projectArchived = root.projectId && store.get('project', root.projectId).archived;
-    const paths = graph.paths.filter(p => view === 'archived' ? p.archived || projectArchived : !p.archived && !projectArchived);
+    const paths = compactionPaths(graph.paths.filter(p => view === 'archived' ? p.archived || projectArchived : !p.archived && !projectArchived));
     const pathIds = new Set(paths.map(p => p.branchId)), nodeIds = new Set(paths.flatMap(p => p.nodeIds)), chats = new Set(paths.flatMap(p => p.messages.map(m => m.id)));
     const nodes = graph.nodes.filter(n => nodeIds.has(n.id)).map(n => ({ ...n, branchIds: n.branchIds.filter(id => pathIds.has(id)), endBranchIds: n.endBranchIds.filter(id => pathIds.has(id)), parentIds: n.parentIds.filter(id => nodeIds.has(id)), childIds: n.childIds.filter(id => nodeIds.has(id)) }));
     return { ...graph, view, projectArchived: !!projectArchived, paths, nodes, edges: graph.edges.filter(e => nodeIds.has(e.from) && nodeIds.has(e.to)), assignments: Object.fromEntries(Object.entries(graph.assignments).filter(([id]) => chats.has(id))), name: graph.sessionName || paths.find(p => p.branchId === root.id)?.name || paths[0]?.name || graph.name, chatCount: chats.size, pendingCount: nodes.filter(n => n.pending).reduce((sum, n) => sum + n.count, 0) };

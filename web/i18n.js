@@ -1,5 +1,18 @@
 let language = localStorage.getItem('grove-language') === 'zh' ? 'zh' : 'en';
 const dictionary = {
+    "Mixed": "混合",
+    "{count} paths": "{count} 条路径",
+    "Open session": "打开会话",
+    "Reading session history": "读取会话历史",
+    "Reading conversation paths": "读取对话路径",
+    "Building conversation tree": "构建对话树",
+    "Preparing session display": "准备会话显示",
+    "Receiving session history": "接收会话历史",
+    "Preparing conversation": "整理对话内容",
+    "Drawing conversation tree": "绘制对话树",
+    "Session changed; refreshing history": "会话已更新，正在重新读取",
+    "Session changed while loading. Please try again.": "加载期间会话已更新，请重试。",
+
 "Working directory":"工作目录",
 "Transcript file":"对话文件",
 "Client session ID":"客户端会话 ID",

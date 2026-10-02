@@ -54,3 +54,57 @@ export function transferStages(operation) {
 export function olderProject(items,preferences={},at=Date.now()) {
     return items.length>0&&foldedItems(items,preferences,at).length===0;
 }
+
+// Reserve space for compaction controls before placing node rows. Shared events
+// use the shared control groups supplied by the backend, including mixed state.
+export function graphLayout(tree,selectedBranchId){
+    const nodes=tree.nodes,byNode=new Map(nodes.map(n=>[n.id,n])),positions=new Map(),byChat=new Map();
+    for(const n of nodes)for(const id of n.chatIds)byChat.set(id,n);
+    let lane=0;
+    function place(n){
+        if(positions.has(n.id))return positions.get(n.id);
+        const children=n.childIds.map(id=>place(byNode.get(id)));
+        const pos={x:children.length?children.reduce((sum,p)=>sum+p.x,0)/children.length:lane++*174+12,y:0};
+        positions.set(n.id,pos);return pos;
+    }
+    nodes.filter(n=>!n.parentIds.length).forEach(place);
+    const compactions=new Map();
+    for(const owner of [...tree.paths.filter(p=>p.branchId!==selectedBranchId),...tree.paths.filter(p=>p.branchId===selectedBranchId)]){
+        for(const e of owner.context?.compactions||[]){
+            const previous=owner.messages.findLast(m=>m.line<e.line),next=owner.messages.find(m=>m.line>e.line);
+            const before=byChat.get(previous?.id),after=byChat.get(next?.id);
+            if(!before&&!after)continue;
+            const key=e.groupId||owner.branchId+':'+e.id;
+            const old=compactions.get(key),afterIds=[...new Set([...(old?.afterIds||[]),...(after?[after.id]:[])])];
+            compactions.set(key,{key,owner,e,before,after,afterIds,depth:before?.depth??-1,x:positions.get((after||before).id).x+74});
+        }
+    }
+    // An inherited compaction can precede a later fork: one shared stem fans
+    // out to all following nodes. Independent results get separate connectors.
+    for(const c of compactions.values())if(c.afterIds.length>1)c.x=positions.get(c.before.id).x+74;
+    const bands=new Map();
+    for(const c of [...compactions.values()].sort((a,b)=>a.depth-b.depth||a.x-b.x||a.key.localeCompare(b.key))){
+        if(!bands.has(c.depth))bands.set(c.depth,[]);
+        const rows=bands.get(c.depth);let row=rows.findIndex(xs=>xs.every(x=>Math.abs(x-c.x)>=148));
+        if(row<0){row=rows.length;rows.push([]);}rows[row].push(c.x);c.row=row;
+    }
+    const depthY=new Map(),bandY=new Map();let y=12;
+    if(bands.has(-1)){bandY.set(-1,y);y+=bands.get(-1).length*28+12;}
+    const maxDepth=Math.max(0,...nodes.map(n=>n.depth));
+    for(let depth=0;depth<=maxDepth;depth++){
+        depthY.set(depth,y);
+        const body=nodes.some(n=>n.depth===depth&&n.endBranchIds.length)?110:80;
+        bandY.set(depth,y+body+8);
+        y+=Math.max(116,body+16+(bands.get(depth)?.length||0)*28);
+    }
+    for(const n of nodes)positions.get(n.id).y=depthY.get(n.depth);
+    const controls=[...compactions.values()].map(c=>({...c,y:bandY.get(c.depth)+c.row*28+12}));
+    const connections=tree.edges.map(edge=>({...edge,controls:controls.filter(c=>c.before?.id===edge.from&&c.afterIds.includes(edge.to))}));
+    for(const c of controls)if(!connections.some(edge=>edge.controls.includes(c)))connections.push({from:c.before?.id,to:c.after?.id,controls:[c]});
+    const edges=connections.map(edge=>{
+        const from=edge.from&&positions.get(edge.from),to=edge.to&&positions.get(edge.to),points=[...(from?[{x:from.x+74,y:from.y+80}]:[]),...edge.controls.sort((a,b)=>a.y-b.y),...(to?[{x:to.x+74,y:to.y}]:[])];
+        const d=points.map((p,i)=>{if(!i)return `M${p.x},${p.y}`;const a=points[i-1],mid=(a.y+p.y)/2;return `C${a.x},${mid} ${p.x},${mid} ${p.x},${p.y}`;}).join(' ');
+        return {...edge,d};
+    });
+    return {positions,controls,edges,width:Math.max(180,lane*174),height:Math.max(160,y),rootX:(positions.get(nodes.find(n=>!n.parentIds.length)?.id)?.x||0)+74};
+}

@@ -1238,8 +1238,8 @@ dialog::backdrop {
 .context-switch span { border-radius: 8px; padding: 1px 5px; background: #e7edf2; font-size: 9px; }
 .context-switch.enabled { color: #345c75; border-color: #8daabd; background: #f0f7fc; }
 .context-switch.enabled span { color: #fff; background: #64869e; }
-.compaction-edge { position: absolute; transform: translate(-50%,-50%); z-index: 3; }
-.compaction-edge .context-switch { font-size: 9px; padding: 2px 5px; gap: 3px; box-shadow: 0 1px 3px #2945560c; }
+.compaction-edge { width: 140px; height: 24px; display:flex; align-items:center; justify-content:center; position: absolute; transform: translate(-50%,-50%); z-index: 3; }
+.compaction-edge .context-switch { max-width:140px; height:24px; white-space:nowrap; font-size: 9px; padding: 2px 5px; gap: 3px; box-shadow: 0 1px 3px #2945560c; }
 .compaction-marker { background: #f4f7fa; border-color: #e1e8ee; color: #677f91; }
 #graph { z-index: 2; }
 .graph-node.pending { backdrop-filter: none; }

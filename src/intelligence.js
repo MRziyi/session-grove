@@ -126,20 +126,40 @@ export class Intelligence {
         }
     }
     observeTranscriptions(branches,enqueue){
-        const paths=this.data.transcriptPaths||={};
+        const paths=this.data.transcriptPaths||={}, scans=this.data.transcriptScans||={};
+        const families=new Map();
         for(const b of branches){
-            if(!active(this.store,b)||b.agent!=='codex'||b.synthetic||b.transcriptionNameOrigin==='manual'||!this.transcriptions?.instances(b.id).length)continue;
-            let plan;try{plan=transcriptionPlan(this.store,b.id);}catch{continue;}if(!plan)continue;
-            let saved=paths[b.id];
-            if(!saved){saved=paths[b.id]={keys:!enqueue||plan.keys.length<2?plan.keys:[],lastEvidenceHash:null};}
-            const added=plan.keys.some(key=>!saved.keys.includes(key));
-            if(!added||plan.evidenceHash===saved.lastEvidenceHash){saved.keys=plan.keys;continue;}
-            if(!plan.completedNodes)continue;
-            const key='transcript:'+b.id,old=this.data.jobs.find(j=>j.key===key),waitingForClient=!this.transcriptions.ready(b.id);
-            if(old){old.waitingForClient=waitingForClient;continue;}
-            this.data.jobs.push({key,kind:'transcript',id:b.id,shape:plan.shape,keys:plan.keys,evidenceHash:plan.evidenceHash,waitingForClient,expectedNames:Object.fromEntries(this.transcriptions.instances(b.id).map(i=>[i.nativeId,i.observedTitle||i.title]))});
+            const root=rootOf(this.store,b.id).id;
+            if(!families.has(root))families.set(root,[]);
+            families.get(root).push(b);
         }
+        // A tree is shared by all its native paths. Rebuild it once, and only
+        // when its membership, history, layout or eligible client copies change.
+        for(const [root,members] of families){
+            const eligible=members.filter(b=>active(this.store,b)&&b.agent==='codex'&&!b.synthetic&&b.transcriptionNameOrigin!=='manual'&&this.transcriptions?.instances(b.id).length);
+            if(!eligible.length){delete scans[root];continue;}
+            const signature=hash(JSON.stringify([members,eligible.map(b=>b.id)]));
+            for(const job of this.data.jobs.filter(j=>j.kind==='transcript'&&eligible.some(b=>b.id===j.id)))job.waitingForClient=!this.transcriptions.ready(job.id);
+            if(scans[root]===signature)continue;
+            let graph;try{graph=this.store.treeGraph(root,'in-use');}catch{continue;}
+            let complete=true;
+            for(const b of eligible){
+                let plan;try{plan=transcriptionPlan(this.store,b.id,graph);}catch{complete=false;continue;}if(!plan)continue;
+                let saved=paths[b.id];
+                if(!saved){saved=paths[b.id]={keys:!enqueue||plan.keys.length<2?plan.keys:[],lastEvidenceHash:null};}
+                saved.keys=saved.keys.map(key=>plan.keyAliases[key]||key);
+                const added=plan.keys.some(key=>!saved.keys.includes(key));
+                if(!added||plan.evidenceHash===saved.lastEvidenceHash){saved.keys=plan.keys;continue;}
+                if(!plan.completedNodes)continue;
+                const key='transcript:'+b.id,old=this.data.jobs.find(j=>j.key===key),waitingForClient=!this.transcriptions.ready(b.id);
+                if(old){old.waitingForClient=waitingForClient;continue;}
+                this.data.jobs.push({key,kind:'transcript',id:b.id,shape:plan.shape,keys:plan.keys,evidenceHash:plan.evidenceHash,waitingForClient,expectedNames:Object.fromEntries(this.transcriptions.instances(b.id).map(i=>[i.nativeId,i.observedTitle||i.title]))});
+            }
+            if(complete)scans[root]=signature;
+        }
+        for(const root of Object.keys(scans))if(!families.has(root))delete scans[root];
     }
+
     prepare(job){
         const b=this.store.find('branch',job.id);
         if(job.kind==='transcript'){

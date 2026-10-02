@@ -1,10 +1,11 @@
+import {compactionDisabled} from './compaction-identity.js';
 import { supportedHistory } from './codex-history.js';
 import { assert, hash } from './util.js';
 export const policyHash = policy => hash(JSON.stringify([...(policy?.disabled || [])].sort()));
 export const validPolicy = policy => !policy || Array.isArray(policy.disabled) && policy.disabled.every(id => typeof id === 'string' && /^[a-f0-9]{64}$/.test(id));
 export function contextProjection(parsed, agent, policy, nativeId, cwd) {
-    const disabled = new Set(policy?.disabled || []), remove = new Set();
-    for (const event of parsed.context.compactions) if (disabled.has(event.id)) {
+    const remove = new Set();
+    for (const event of parsed.context.compactions) if (compactionDisabled(policy,event)) {
         assert(event.canDisable, 'Original pre-compaction history is unavailable.');
         remove.add(event.line); if (event.summaryLine) remove.add(event.summaryLine);
     }

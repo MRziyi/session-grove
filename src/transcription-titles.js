@@ -8,8 +8,8 @@ import {isActive} from './workspace.js';
 import {metadata} from './organization.js';
 
 // Structural keys exclude changing tail text, token counts and node labels.
-export function transcriptionPlan(store,branchId){
-    const branch=store.get('branch',branchId),graph=store.treeGraph(branchId,'in-use'),route=graph.paths.find(p=>p.branchId===branchId);if(!route)return null;
+export function transcriptionPlan(store,branchId,graph=store.treeGraph(branchId,'in-use')){
+    const branch=store.get('branch',branchId),route=graph.paths.find(p=>p.branchId===branchId);if(!route)return null;
     const nodes=route.nodeIds.map(id=>graph.nodes.find(n=>n.id===id)),keys=nodes.map(n=>n.id+':'+(n.pending?'pending':'named')).concat(route.context.compactions.map(c=>'compact:'+c.id));
     const completed=nodes.filter((n,i)=>!n.empty&&n.chatIds.length&&(i<nodes.length-1||!n.pending||route.context.compactions.some(c=>c.line>Math.max(...route.messages.filter(m=>n.chatIds.includes(m.id)).map(m=>m.line)))));
     const messages=namingMessages(store.parsed(branch.head,branch.agent).records,branch.agent),evidence=[];
@@ -19,7 +19,7 @@ export function transcriptionPlan(store,branchId){
         if(!users.length||!last)continue;
         evidence.push({user_requests:users.map(m=>m.text),assistant_result:shortenAssistant(last.text,240)});
     }
-    return {branch,keys,shape:hash(JSON.stringify(keys)),evidence:{nodes:evidence},evidenceHash:hash(JSON.stringify(evidence)),completedNodes:evidence.length};
+    return {branch,keys,keyAliases:Object.fromEntries(route.context.compactions.map(c=>['compact:'+c.legacyId,'compact:'+c.id])),shape:hash(JSON.stringify(keys)),evidence:{nodes:evidence},evidenceHash:hash(JSON.stringify(evidence)),completedNodes:evidence.length};
 }
 export class TranscriptionTitles {
     constructor(store,native,{support=codexTitleSupport,refresh=refreshCodexTitles,clientFactory=connect,binary=codexBinary}={}){Object.assign(this,{store,native,support,refresh,clientFactory,binary});}

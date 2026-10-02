@@ -179,7 +179,23 @@ export function createApp({ root, roots, guard, demo = false, startupOptions = {
                 return send(200, autoSync.listing(scope, query));
             }
             const tree = route.match(/^\/api\/trees\/([^/]+)$/);
-            if (req.method === 'GET' && tree) { await autoSync.openTree(tree[1], { check: url.searchParams.get('check') === '1' }); const graph = store.treeGraph(tree[1], url.searchParams.get('view') || 'in-use'); return send(200, req.headers['x-grove-graph'] === 'shared-messages-v1' ? store.memo('wire:' + graph.id + ':' + graph.view, () => packGraph(graph)) : graph); }
+            if (req.method === 'GET' && tree) {
+                const openId=String(req.headers['x-grove-open-id']||'').slice(0,80),startedAt=Date.now();
+                const report=async progress=>{
+                    assert(!res.destroyed,'Session loading cancelled.',499);
+                    if(openId)operation('open',{id:openId,action:'open',state:'running',startedAt,progress});
+                    await new Promise(r=>setImmediate(r));
+                };
+                await report({phase:'Reading session history'});
+                await autoSync.openTree(tree[1], { check: url.searchParams.get('check') === '1' });
+                let graph;
+                for(let attempt=0;attempt<3;attempt++){
+                    try{graph=await store.treeGraphAsync(tree[1],url.searchParams.get('view')||'in-use',{onProgress:report});break;}
+                    catch(error){if(error.message!=='Session changed while loading. Please try again.'||attempt===2)throw error;await report({phase:'Session changed; refreshing history'});}
+                }
+                const graphVersion=store.version;await report({phase:'Preparing session display'});
+                return send(200,req.headers['x-grove-graph']==='shared-messages-v1'?(store.version===graphVersion?store.memo('wire:'+graph.id+':'+graph.view,()=>packGraph(graph)):packGraph(graph)):graph);
+            }
             if (req.method === 'POST' && tree && body.action==='rename-session') {
                 const root=rootOf(store,tree[1]);
                 assert(!body.metaVersion||body.metaVersion===root.metaVersion,'The name changed. Refresh and try again.',409);

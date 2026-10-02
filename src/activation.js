@@ -1,3 +1,4 @@
+import {compactionDisabled} from './compaction-identity.js';
 import { supportedHistory } from './codex-history.js';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -43,9 +44,8 @@ export function activationInfo(store, native, branchId, cwd, env = process.env) 
         if (budget) { compactAt = budget * (pct && pct <= 100 ? pct / 100 : 1); source = 'Claude compaction configuration'; }
     }
     if (!window && context.lastUsage?.window && (!model || !context.model || model === context.model)) { window = context.lastUsage.window; source ||= 'Native context-window record'; }
-    const disabled = new Set(branch.contextPolicy?.disabled || []);
-    const usage = context.lastUsage, compact = context.compactions.filter(e => !disabled.has(e.id)).at(-1);
-    const expanded = context.compactions.some(e => disabled.has(e.id) && (!compact || e.line > compact.line));
+    const usage = context.lastUsage, compact = context.compactions.filter(e => !compactionDisabled(branch.contextPolicy,e)).at(-1);
+    const expanded = context.compactions.some(e => compactionDisabled(branch.contextPolicy,e) && (!compact || e.line > compact.line));
     let estimated = 0, basis = 'recorded-text';
     const estimateAfter = line => parsed.messages.filter(m => m.line > line).reduce((n, m) => n + estimateTokens(m.text), 0) + parsed.records.slice(line).reduce((n, r) => n + estimateTokens(toolText(r.value, branch.agent)), 0);
     if (expanded) { estimated = (compact ? estimateTokens(compact.summary || '') + compact.retained.reduce((n, m) => n + estimateTokens(m.text), 0) : 0) + estimateAfter(compact?.line || 0); basis = 'expanded-history-estimate'; }

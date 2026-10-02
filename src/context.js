@@ -1,3 +1,4 @@
+import {identifyCompactions} from './compaction-identity.js';
 import { hash } from './util.js';
 const tokenCache = new Map(); let tokenCacheBytes = 0;
 // A local, deliberately approximate text metric. This is not a model tokenizer,
@@ -48,8 +49,8 @@ export function contextInfo(records, agent) {
             }
         }
     }
+    identifyCompactions(records,compactions,agent);
     for (const event of compactions) {
-        event.id = hash(JSON.stringify(records[event.line - 1].value));
         event.canDisable = records.slice(0, event.line - 1).some(r => agent === 'codex' ? r.value?.type === 'response_item' && r.value.payload?.type === 'message' && r.value.payload.role === 'user' : r.value?.type === 'user' && !r.value.isCompactSummary && r.value.uuid);
     }
     for (const [i, event] of compactions.entries()) event.after = usage.find(u => u.line > event.line && (!compactions[i + 1] || u.line < compactions[i + 1].line))?.input ?? null;

@@ -1,3 +1,4 @@
+import {policyForCompactions} from './compaction-identity.js';
 import { pendingLabels } from '../web/library-view.js';
 import { activationInfo } from './activation.js';
 import { assert, hash } from './util.js';
@@ -33,7 +34,7 @@ export function nodeActivation(store, native, { branchId, nodeId, version, cwd }
     const nodeName = node.name || 'Pending ' + pendingLabels(graph.nodes).get(node.id);
     if (!end) return { branch, node, terminal, preview: { complete: false, readiness: 'node-boundary', title: groveTitle(branch.name, nodeName), nodeName } };
     const parsed = store.parsed(branch.head, branch.agent, end);
-    const contextPolicy = branch.contextPolicy ? { disabled: branch.contextPolicy.disabled.filter(id => parsed.context.compactions.some(e => e.id === id)) } : undefined;
+    const contextPolicy = policyForCompactions(branch.contextPolicy,parsed.context.compactions);
     const nodeBoundary = !path.checkpoints.some(c => c.end === end) && !parsed.pendingToolCalls;
     const prefix = { ...branch, contextPolicy, allowNodeBoundary: nodeBoundary };
     const virtual = { get: () => prefix, parsed: () => parsed, instances: () => [] };

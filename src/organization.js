@@ -197,8 +197,9 @@ export function detectFamilies(store) {
         let best = null;
         for (const candidate of candidates) {
             if (rootOf(store, candidate.id).id === fresh.id) continue;
+            if (!x.p.cwd || x.p.cwd !== store.summary(candidate.head,candidate.agent).cwd) continue;
             const y = get(candidate);
-            if (!x.p.cwd || x.p.cwd !== y.p.cwd) continue;
+            if (x.p.cwd !== y.p.cwd) continue;
             const linked = x.p.meta?.forked_from_id === y.p.nativeId || x.p.meta?.forkedFromId === y.p.nativeId;
             const common = commonBoundary(x, y, linked ? 2 : 4);
             if (common && (!best || common.a.count > best.common.a.count)) best = { candidate, common };
@@ -217,6 +218,8 @@ export function detectFamilies(store) {
             // Existing named logical nodes are never silently reorganized by inference.
             if ([left, right].some(b => !b.synthetic && store.all('node').some(n => n.branchId === b.id)))
                 continue;
+            const leftCwd=store.summary(left.head,left.agent).cwd;
+            if(!leftCwd||leftCwd!==store.summary(right.head,right.agent).cwd)continue;
             const x = get(left), y = get(right);
             if (!x.p.cwd || x.p.cwd !== y.p.cwd)
                 continue;

@@ -1,3 +1,4 @@
+import {matchesCompaction,policyForCompactions} from './compaction-identity.js';
 import {claudeFork} from './claude.js';
 import {retainedGraph,bodyRefs,withForkMetadata} from './retention.js';
 import {deletedIds,isTrashed} from './trash.js';
@@ -10,7 +11,7 @@ import { deviceDetails } from './device.js';
 import { ledger } from './context-ledger.js';
 import fs from 'node:fs';
 import { validPolicy } from './context-policy.js';
-import { collections, listing, treeGraph, organize, moveItems } from './workspace.js';
+import { collections, listing, treeGraph, buildGraphAsync, organize, moveItems } from './workspace.js';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { id, now, hash, assert, text, atomic, json } from './util.js';
@@ -39,7 +40,7 @@ export class Store {
         this.objectStatement = this.db.prepare('SELECT body FROM objects WHERE hash=?');
         this.insertObject = this.db.prepare('INSERT OR IGNORE INTO objects VALUES (?,?)');
         this.allStatement = this.db.prepare('SELECT body FROM entities WHERE kind=?');
-        this.entityWrite = this.db.prepare('INSERT INTO entities VALUES (?,?,?) ON CONFLICT(id) DO UPDATE SET body=excluded.body WHERE entities.kind=excluded.kind');
+        this.entityWrite = this.db.prepare('INSERT INTO entities VALUES (?,?,?) ON CONFLICT(id) DO UPDATE SET body=excluded.body WHERE entities.kind=excluded.kind AND entities.body<>excluded.body');
         this.localRead = this.db.prepare('SELECT body FROM local WHERE key=?');
         this.localWrite = this.db.prepare('INSERT OR REPLACE INTO local VALUES (?,?)');
         this.summaryRead = this.db.prepare('SELECT body FROM summaries WHERE id=? AND agent=? AND version=5');
@@ -89,7 +90,7 @@ export class Store {
         if(this.summaryCache.size >= 4096) this.summaryCache.delete(this.summaryCache.keys().next().value);
         this.summaryCache.set(key,value); if (!revisionId.startsWith('scan:')) this.summaryWrite.run(revisionId, agent, JSON.stringify(value)); return value;
     }
-    activity(revisionId, agent, end) { const p = this.parsed(revisionId, agent, end), entry = this.parseCache.get(agent + ':' + revisionId + (end===undefined?'':':'+end)); if (entry) return entry.ledger ||= ledger(p, agent); return ledger(p, agent); }
+    activity(revisionId, agent, end, parsed) { const p = parsed || this.parsed(revisionId, agent, end), entry = this.parseCache.get(agent + ':' + revisionId + (end===undefined?'':':'+end)); if (entry) return entry.ledger ||= ledger(p, agent); return ledger(p, agent); }
     close() { this.db.close(); }
     transaction(fn) {
         this.db.exec('BEGIN IMMEDIATE');
@@ -106,7 +107,7 @@ export class Store {
     all(kind) { return this.allStatement.all(kind).map(x => JSON.parse(x.body)); }
     get(kind, key) { const row = this.getStatement.get(kind, key); assert(row, `${kind} 不存在`, 404); return JSON.parse(row.body); }
     find(kind, key) { const row = this.getStatement.get(kind, key); return row ? JSON.parse(row.body) : undefined; }
-    put(kind, value) { this.invalidate(); this.entityWrite.run(kind, value.id, JSON.stringify(value)); return value; }
+    put(kind, value) { if(this.entityWrite.run(kind, value.id, JSON.stringify(value)).changes)this.invalidate(); return value; }
     local(key, value, options = {}) {
         if (key.startsWith('cloud:')) {
             if (!this.cloudCache.has(key)) { const body = this.localRead.get(key)?.body; this.cloudCache.set(key, { body, value: body ? JSON.parse(body) : null }); }
@@ -191,7 +192,7 @@ export class Store {
 
         const prefixParsed = nodeBoundary ? parse(this.raw(rev.id, end), parent.agent) : null;
         assert(parsed.checkpoints.some(c => c.end === end) || nodeBoundary && Number.isInteger(end) && end > 0 && end <= rev.refs.length && !prefixParsed.errors.length && !prefixParsed.pendingToolCalls, '只能从已完成的轮次或有效节点边界创建分支');
-        const contextPolicy = parent.contextPolicy ? { disabled: parent.contextPolicy.disabled.filter(id => parsed.context.compactions.some(e => e.id === id && e.line <= end)) } : undefined;
+        const contextPolicy = policyForCompactions(parent.contextPolicy,parsed.context.compactions.filter(e=>e.line<=end));
         const revision = this.revision(this.raw(rev.id, end), rev.id, { agent: parent.agent, operation: 'fork', ...(nodeBoundary ? { nodeBoundary: true } : {}), ...(parent.agent === 'claude' && parsed.checkpoints.some(c=>c.end===end) ? { claudeCheckpoint: parsed.checkpoints.find(c => c.end === end).turnId } : {}) });
         return this.put('branch', { ...parent, contextPolicy, id: id(), name: text(name), head: revision.id, nodeHead: null, layoutHead: null, endpointName: null, automaticName:null, sessionName:null,sessionNameOrigin:null,sessionAutomaticName:null,transcriptionTitle:null,transcriptionNameOrigin:null,transcriptionNaming:null,nameOrigin:null, groveNamed:false, chatIdentity: null, parentId: parent.id, forkRevision: rev.id, forkEnd: end, forkParentEnd: end, archived: false, synthetic: false, inferred: false, nativeLinked: false, prefixUnavailable: false, createdViaGroveFork: true, contentUpdatedAt: now(), createdAt: now(), updatedAt: now(), metaVersion: id(), metaAncestors: [] });
     }
@@ -261,16 +262,27 @@ export class Store {
         const session=rootOf(this,branchId);
         return { ...b, sessionName:session.sessionName||session.name,sessionNameOrigin:session.sessionNameOrigin,sessionAutomaticName:session.sessionAutomaticName, nativeClient:typeof p.meta?.source==='string'?p.meta.source:null, nativeTitleSource: this.summary(b.head,b.agent).titleSource, ...pendingDetail(this, b, p), messages: p.messages, checkpoints: p.checkpoints, warnings: p.warnings, cwd: p.cwd, records: p.records.length, lineage, instances: this.instances().filter(i => i.branchId === b.id).map(({ baseline, baselineRef, observedHash, ...i }) => i) };
     }
-    setCompaction(branchId, { eventId, enabled, head }) {
-        const b = this.get('branch', branchId); assert(!isTrashed(this,b.id)&&!b.archived && !b.excluded && !(b.projectId && this.get('project', b.projectId).archived), 'Restore this session before organizing.');
-        assert(b.head === head, 'Conversation changed. Refresh before organizing.', 409);
-        assert(typeof enabled === 'boolean', 'Choose whether compaction is enabled.');
-        const event = this.parsed(b.head, b.agent).context.compactions.find(e => e.id === eventId);
-        assert(event && (enabled || event.canDisable), 'Original pre-compaction history is unavailable.');
-        const disabled = new Set(b.contextPolicy?.disabled || []); enabled ? disabled.delete(eventId) : disabled.add(eventId);
-        const contextPolicy = { disabled: [...disabled].sort() };
-        if (JSON.stringify(b.contextPolicy || { disabled: [] }) !== JSON.stringify(contextPolicy)) this.edit(b.id, { contextPolicy });
-        return contextPolicy;
+    setCompaction(branchId, { eventId, enabled, head, version }) {
+        const b=this.get('branch',branchId);
+        assert(!isTrashed(this,b.id)&&!b.archived&&!b.excluded&&!(b.projectId&&this.get('project',b.projectId).archived),'Restore this session before organizing.');
+        assert(b.head===head,'Conversation changed. Refresh before organizing.',409);
+        assert(typeof enabled==='boolean','Choose whether compaction is enabled.');
+        const graph=this.treeGraph(branchId,'in-use');
+        assert(!version||version===graph.version,'Conversation changed. Refresh before organizing.',409);
+        const selected=graph.paths.find(p=>p.branchId===branchId)?.context.compactions.find(e=>matchesCompaction(e,eventId));
+        assert(selected,'Original pre-compaction history is unavailable.');
+        const targets=graph.paths.flatMap(path=>path.context.compactions.filter(e=>e.groupId===selected.groupId).map(event=>({path,event})));
+        assert(targets.every(({path,event})=>path.canRewriteContext&&(enabled||event.canDisable)),'Original pre-compaction history is unavailable.');
+        this.transaction(()=>{
+            for(const {path,event} of targets){
+                const branch=this.get('branch',path.branchId),disabled=new Set(branch.contextPolicy?.disabled||[]);
+                // Accept old physical IDs on read, but new decisions use stable IDs.
+                disabled.delete(event.legacyId);disabled.delete(event.id);if(!enabled)disabled.add(event.id);
+                const contextPolicy={disabled:[...disabled].sort()};
+                if(JSON.stringify(branch.contextPolicy||{disabled:[]})!==JSON.stringify(contextPolicy))this.edit(branch.id,{contextPolicy});
+            }
+        });
+        return {...this.get('branch',branchId).contextPolicy,groupId:selected.groupId,changedPaths:targets.length};
     }
     commitPending(branchId, options) { return commitPending(this, branchId, options); }
     moveTree(branchId, projectId, group) { return moveTree(this, branchId, projectId, group); }
@@ -283,6 +295,16 @@ export class Store {
         const key = `${this.version}:${id}:${view}`;
         if(this.graphCache?.key===key)return this.graphCache.value;
         const value=treeGraph(this,id,view);this.graphCache={key,value};return value;
+    }
+    async treeGraphAsync(id,view='all',{onProgress=async()=>{await new Promise(r=>setImmediate(r));}}={}) {
+        const root=rootOf(this,id),key='graph:'+root.id;
+        if(!this.memoCache.has(key)){
+            // Keep the same one-tree cache policy as synchronous projections.
+            if(this.graphRoot&&this.graphRoot!==root.id)this.memoCache.delete('graph:'+this.graphRoot);
+            const graph=await buildGraphAsync(this,root.id,onProgress);
+            this.memoCache.set(key,graph);
+        }
+        return this.treeGraph(id,view);
     }
     organize(id, options) { return organize(this, id, options); }
     moveItems(options) { return moveItems(this, options); }

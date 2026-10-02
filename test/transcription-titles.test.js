@@ -39,3 +39,18 @@ test('two new paths share one in-flight naming request when their completed cont
 test('a missing client defers naming without spending a model request',async t=>{
  const f=setup(t),b=f.store.branch(null,'Native','codex',codexSample(f.root,[['Shared','Result'],['Tail','Reply']]));f.enabled.add(b.id);await f.smart.save({nameTranscripts:true});f.adapter.ready=()=>false;f.store.fork(b.id,{name:'Fork',end:f.store.detail(b.id).checkpoints[0].end});f.smart.observe();await f.flush();assert.equal(f.requests.length,0);assert.ok(f.smart.data.jobs.some(j=>j.waitingForClient));f.adapter.ready=()=>true;f.smart.retry();await f.flush();assert.equal(f.requests.length,1);
 });
+
+test('transcription observation shares trees and skips unchanged history across restart',async t=>{
+ const f=setup(t),b=f.store.branch(null,'Native','codex',codexSample(f.root,[['First','Done'],['Tail','Reply']]));
+ const child=f.store.fork(b.id,{name:'Child',end:f.store.detail(b.id).checkpoints[0].end});
+ f.enabled.add(b.id);f.enabled.add(child.id);
+ let builds=0;const original=f.store.treeGraph.bind(f.store);f.store.treeGraph=(...args)=>{builds++;return original(...args);};
+ await f.smart.save({nameTranscripts:true});clearTimeout(f.smart.timer);assert.equal(builds,1,'one graph for both native paths');
+ f.smart.observe();clearTimeout(f.smart.timer);assert.equal(builds,1);
+ f.smart.close();
+ const restarted=new Intelligence(f.store,{transcriptions:f.adapter,canApply:()=>false});t.after(()=>restarted.close());
+ assert.equal(builds,1,'saved signature survives startup');
+ append(f.store,b,'Changed','New answer');restarted.observe();clearTimeout(restarted.timer);assert.equal(builds,2,'changed history is examined');
+ const fork=f.store.fork(b.id,{name:'New fork',end:f.store.detail(b.id).checkpoints[1].end});f.enabled.add(fork.id);
+ restarted.observe();clearTimeout(restarted.timer);assert.equal(builds,3,'new membership invalidates the tree');
+});

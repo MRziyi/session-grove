@@ -1,6 +1,6 @@
 {
   "name": "session-grove",
-  "version": "1.1.2",
+  "version": "1.1.3",
   "private": true,
   "description": "A project-centered workspace for branching and managing agent sessions.",
   "type": "module",
@@ -18,11 +18,12 @@
     "test:conversion": "node scripts/conversion-smoke.js",
     "test:codex": "node scripts/codex-smoke.js",
     "test:codex-fork": "node scripts/codex-fork-smoke.js",
-    "test:browser": "node scripts/node-browser-smoke.js && node scripts/sync-browser-smoke.js && node scripts/session-drag-browser-smoke.js && node scripts/inline-name-browser-smoke.js",
+    "test:browser": "node scripts/node-browser-smoke.js && node scripts/sync-browser-smoke.js && node scripts/session-drag-browser-smoke.js && node scripts/inline-name-browser-smoke.js && node scripts/tree-loading-browser-smoke.js",
     "test:node-browser": "node scripts/node-browser-smoke.js",
     "test:sync-browser": "node scripts/sync-browser-smoke.js",
     "bench:sync": "node --expose-gc scripts/sync-benchmark.js",
     "bench:store": "node --expose-gc scripts/store-benchmark.js",
+    "bench:local": "node --expose-gc scripts/local-resource-benchmark.js",
     "bench:git": "node --expose-gc scripts/git-performance.js",
     "bench:provider": "node scripts/provider-benchmark.js",
     "migrate:git": "node scripts/migrate-git.js"

@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.1.3
+
+- Identify compactions from complete payloads and occurrence order rather than physical timestamps/ordinals. One shared control atomically updates all matching live paths, exposes mixed legacy settings and its path count, and keeps distinct compacted contexts on separate branches. Preserve old event IDs as read aliases.
+- Reserve space for compaction controls on their actual connectors and remove the redundant compaction tooltip.
+- Show session loading immediately in the lower-right task panel, with history/path/build/display phases. Yield between path reads, retain navigation while loading, cancel obsolete opens, and retain visible failures.
+- Avoid repeated transcription-naming scans, compare working directories before reading family candidates, and release temporary sync graphs after hashing their rows incrementally. Skip unchanged SQLite entity writes.
+- Allow explicitly aborted Codex turns to deactivate while preserving unfinished-turn and fork-checkpoint protections.
+- Add an isolated local-library resource benchmark plus shared-compaction, responsive-loading, cancellation and cache-consistency regressions.
+
 ## 1.1.2
 
 - Remove Rename buttons in favor of double-click/F2 editing. Align the editor with the title and reduce single-click disambiguation from 320 ms to 200 ms.

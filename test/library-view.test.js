@@ -45,3 +45,21 @@ test('older projects use the session fold threshold, not an independent project 
  assert.equal(olderProject(items,{projectFoldMode:'count',projectFoldCount:1},at),false);
  assert.equal(olderProject(items,{projectFoldMode:'none'},at),false);assert.equal(olderProject([],{},at),false);
 });
+
+test('backend compaction groups occupy connection lanes once, with all target paths retained',async()=>{
+ const {graphLayout}=await import('../web/library-view.js');
+ const nodes=[{id:'a',depth:0,chatIds:['a'],parentIds:[],childIds:['b','c'],endBranchIds:[]},{id:'b',depth:1,chatIds:['b'],parentIds:['a'],childIds:[],endBranchIds:['p']},{id:'c',depth:1,chatIds:['c'],parentIds:['a'],childIds:[],endBranchIds:['q']}];
+ const paths=Array.from({length:16},(_,i)=>({branchId:'p'+i,messages:[{id:'a',line:1},{id:'b',line:3}],context:{compactions:[{id:'same-event',groupId:'shared-boundary',line:2,enabled:i!==7,groupMixed:true,groupSize:16}]}}));
+ paths.push({branchId:'q',messages:[{id:'a',line:1},{id:'c',line:3}],context:{compactions:[{id:'right',line:2,enabled:true},{id:'tail',line:4,enabled:true}]}});
+ const graph={nodes,paths,edges:[{from:'a',to:'b'},{from:'a',to:'c'}]},layout=graphLayout(graph,'p7');
+ assert.equal(layout.controls.length,3,'rewritten native event IDs do not duplicate one shared boundary');
+ const other=graphLayout(graph,'q');assert.deepEqual([...other.positions], [...layout.positions],'path selection keeps node geometry stable');
+ assert.deepEqual(other.controls.map(c=>[c.key,c.x,c.y]).sort(),layout.controls.map(c=>[c.key,c.x,c.y]).sort(),'path selection keeps compactions on the same connectors');
+ const shared=layout.controls.find(c=>c.after?.id==='b');assert.equal(shared.owner.branchId,'p7');assert.equal(shared.e.enabled,false);
+ for(const control of layout.controls){
+  assert.ok(layout.edges.some(e=>e.controls.includes(control)&&e.d.includes(`${control.x},${control.y}`)),'control center is on its actual connector');
+  for(const node of nodes){const p=layout.positions.get(node.id),height=node.endBranchIds.length?110:80;assert.ok(control.x+70<=p.x||control.x-70>=p.x+148||control.y+12<=p.y||control.y-12>=p.y+height,'controls do not cover nodes or endpoint titles');}
+ }
+ for(let a=0;a<layout.controls.length;a++)for(let b=a+1;b<layout.controls.length;b++){const x=layout.controls[a],y=layout.controls[b];assert.ok(Math.abs(x.x-y.x)>=140||Math.abs(x.y-y.y)>=24);}
+ paths[7].context.compactions.push({id:'second-on-the-same-path',line:2.5,enabled:true});assert.equal(graphLayout(graph,'p7').controls.length,4,'consecutive compactions on one path stay distinct');
+});
