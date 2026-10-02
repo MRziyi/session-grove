@@ -1,3 +1,4 @@
+import {TranscriptionTitles} from './transcription-titles.js';
 import {Autostart} from './autostart.js';
 import {installedClientLinks} from './client-links.js';
 import {repairLegacyRecoveries} from './recovery-lineage.js';
@@ -29,7 +30,7 @@ import { Store } from './store.js';
 import { Native } from './native.js';
 import { archiveNative } from './native-archive.js';
 import { AutoSync } from './auto-sync.js';
-import { metadata, treeMembers } from './organization.js';
+import { metadata, treeMembers,rootOf } from './organization.js';
 import { isActive } from './workspace.js';
 import { assert, atomic, json, text, now, id, hash } from './util.js';
 const webRoot = fileURLToPath(new URL('../web/', import.meta.url));
@@ -52,7 +53,7 @@ export function createApp({ root, roots, guard, demo = false, startupOptions = {
 
     const management = () => new Map(store.collections().items.map(i => [i.id, hash(JSON.stringify([
         i.projectId ? store.get('project', i.projectId) : inboxProject(), i.sessionIds.map(id => { const b = store.get('branch', id); return [b.id, b.name, b.projectId, b.archived, b.parentId, b.forkEnd, b.nodeHead, b.layoutHead, b.contextPolicy, b.endpointName]; }),
-        store.get('branch', i.id).layoutHead
+        store.get('branch', i.id).layoutHead,store.get('branch',i.id).sessionName
     ]))]));
     const streams = new Set(); let updateOperation = null, trashOperation = null, trashPromise = null;
     let stopping = false, discardPromise = null, discardOperation = null, discardRequest = null;
@@ -60,7 +61,7 @@ export function createApp({ root, roots, guard, demo = false, startupOptions = {
     const autostart=new Autostart({...startupOptions,root,roots:native.roots,demo,port:()=>server.address()?.port||7421});
     const operation = (kind, value) => { for (const res of streams) res.write('event: operation\ndata: ' + JSON.stringify({kind, ...value}) + '\n\n'); };
     autoSync.onOperation = value => operation('sync', {...value, status:autoSync.status()});
-    const intelligence = new Intelligence(store, { onChange: id => autoSync.schedule([id]), onStatus: value => operation('intelligence', value), canApply: () => !capturePromise && !trashPromise && !discardPromise && !stopping });
+    const intelligence = new Intelligence(store, { transcriptions:new TranscriptionTitles(store,native,demo?{support:()=>({supported:false,reason:'Transcription updates are unavailable in demo mode.'})}:{}), onChange: id => autoSync.schedule([id]), onStatus: value => operation('intelligence', value), canApply: () => !capturePromise && !trashPromise && !discardPromise && !stopping });
     const timing = () => ({ discardOperation, intelligence: intelligence.status(), trashOperation, appVersion: VERSION, serverNow: Date.now(), stateVersion: diagnostics.startedAt + ':' + store.version + ':' + store.cloudVersion, update: { nextRunAt: nextCaptureAt, lastRunAt: lastCaptureAt, started: !!store.local('localUpdateStarted'), operation: updateOperation } });
     let expiryTimer;const configureExpiry=()=>{clearTimeout(expiryTimer);const entries=expireTrash(store),next=entries.filter(e=>!e.expired).map(e=>Date.parse(e.expiresAt)).sort((a,b)=>a-b)[0];if(next){expiryTimer=setTimeout(configureExpiry,Math.max(1000,Math.min(2147483647,next-Date.now())));expiryTimer.unref();}};configureExpiry();
     const trashSnapshot = () => ({ trashEntries:(store.local('trashEntries')||[]).filter(e=>!e.expired&&!e.restoredAt).map(e=>({...e,projectIds:e.projectIds||[...new Set(e.branchIds.map(id=>store.find('branch',id)?.projectId||INBOX_ID))]})), trashNative:nativeTrashCandidates(store) });
@@ -179,6 +180,12 @@ export function createApp({ root, roots, guard, demo = false, startupOptions = {
             }
             const tree = route.match(/^\/api\/trees\/([^/]+)$/);
             if (req.method === 'GET' && tree) { await autoSync.openTree(tree[1], { check: url.searchParams.get('check') === '1' }); const graph = store.treeGraph(tree[1], url.searchParams.get('view') || 'in-use'); return send(200, req.headers['x-grove-graph'] === 'shared-messages-v1' ? store.memo('wire:' + graph.id + ':' + graph.view, () => packGraph(graph)) : graph); }
+            if (req.method === 'POST' && tree && body.action==='rename-session') {
+                const root=rootOf(store,tree[1]);
+                assert(!body.metaVersion||body.metaVersion===root.metaVersion,'The name changed. Refresh and try again.',409);
+                const updated=store.put('branch',metadata(root,{sessionName:text(body.name),sessionNameOrigin:'manual'}));
+                return send(200,{name:updated.sessionName,metaVersion:updated.metaVersion});
+            }
             if (req.method === 'POST' && tree) return send(200, store.organize(tree[1], {...body,nameOrigin:'manual'}));
             if(req.method==='POST'&&route==='/api/trash'){
                 const requestedTrees=body.itemIds||[];for(const id of requestedTrees)await autoSync.openTree(id);

@@ -154,7 +154,7 @@ export class Cloud {
                 const items = [...buckets.entries()].map(([id, members]) => {
                     const g = sliceGraph(graph, members.map(b => b.id)), ref = digest(g); c.legacyGraphs[ref] = g;
                     const real = members.filter(b => !b.synthetic), root = members.find(b => b.id === id), representative = root.synthetic ? real[0] : root;
-                    return { id, ref, ancestors: [], projectId: p.id, name: representative.name, agent: root.agent, kind: real.length > 1 ? 'tree' : 'session', sessionIds: real.map(b => b.id), sessions: real.map(b => ({ id: b.id, name: b.name, agent: b.agent, archived: b.archived, active: false, chats: null, updatedAt: b.updatedAt })), archived: real.every(b => b.archived), updatedAt: members.map(b => b.updatedAt).sort().at(-1) };
+                    return { id, ref, ancestors: [], projectId: p.id, name: root.sessionName||representative.name, sessionName:root.sessionName||null,sessionNameVersion:root.metaVersion, agent: root.agent, kind: real.length > 1 ? 'tree' : 'session', sessionIds: real.map(b => b.id), sessions: real.map(b => ({ id: b.id, name: b.name, agent: b.agent, archived: b.archived, active: false, chats: null, updatedAt: b.updatedAt })), archived: real.every(b => b.archived), updatedAt: members.map(b => b.updatedAt).sort().at(-1) };
                 });
                 const index = digest({ project: p, items }); c.indexes[index] = { project: p, items };
                 projects.push({ ...p, index, count: items.filter(i => !i.archived).length, treeIds: items.filter(i => !i.archived).map(i => i.id) });
@@ -348,7 +348,7 @@ export class Cloud {
             if (!sessions.length) return [];
             const matching = sessions.filter(s => !q || s.name.toLocaleLowerCase().includes(q) || branches.has(s.id) && this.store.parsed(branches.get(s.id).head, s.agent).messages.some(m => m.text.toLocaleLowerCase().includes(q)));
             if (!matching.length && !i.name.toLocaleLowerCase().includes(q)) return [];
-            return [{ ...i, agents:[...new Set(sessions.map(s=>s.agent))], origin:[...sessions].sort((a,b)=>b.updatedAt.localeCompare(a.updatedAt))[0]?.origin || i.origin, sessions, sessionIds: sessions.map(s => s.id), name: sessions.find(s => s.id === i.id)?.name || sessions[0].name, kind: sessions.length > 1 ? 'tree' : 'session', visibleSessionIds: sessions.map(s => s.id), matchedSessionIds: matching.map(s => s.id), visibleCount: sessions.length, updatedAt: sessions.map(s=>s.updatedAt).sort().at(-1) || i.updatedAt, groupId: i.projectId, groupName: project?.name }];
+            return [{ ...i, agents:[...new Set(sessions.map(s=>s.agent))], origin:[...sessions].sort((a,b)=>b.updatedAt.localeCompare(a.updatedAt))[0]?.origin || i.origin, sessions, sessionIds: sessions.map(s => s.id), name: i.sessionName || sessions.find(s => s.id === i.id)?.name || sessions[0].name, kind: sessions.length > 1 ? 'tree' : 'session', visibleSessionIds: sessions.map(s => s.id), matchedSessionIds: matching.map(s => s.id), visibleCount: sessions.length, updatedAt: sessions.map(s=>s.updatedAt).sort().at(-1) || i.updatedAt, groupId: i.projectId, groupName: project?.name }];
         });
         const latest = new Map(); for (const i of items) latest.set(i.groupId, [latest.get(i.groupId) || '', i.updatedAt].sort().at(-1));
         items.sort((a, b) => latest.get(b.groupId).localeCompare(latest.get(a.groupId)) || String(a.groupId).localeCompare(String(b.groupId)) || b.updatedAt.localeCompare(a.updatedAt));

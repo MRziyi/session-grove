@@ -3,9 +3,10 @@
 ## 1.1.1
 
 - Add reusable inline renaming for project navigation/category names, session titles, graph nodes and transcript node captions. Hover reveals a subtle border; double-click or F2 edits, check/Enter saves, and outside click/Escape cancels. Concurrent edits are rejected instead of silently overwritten.
-- Backfill missing model naming results for existing/filed sessions and forks. Name forks from their own first complete exchange, preserve manual names, record model provenance and avoid paying repeatedly for the same successful pass.
+- Separate whole-tree Session names from native transcription titles. Backfill missing Session naming records, follow the first named node for automatic Session names, and preserve manual names.
 - Track the exact range of automatically named nodes and regenerate automatic labels when a later fork changes that range. Exclude open-Page metadata from naming evidence and follow the user’s instruction language when editing a quoted foreign-language passage.
-- Make Source an explicit icon button, label source/revision fields, use recorded native client information where available and explain missing client metadata. Show original client titles and model-generated names there; session selectors use the Grove name.
+- Compact Source into inline title fields and a single Capture changes list showing change type followed by time. Remove static explanatory text and rename tooltips.
+- Add default-off transcription naming on new nodes for compatible Codex VS Code clients. Use completed-node requests and concise replies, cache/coalesce identical evidence, synchronize through the official rename API and refresh the client list without restarting. Preserve native manual edits and roll back failed refreshes.
 - Add regression and real-corpus browser coverage for inline editing, cancellation, stale edits, naming coverage and shared-node boundary changes.
 - Add a Settings toggle for user-login startup on macOS and Windows, retaining the current service and rolling back failed setup. Disable it in demo mode and preserve unrelated startup entries.
 - Document the default-off Settings startup switch and its On/Off/Updating/Failed states in both READMEs.

@@ -33,7 +33,7 @@ export function collections(store, forSync = false) {
         if (!sessions.length) return [];
         const representative = root.synthetic || !sessions.some(b=>b.id===root.id) ? [...sessions].sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id))[0] : root;
         const count = b => store.summary(b.head, b.agent).chats;
-        return [{ id: root.id, name: representative.name, projectId: root.projectId, agent: root.agent, agents: [...new Set(sessions.map(b => b.agent))], origin: contentOrigin(store, [...sessions].sort((a,b) => modified(b).localeCompare(modified(a)))[0].head),
+        return [{ id: root.id, name: root.sessionName || representative.name, sessionName:root.sessionName||null, sessionNameVersion:root.metaVersion, projectId: root.projectId, agent: root.agent, agents: [...new Set(sessions.map(b => b.agent))], origin: contentOrigin(store, [...sessions].sort((a,b) => modified(b).localeCompare(modified(a)))[0].head),
             kind: sessions.length > 1 ? 'tree' : 'session', sessionIds: sessions.map(b => b.id),
             sessions: sessions.map(b => ({ id: b.id, name: b.name, agent: b.agent, archived: !!b.archived,
                 origin: contentOrigin(store, b.head), active: instances.some(i => i.branchId === b.id && isActive(i)), chats: count(b), updatedAt: modified(b) })),
@@ -54,7 +54,7 @@ export function listing(store, scope = 'active:codex', query = '') {
         if (!sessions.length) return [];
         const matching = q ? sessions.filter(s => s.name.toLocaleLowerCase().includes(q) || store.parsed(store.get('branch', s.id).head, s.agent).messages.some(m => m.text.toLocaleLowerCase().includes(q))) : sessions;
         if (!matching.length && !item.name.toLocaleLowerCase().includes(q)) return [];
-        return [{ ...item, agents:[...new Set(sessions.map(s=>s.agent))], origin:[...sessions].sort((a,b)=>b.updatedAt.localeCompare(a.updatedAt))[0]?.origin || item.origin, sessions, sessionIds: sessions.map(s => s.id), name: sessions.find(s => s.id === item.id)?.name || sessions[0].name, kind: sessions.length > 1 ? 'tree' : 'session', visibleSessionIds: sessions.map(s => s.id), matchedSessionIds: matching.map(s => s.id),
+        return [{ ...item, agents:[...new Set(sessions.map(s=>s.agent))], origin:[...sessions].sort((a,b)=>b.updatedAt.localeCompare(a.updatedAt))[0]?.origin || item.origin, sessions, sessionIds: sessions.map(s => s.id), name: item.sessionName || sessions.find(s => s.id === item.id)?.name || sessions[0].name, kind: sessions.length > 1 ? 'tree' : 'session', visibleSessionIds: sessions.map(s => s.id), matchedSessionIds: matching.map(s => s.id),
             visibleCount: sessions.length, updatedAt: sessions.map(s => s.updatedAt).sort().at(-1),
             chats: sessions.length === 1 ? sessions[0].chats : null,
             groupName: project?.name || null, groupId: project?.id || null }];
@@ -102,7 +102,7 @@ export function buildGraph(store, branchId) {
         cache.set(key, path);
         return path;
     }
-    const paths = members.filter(b => visibleSession(store, b)).map(b => { const parsed = store.parsed(b.head,b.agent), inventory = store.activity(b.head,b.agent); return { branchId: b.id, name: b.name, originalTitle: store.instances().find(i=>i.branchId===b.id && i.applied)?.observedTitle || b.originalTitle || store.instances().find(i=>i.branchId===b.id)?.title || store.summary(b.head,b.agent).nativeTitle || b.nativeObservedTitle || b.name, agent: b.agent, archived: !!b.archived, parentBranchId: b.parentId, prefixUnavailable: !!b.prefixUnavailable,
+    const paths = members.filter(b => visibleSession(store, b)).map(b => { const parsed = store.parsed(b.head,b.agent), inventory = store.activity(b.head,b.agent); return { branchId: b.id, name: b.name, transcriptionTitle:b.transcriptionTitle||null, originalTitle: store.instances().find(i=>i.branchId===b.id && i.applied)?.observedTitle || b.originalTitle || store.instances().find(i=>i.branchId===b.id)?.title || store.summary(b.head,b.agent).nativeTitle || b.nativeObservedTitle || b.name, agent: b.agent, archived: !!b.archived, parentBranchId: b.parentId, prefixUnavailable: !!b.prefixUnavailable,
         head: b.head, canRewriteContext: supportedHistory(parsed), canActivate: store.summary(b.head,b.agent).complete && !store.summary(b.head,b.agent).external && (supportedHistory(parsed) || store.instances().some(i => i.branchId === b.id && i.adopted && i.baseRevision === b.head && (i.contextPolicyHash || policyHash(null)) === policyHash(b.contextPolicy))), active: store.instances().some(i => i.branchId === b.id && isActive(i)),
         context: { ...parsed.context, ledger: (() => { const l = inventory; return { ...l, entries: l.entries.filter(e => e.chatLine === null) }; })(), compactions: parsed.context.compactions.map(e => ({ ...e, enabled: !(b.contextPolicy?.disabled || []).includes(e.id) })) }, contextPolicy: b.contextPolicy || null, contextPending: store.instances().some(i => i.branchId === b.id && isActive(i) && ((i.contextPolicyHash || policyHash(null)) !== policyHash(b.contextPolicy) || i.baseRevision !== b.head)), messages: pathFor(b), checkpoints: parsed.checkpoints }; });
     const assignments = {};
@@ -198,8 +198,8 @@ export function buildGraph(store, branchId) {
     if (store.parseBytes > 8 * 1024 * 1024 || store.recordBytes > 8 * 1024 * 1024) {
         store.parseCache.clear(); store.parseBytes = 0; store.recordCache.clear(); store.recordBytes = 0;
     }
-    return { id: root.id, projectId: root.projectId, layoutHead: root.layoutHead || null,
-        version: hash(JSON.stringify([members.map(b => [b.id, b.head, b.nodeHead, b.parentId, b.archived, b.contextPolicy, b.name, b.endpointName]), root.layoutHead || null, paths.map(p=>[p.branchId,p.active])])),
+    return { id: root.id, sessionName:root.sessionName||null, sessionNameVersion:root.metaVersion, projectId: root.projectId, layoutHead: root.layoutHead || null,
+        version: hash(JSON.stringify([members.map(b => [b.id, b.head, b.nodeHead, b.parentId, b.archived, b.contextPolicy, b.name, b.endpointName]), root.layoutHead || null,root.sessionName||null, paths.map(p=>[p.branchId,p.active])])),
         name: store.collections().items.find(i => i.id === root.id)?.name || root.name,
         nodes: ordered, edges: [...edges.values()], paths, assignments,
         chatCount: new Set(paths.flatMap(p => p.messages.map(m => m.id))).size,
@@ -218,7 +218,7 @@ export function treeGraph(store, branchId, view = 'all') {
     const paths = graph.paths.filter(p => view === 'archived' ? p.archived || projectArchived : !p.archived && !projectArchived);
     const pathIds = new Set(paths.map(p => p.branchId)), nodeIds = new Set(paths.flatMap(p => p.nodeIds)), chats = new Set(paths.flatMap(p => p.messages.map(m => m.id)));
     const nodes = graph.nodes.filter(n => nodeIds.has(n.id)).map(n => ({ ...n, branchIds: n.branchIds.filter(id => pathIds.has(id)), endBranchIds: n.endBranchIds.filter(id => pathIds.has(id)), parentIds: n.parentIds.filter(id => nodeIds.has(id)), childIds: n.childIds.filter(id => nodeIds.has(id)) }));
-    return { ...graph, view, projectArchived: !!projectArchived, paths, nodes, edges: graph.edges.filter(e => nodeIds.has(e.from) && nodeIds.has(e.to)), assignments: Object.fromEntries(Object.entries(graph.assignments).filter(([id]) => chats.has(id))), name: paths.find(p => p.branchId === root.id)?.name || paths[0]?.name || graph.name, chatCount: chats.size, pendingCount: nodes.filter(n => n.pending).reduce((sum, n) => sum + n.count, 0) };
+    return { ...graph, view, projectArchived: !!projectArchived, paths, nodes, edges: graph.edges.filter(e => nodeIds.has(e.from) && nodeIds.has(e.to)), assignments: Object.fromEntries(Object.entries(graph.assignments).filter(([id]) => chats.has(id))), name: graph.sessionName || paths.find(p => p.branchId === root.id)?.name || paths[0]?.name || graph.name, chatCount: chats.size, pendingCount: nodes.filter(n => n.pending).reduce((sum, n) => sum + n.count, 0) };
 }
 
 export function organize(store, branchId, { version, pathId, chatIds, action, name, nodeId, nameOrigin, evidenceHash }) {

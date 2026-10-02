@@ -1,5 +1,16 @@
 let language = localStorage.getItem('grove-language') === 'zh' ? 'zh' : 'en';
 const dictionary = {
+"Update transcription titles on new nodes":"新增节点时更新 Transcription 标题",
+"Transcription updates are unavailable in demo mode.":"演示模式不支持更新 Transcription 标题。",
+"Updating transcription title":"正在更新 Transcription 标题",
+"Waiting for Codex client":"等待 Codex 客户端",
+"A compatible Codex VS Code client is required for live transcription-title updates.":"需要兼容的 Codex VS Code 客户端才能同步更新路径标题。",
+"Live transcription-title refresh is not verified on this platform.":"此平台尚未验证客户端标题的即时刷新。",
+"Open the supported Codex VS Code client to update transcription titles.":"请打开兼容的 Codex VS Code 客户端以更新路径标题。",
+"The client title changed. Its manual name was kept.":"客户端标题已被手动修改，已保留你的名称。",
+"The client title refresh is unavailable. The previous name was restored.":"无法刷新客户端标题，已恢复原名称。",
+
+"Capture changes":"变更记录",
 "{count} sessions are waiting for their own first request and reply.":"{count} 个会话还在等待自身的第一组请求和回复。",
 "Enabled":"已开启",
 "Disabled":"已关闭",

@@ -19,8 +19,8 @@ function supportsCodexNotifications() {
     return compatible;
 }
 const frame=value=>{const body=Buffer.from(JSON.stringify(value)),header=Buffer.alloc(4);header.writeUInt32LE(body.length);return Buffer.concat([header,body]);};
-export async function notifyCodex(root,changes,{supported=supportsCodexNotifications(),timeout=600}={}) {
-    if(!changes.length)return {status:'unchanged'};
+export async function notifyCodex(root,changes,{supported=supportsCodexNotifications(),timeout=600,messages=null}={}) {
+    if(!changes.length&&!messages?.length)return {status:'unchanged'};
     if(!supported||process.platform==='win32')return {status:'unsupported'};
     const socketPath=path.join(root,'ipc','ipc.sock');
     try {
@@ -42,7 +42,7 @@ export async function notifyCodex(root,changes,{supported=supportsCodexNotificat
                 buffer=buffer.subarray(4+length);
                 if(message.type!=='response'||message.requestId!==requestId)continue;
                 if(message.resultType!=='success'||typeof message.result?.clientId!=='string'){finish('unavailable');return;}
-                const packets=changes.map(({nativeId,active})=>frame({type:'broadcast',method:active?'thread-unarchived':'thread-archived',version:active?1:2,sourceClientId:message.result.clientId,params:{hostId:'local',conversationId:nativeId}}));
+                const packets=messages?messages.map(packet=>frame({type:'broadcast',...packet,sourceClientId:message.result.clientId})):changes.map(({nativeId,active})=>frame({type:'broadcast',method:active?'thread-unarchived':'thread-archived',version:active?1:2,sourceClientId:message.result.clientId,params:{hostId:'local',conversationId:nativeId}}));
                 // Flush before disconnecting. IPC has no UI acknowledgement: "sent" is intentional.
                 socket.end(Buffer.concat(packets),()=>finish('sent'));return;
             }
@@ -57,4 +57,24 @@ export async function refreshNativeClients(native,before) {
         if(active!==(!!old?.applied&&!old?.missing))changes.push({nativeId:instance.nativeId,active});
     }
     return notifyCodex(native.roots.codex,changes);
+}
+
+let titleSupport;
+export function codexTitleSupport(){
+    if(titleSupport)return titleSupport;
+    if(process.platform==='win32')return {supported:false,reason:'Live transcription-title refresh is not verified on this platform.'};
+    try{
+        const root=path.join(os.homedir(),'.vscode','extensions');
+        const installed=fs.readdirSync(root).filter(n=>n.startsWith('openai.chatgpt-')).sort((a,b)=>fs.statSync(path.join(root,b)).mtimeMs-fs.statSync(path.join(root,a)).mtimeMs);
+        for(const folder of installed){
+            const extension=fs.readFileSync(path.join(root,folder,'out','extension.js'),'utf8'),assets=path.join(root,folder,'webview','assets');
+            if(!extension.includes('query-cache-invalidate')||!extension.includes('thread/name/set'))continue;
+            const runtime=fs.readdirSync(assets).filter(n=>n.startsWith('app-initial-')&&n.endsWith('.js')).map(n=>fs.readFileSync(path.join(assets,n),'utf8')).join('\n');
+            if(['recent-conversations','recent-conversations-meta','command-menu-thread-search','thread/name/updated','invalidateQueries'].every(marker=>runtime.includes(marker)))return titleSupport={supported:true,client:'Codex VS Code',version:folder.replace('openai.chatgpt-','')};
+        }
+    }catch{}
+    return {supported:false,reason:'A compatible Codex VS Code client is required for live transcription-title updates.'};
+}
+export function refreshCodexTitles(root,options={}){
+    return notifyCodex(root,[],{supported:codexTitleSupport().supported,timeout:1500,...options,messages:[['recent-conversations'],['recent-conversations-meta'],['command-menu-thread-search','local']].map(queryKey=>({method:'query-cache-invalidate',version:0,params:{queryKey}}))});
 }

@@ -1,6 +1,6 @@
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
-export function connect(executable, nativeHome) {
+export function connect(executable, nativeHome, {onNotification=()=>{}} = {}) {
     const child = spawn(executable, ['app-server', '--stdio'], { env: { PATH: process.env.PATH, ...(process.platform==='win32'?{SystemRoot:process.env.SystemRoot,TEMP:process.env.TEMP,TMP:process.env.TMP}:{}), CODEX_HOME: nativeHome }, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] });
     let n = 0, buffer = '', stderr = '';
     const pending = new Map();
@@ -10,6 +10,7 @@ export function connect(executable, nativeHome) {
         buffer = buffer.slice(index + 1);
         try {
             const m = JSON.parse(line), p = pending.get(m.id);
+            if(m.method&&!Object.hasOwn(m,'id'))onNotification(m);
             if (p) {
                 clearTimeout(p.timer);
                 pending.delete(m.id);

@@ -143,7 +143,7 @@ function translateBanner() {
     $('#graph-fit').textContent = t('Fit tree');
 }
 function editableName(kind,id,name,css='') {
-    return `<span class="editable-name ${css}" data-name-kind="${kind}" data-name-id="${esc(id)}" title="${esc(t('Double-click to rename'))}">${esc(name)}</span>`;
+    return `<span class="editable-name ${css}" data-name-kind="${kind}" data-name-id="${esc(id)}">${esc(name)}</span>`;
 }
 function projectName(id,name){const project=state.data.projects.find(p=>p.id===id);return project&&!project.builtin&&id!==INBOX?editableName('project',id,name):esc(name);}
 function listedSession(item){return item.sessions.find(s=>s.id===item.id)||item.sessions[0];}
@@ -371,7 +371,7 @@ function renderList() {
     button('#archive-items',activeIds.length?t('Deactivate ({count})',{count:activeIds.length}):'Move to Trash',()=>activeIds.length?run(async()=>{await api('/manage','POST',{action:'deactivate',branchIds:activeIds});if(state.scope.startsWith('active:')){state.scope=PROJECTS;state.projectFocus=selected[0]?.projectId||INBOX;}}):trashDialog({itemIds:[...state.selected],view:state.scope==='archived'?'archived':'in-use'},selected.length));
     button('#restore-items','Restore',()=>restore({itemIds:[...state.selected]}));
     button('#deactivate-items','Deactivate',()=>run(()=>api('/manage','POST',{action:'deactivate',itemIds:[...state.selected],agent:state.scope.slice(7)})));
-    const row=i=>`<article class="session-row ${state.selected.has(i.id)?'checked':''}" data-item="${esc(i.id)}" draggable="${organizing?'true':'false'}"><button class="row-open" data-open="${esc(i.id)}">${icon(i.kind)}<span class="row-text"><span class="row-title">${editableName('session',listedSession(i)?.id||i.id,i.name)} ${cloudMark(i)}</span><span class="row-meta">${itemMeta(i)} ${sourceTags(i)}</span></span><time class="row-date">${date(i.updatedAt)}</time></button>${`<input type="checkbox" data-select="${esc(i.id)}" aria-label="${esc(t('Select {name}',{name:i.name}))}" ${state.selected.has(i.id)?'checked':''}>`}</article>`;
+    const row=i=>`<article class="session-row ${state.selected.has(i.id)?'checked':''}" data-item="${esc(i.id)}" draggable="${organizing?'true':'false'}"><button class="row-open" data-open="${esc(i.id)}">${icon(i.kind)}<span class="row-text"><span class="row-title">${editableName('session',i.id,i.name)} ${cloudMark(i)}</span><span class="row-meta">${itemMeta(i)} ${sourceTags(i)}</span></span><time class="row-date">${date(i.updatedAt)}</time></button>${`<input type="checkbox" data-select="${esc(i.id)}" aria-label="${esc(t('Select {name}',{name:i.name}))}" ${state.selected.has(i.id)?'checked':''}>`}</article>`;
     const groupHtml = g=>{const {limited,expanded,shown}=projectRows(g);return `<section class="list-group project-group" data-project-group="${esc(g.id||INBOX)}"><h2>${projectName(g.id,g.name==='Scheduled & background'?t(g.name):g.name)}<span class="group-actions"><span>${g.items.length}</span><input type="checkbox" data-group-select="${esc(g.id)}" aria-label="${esc(t('Select group {name}',{name:g.name}))}"></span></h2>${shown.map(row).join('')}${foldButton(g,limited,expanded)}</section>`;};
     const allGroups = groups(), older = state.scope===PROJECTS&&!state.query ? allGroups.filter(g=>isOlder(g.items)) : [], olderIds = new Set(older.map(g=>g.id));
     $('#session-list').innerHTML = allGroups.filter(g=>!olderIds.has(g.id)).map(groupHtml).join('') + (older.length ? `<section class="older-projects">${olderToggle(older.length)}${state.olderProjects?older.map(groupHtml).join(''):''}</section>` : '') || `<p class="empty">${t(state.query?'No matching sessions':'No sessions here.')}</p>`;
@@ -386,7 +386,7 @@ function renderList() {
 
 function renderRail() {
     const top=$('#session-rail').scrollTop;
-    const group=g=>{const {limited,expanded,shown}=projectRows(g);return `<section data-rail-project="${esc(g.id)}"><h2 class="rail-heading">${projectName(g.id,g.name)}</h2>${shown.map(i=>`<button class="rail-row ${state.tree?.id===i.id?'selected':''}" data-rail="${esc(i.id)}" ${state.tree?.id===i.id?'aria-current="true"':''}>${icon(i.kind)}<span class="row-text"><span class="row-title">${editableName('session',listedSession(i)?.id||i.id,i.name)} ${cloudMark(i)}</span><span class="row-meta">${itemMeta(i)} ${sourceTags(i)}</span></span></button>`).join('')}${foldButton(g,limited,expanded)}</section>`;};
+    const group=g=>{const {limited,expanded,shown}=projectRows(g);return `<section data-rail-project="${esc(g.id)}"><h2 class="rail-heading">${projectName(g.id,g.name)}</h2>${shown.map(i=>`<button class="rail-row ${state.tree?.id===i.id?'selected':''}" data-rail="${esc(i.id)}" ${state.tree?.id===i.id?'aria-current="true"':''}>${icon(i.kind)}<span class="row-text"><span class="row-title">${editableName('session',i.id,i.name)} ${cloudMark(i)}</span><span class="row-meta">${itemMeta(i)} ${sourceTags(i)}</span></span></button>`).join('')}${foldButton(g,limited,expanded)}</section>`;};
     const all=groups(),older=state.scope===PROJECTS&&!state.query?all.filter(g=>isOlder(g.items)):[],ids=new Set(older.map(g=>g.id));
     $('#rail-content').innerHTML=all.filter(g=>!ids.has(g.id)).map(group).join('')+(older.length?olderToggle(older.length)+(state.olderProjects?older.map(group).join(''):''):'');
     $('#session-rail').scrollTop=top;
@@ -423,11 +423,11 @@ function render() {
 }
 function renderDetail() {
     const tree = state.tree, p = route(); if (!p) { state.tree = null; render(); return; }
-    $('#session-title').innerHTML = editableName('session',p.branchId,p.name);
+    $('#session-title').innerHTML = editableName('session',tree.id,tree.name);
     const tokens = p.nodeIds.reduce((sum, id) => sum + (tree.nodes.find(n => n.id === id)?.tokens?.recordedEstimate || 0), 0);
     $('#session-meta').textContent = `${p.agent === 'codex' ? 'Codex' : 'Claude'} · ≈ ${compactNumber(tokens)} tokens${p.context?.compactions.length ? ' · ' + t('{count} compactions', { count: p.context.compactions.length }) : ''}`;
     $('#detail-count').textContent = `${t('{count} branches', { count: tree.paths.length })} · ${t('{count} chats', { count: tree.chatCount })} · ${t('{count} pending', { count: tree.pendingCount })}`;
-    $('#branch-picker').innerHTML = tree.paths.map(v => `<option value="${esc(v.branchId)}" ${v.branchId === p.branchId ? 'selected' : ''}>${esc(v.name || v.originalTitle)}</option>`).join('');
+    $('#branch-picker').innerHTML = tree.paths.map(v => `<option value="${esc(v.branchId)}" ${v.branchId === p.branchId ? 'selected' : ''}>${esc(v.transcriptionTitle || v.originalTitle || v.name)}</option>`).join('');
     enhanceSelect($('#branch-picker'));
     renderDetailActions(); renderTranscript(); renderGraph(); scheduleRibbons();
 }
@@ -857,11 +857,10 @@ function combineDialog() {
 async function showSource() {
     try {
         const d = await api('/branches/' + state.branchId);
-        const knownClient=value=>({vscode:'VS Code',cli:'CLI',codex_cli_rs:'Codex CLI',codex_vscode:'VS Code',desktop:'Codex App'})[value]||null;
         const operation=value=>t(({import:'Imported history',capture:'Captured client changes',fork:'Created continuation','native-settings':'Client settings update',conversion:'Converted context','shared-prefix':'Shared history','native-fork-snapshot':'Shared history'})[value]||'Saved revision');
-        const field=(label,value)=>`<dt>${esc(t(label))}</dt><dd>${esc(value)}</dd>`;
+        const field=(label,value)=>`<p class="source-title-line"><span>${esc(t(label))}:</span> ${esc(value)}</p>`;
         const originalTitle=d.originalTitle||d.nativeObservedTitle||d.instances.find(i=>i.observedTitle)?.observedTitle;
-        modal('Source & revisions', `${originalTitle||d.automaticName?`<dl class="source-original-title">${originalTitle?field('Original client title',originalTitle):''}${d.automaticName?field('Automatic name',d.automaticName.name):''}</dl>`:''}<p class="dialog-copy">${t('These records describe where Grove obtained the history and how it changed. Some sessions do not record a client application.')}</p>${d.warnings.map(w=>`<p class="warning">${esc(errorText(w))}</p>`).join('')}${d.lineage.map(r=>{const source=r.source||{},device=source.deviceName||(source.deviceId===state.data.device.id?state.data.device.name:null),client=knownClient(source.client)||knownClient(d.nativeClient);return `<section class="source-entry"><strong>${esc(operation(source.operation))}</strong><time> · ${esc(date(r.createdAt))}</time><dl>${field('Agent',d.agent==='codex'?'Codex':'Claude Code')}${field(source.operation==='import'?'Imported on':'Recorded on',device||t('Device not recorded'))}${field('Working directory',source.cwd||d.cwd||t('Directory not recorded'))}${field('Client application',client||t('Not recorded by the session'))}</dl></section>`;}).join('')}`, null);
+        modal('Source & revisions', `${originalTitle?field('Original client title',originalTitle):''}${d.sessionAutomaticName?field('Automatic name',d.sessionNameOrigin==='automatic'?d.sessionName:d.sessionAutomaticName.name):''}${d.warnings.map(w=>`<p class="warning">${esc(errorText(w))}</p>`).join('')}<section class="source-history"><h3>${t('Capture changes')}</h3><ul>${d.lineage.map(r=>`<li><span>${esc(operation(r.source?.operation))}</span><time datetime="${esc(r.createdAt)}">${esc(date(r.createdAt))}</time></li>`).join('')}</ul></section>`, null);
     } catch (e) { toast(e.message); }
 }
 function contextSelect(name,value,context,compact=false) {
@@ -885,6 +884,7 @@ async function settings(options = {}) {
           ${smart.hasKey?`<button type="button" id="remove-intelligence-key">${t('Remove key')}</button>`:`<button type="button" id="save-intelligence-key" disabled>${t('Verify key')}</button>`}</div><p class="settings-error" id="key-settings-error" role="alert"></p>
           <label class="timer-row"><span>${t('Name sessions and classify new inbox entries')}</span><input type="checkbox" name="smartClassify" ${smart.classify?'checked':''} ${!smart.hasKey?'disabled':''}></label>
           <label class="timer-row"><span>${t('Name new branch points')}</span><input type="checkbox" name="smartNodes" ${smart.nameNodes?'checked':''} ${!smart.hasKey?'disabled':''}></label>
+          <label class="timer-row"><span>${t('Update transcription titles on new nodes')}</span><input type="checkbox" name="smartTranscripts" ${smart.nameTranscripts?'checked':''} ${!smart.hasKey||!smart.transcriptionSupport?.supported?'disabled':''}></label>${smart.transcriptionSupport?.supported?`<span class="context-limit">${esc(smart.transcriptionSupport.client)}</span>`:`<p class="dialog-copy">${esc(t(smart.transcriptionSupport?.reason||'A compatible Codex VS Code client is required for live transcription-title updates.'))}</p>`}
           <label class="timer-row smart-scheduling"><span>${t('Concurrent requests')}</span><select name="smartConcurrency">${[1,2,3,4].map(n=>`<option value="${n}" ${n===(smart.concurrency??2)?'selected':''}>${n===1?t('1 (serial)'):n}</option>`).join('')}</select></label>
           <label class="timer-row"><span>${t('Minimum request interval')}</span><span class="timer-interval"><input type="number" name="smartInterval" min="0" max="60" step="0.1" value="${smart.minIntervalSeconds??0}" aria-label="${t('Minimum request interval')}"><span>${t('seconds')}</span></span></label>
           <p class="dialog-copy">${t('Selected messages are sent to OpenAI when enabled.')}</p><p id="intelligence-status" role="status"></p><button type="button" id="retry-intelligence" ${!smart.error?'hidden':''}>${t('Retry')}</button>
@@ -924,7 +924,7 @@ async function settings(options = {}) {
             $('#save-intelligence-key').onclick=e=>busy(e.currentTarget,()=>saveSmart({apiKey:$('[name=intelligenceKey]').value.trim()}));
         }
         if($('#remove-intelligence-key'))$('#remove-intelligence-key').onclick=e=>busy(e.currentTarget,()=>saveSmart({removeKey:true}));
-        for(const [name,key] of [['smartClassify','classify'],['smartNodes','nameNodes']])$(`[name=${name}]`).onchange=async e=>{const input=e.currentTarget;input.disabled=true;try{await saveSmart({[key]:input.checked});input.disabled=false;}catch(error){input.checked=!input.checked;input.disabled=false;$('#dialog-error').textContent=error.message;}};
+        for(const [name,key] of [['smartClassify','classify'],['smartNodes','nameNodes'],['smartTranscripts','nameTranscripts']])$(`[name=${name}]`).onchange=async e=>{const input=e.currentTarget;input.disabled=true;try{await saveSmart({[key]:input.checked});input.disabled=false;}catch(error){input.checked=!input.checked;input.disabled=false;$('#dialog-error').textContent=error.message;}};
         for(const [name,key] of [['smartConcurrency','concurrency'],['smartInterval','minIntervalSeconds']])$(`[name=${name}]`).onchange=async e=>{const input=e.currentTarget;if(!input.checkValidity()){input.reportValidity();return;}input.disabled=true;try{await saveSmart({[key]:Number(input.value)});input.disabled=false;}catch(error){input.disabled=false;$('#dialog-error').textContent=error.message;}};
         $('#retry-intelligence').onclick=e=>busy(e.currentTarget,async()=>{state.data.intelligence=await api('/intelligence/retry','POST',{});renderIntelligence();});
         state.data.intelligence=smart;renderIntelligence();
@@ -1018,8 +1018,8 @@ const inlineNames=installInlineNames({translate:t,saved:()=>refresh(),onError:e=
         return {value:project.name,label:t('Project name'),save:name=>api('/projects/'+id,'PATCH',{name,metaVersion:project.metaVersion})};
     }
     if(kind==='session'){
-        const branch=state.data.branches.find(b=>b.id===id);if(!branch)return null;
-        return {value:branch.name,label:t('Session name'),save:name=>api('/branches/'+id,'PATCH',{name,metaVersion:branch.metaVersion})};
+        const item=state.data.items.find(i=>i.id===id),tree=state.tree?.id===id?state.tree:null;if(!item&&!tree)return null;
+        return {value:tree?.name||item.name,label:t('Session name'),save:name=>api('/trees/'+id,'POST',{action:'rename-session',name,metaVersion:tree?.sessionNameVersion||item.sessionNameVersion})};
     }
     const graph=state.tree,node=graph?.nodes.find(n=>n.id===id);if(!node)return null;
     const pathId=node.branchIds.includes(state.branchId)?state.branchId:node.branchIds[0];

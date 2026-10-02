@@ -22,6 +22,7 @@ export function changeSnapshot(graph) {
             }
             return [...assigned.values()].map(n => [fingerprint(n.chats.sort()), {name:n.name, branchId:b.id, chats:n.chats}]);
         })),
+        sessionTitles:entries(graph.branches.filter(b=>b.sessionName).map(b=>({id:b.id,name:b.sessionName}))),
         // Older libraries may still use immutable named nodes rather than layouts.
         legacyNodes: Object.fromEntries((graph.nodes || []).map(n => [n.id, {name:n.name,branchId:n.branchId}])),
     };
@@ -44,6 +45,7 @@ export function sessionChanges(before, after, store) {
         if (old.endpoint !== b.endpoint) add('node-renamed','Node renamed: {from} → {to}',{...scope,from:old.endpoint || 'Pending',to:b.endpoint || 'Pending'});
     }
     for (const b of Object.values(before?.branches || {})) if (!after.branches[b.id]) add('session-removed','Session removed',{sessionId:b.id,session:b.name});
+    for(const [id,title] of Object.entries(after.sessionTitles||{})){const old=before?.sessionTitles?.[id]?.name||before?.branches?.[id]?.name;if(old&&old!==title.name)add('session-renamed','Session renamed: {from} → {to}',{from:old,to:title.name});}
     for (const p of Object.values(after.projects)) if (before?.projects[p.id] && before.projects[p.id].name !== p.name) add('project-renamed','Project renamed: {from} → {to}',{from:before.projects[p.id].name,to:p.name});
     for (const p of Object.values(after.projects)) {
         const old = before?.projects[p.id];

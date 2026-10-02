@@ -47,6 +47,8 @@ Same-agent activation preserves supported native records, including recorded too
 
 Optional **Smart Organization** names existing and new sessions, classifies new inbox entries and labels branch points. Enable session organization and node naming independently with your own OpenAI API key. Manually chosen names stay yours.
 
+A Session names the whole tree independently of its transcription paths. Its automatic title follows the first named node; a manual Session name stays fixed. Transcription selectors show native client titles. The separate **Update transcription titles on new nodes** switch is off by default. With a compatible Codex VS Code client running, forks or compaction boundaries can rename a path in both Grove and the client without restarting. Only completed nodes contribute user requests and brief assistant results; changes to an unfinished tail do not trigger requests, and identical evidence reuses a result. Enabling the switch does not bulk-rename existing paths. Unsupported clients/platforms keep this option disabled.
+
 Requests default to two at a time. Settings lets you choose serial operation or up to four concurrent requests, and set a minimum request interval. Progress shows what is running, what remains and anything that needs attention. Selected messages are sent to OpenAI only when enabled.
 
 Settings also provides Codex context-window and compaction controls, plus Claude’s auto-compaction window. Empty values inherit client defaults; model capacity still applies. Removing a saved API key restores the key-entry workflow.
@@ -75,6 +77,8 @@ Login startup is **off by default**. After opening Grove, go to **Settings → L
 1. Turn the switch on to start Grove automatically when you next sign in to macOS or Windows.
 2. Check the status beside it: **Disabled**, **Enabled**, **Updating**, or **Failed**. Failed changes keep the previous setting and show the reason.
 3. Turn it off to disable future login startup. The currently running service stays available.
+
+On macOS, Grove runs as a background service and does not need to appear in the **Open at Login** application list. It does not open a browser at login.
 
 Grove sets up the current user's macOS LaunchAgent or Windows Startup shortcut for you; no terminal configuration is required. Demo mode disables this control. If you move the repository or change your Node installation, turn the switch off and on again to refresh its saved paths. Background output is in `~/.session-grove/logs/server.log` (Windows: `%USERPROFILE%\.session-grove\logs\server.log`).
 

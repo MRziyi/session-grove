@@ -192,6 +192,7 @@ export class Native {
                 instance.observedTitle = observed.title;
                 instance.title = observed.title;
                 if (observed.title !== branch.originalTitle) patch.originalTitle = observed.title;
+                if(branch.transcriptionTitle&&observed.title!==branch.transcriptionTitle){patch.transcriptionTitle=observed.title;patch.transcriptionNameOrigin='manual';}
             }
             if (Object.keys(patch).length) this.store.put('branch', metadata(branch, patch));
         }
@@ -338,7 +339,7 @@ export class Native {
         const day = new Date().toISOString().slice(0, 10).split('-');
         return path.join(i.root, 'sessions', ...day, `rollout-${new Date().toISOString().slice(0, 19).replace(/:/g, '-')}-${i.nativeId}.jsonl`);
     }
-    title(branch, instance) { return instance.groveTitle ? groveTitle(branch.name, instance.activationNodeName) : branch.name; }
+    title(branch, instance) { return branch.transcriptionTitle || (instance.groveTitle ? groveTitle(branch.name, instance.activationNodeName) : branch.name); }
     plan() {
         const operations = this.store.instances().flatMap(i => {
             if (i.excluded || isTrashed(this.store,i.branchId)) return [];
