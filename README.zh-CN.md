@@ -70,6 +70,19 @@ pnpm run demo
 
 也可以使用 npm：`npm install`、`npm run demo`、`npm start`。左下角可切换中英文。
 
+## 第一次使用
+
+新资料库会显示简短引导和 **Update · 查找本机会话** 按钮。打开 Grove 本身不会自动扫描或上传；Git 同步和 OpenAI API key 都是可选项。
+
+1. 点击 **Update**，读取本机 Codex 和 Claude Code 的已有对话。空库首次扫描后会进入 **Projects**，便于看到两个客户端的会话。没有结果时，先在客户端创建对话；展开**扫描目录**检查 Grove 查找的位置。自定义目录见[配置说明](docs/operations.md)。
+2. 打开会话查看原文和分支图。**Session** 是整棵对话树，Transcription 选择器对应客户端的一条对话路径，**node** 是路径中的一段对话。**Pending** 表示还没有节点标签，不代表模型正在运行。
+3. 勾选会话，通过 **Move to project → New project…** 创建项目，也可以把会话拖入已有项目；双击标题改名。**Current Active** 显示本机客户端可用的会话，**Projects** 也保留未激活的会话。
+4. 选中节点并点击 **Activate**，选择工作目录后确认。有对应扩展时，可点击 **Open in VS Code**。继续在客户端聊天，再用 Grove 的 **Update** 读取新内容。
+
+如果要读取另一台电脑的资料库，点击左侧**配置同步**。创建一个空的**私有 GitHub 仓库**，或使用已有 Grove 数据仓库；先配置好本机 Git SSH 访问，再到 **Settings → Git repository → Verify and connect** 填写仓库的 SSH 地址。使用独立数据仓库，不要填写本应用的源码仓库。**Pull** 读取远端资料；**Push** 先 Pull，再上传本地变更。连接配置完成前，两者保持灰色不可用。验证失败时可查阅[配置说明](docs/operations.md)。
+
+左下角的 **ⓘ Information** 按钮可随时打开使用指南，不必完成同步或智能命名配置才能开始使用。
+
 ## 登录自启动
 
 自启**默认关闭**。打开 Grove 后，进入 **Settings → 本地服务 → 登录后自动启动**：

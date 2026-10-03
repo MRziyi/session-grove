@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-export const browserFiles=['scripts/node-browser-smoke.js','scripts/sync-browser-smoke.js','scripts/session-drag-browser-smoke.js','scripts/inline-name-browser-smoke.js','scripts/tree-loading-browser-smoke.js'];
+export const browserFiles=['scripts/node-browser-smoke.js','scripts/sync-browser-smoke.js','scripts/session-drag-browser-smoke.js','scripts/inline-name-browser-smoke.js','scripts/tree-loading-browser-smoke.js','scripts/onboarding-browser-smoke.js'];
 export function testPlan(files,tests,suite='all'){
     assert.ok(['all','core','native','git-1','git-2','browser'].includes(suite),'Unknown test suite');
     if(suite==='browser')return browserFiles.map(file=>({file}));

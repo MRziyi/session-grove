@@ -70,6 +70,19 @@ To use your own history, stop the demo, run `pnpm start`, then click **Update**.
 
 Prefer npm? Use `npm install`, `npm run demo` and `npm start`. Switch between English and Chinese at the bottom of the sidebar.
 
+## Your first session
+
+A new library starts with a short guide and an **Update · find local sessions** button. Nothing is scanned or uploaded just because you open Grove. Git sync and an OpenAI API key are optional.
+
+1. Click **Update** to read existing Codex and Claude Code conversations on this computer. The first empty-library scan takes you to **Projects**, so conversations from either client are visible. If none appear, create a conversation in your client first; expand **Session folders** to check where Grove is looking. Custom locations are covered in [setup](docs/operations.md).
+2. Open a session to see its transcript and branch graph. A **Session** is a whole conversation tree; the transcription picker selects a client conversation/path; a **node** is a stretch of that path. **Pending** means it has not been given a node label yet, not that a request is still running.
+3. Select sessions using their checkboxes, then choose **Move to project → New project…** to create a project. You can also drag sessions into existing projects. Double-click a title to rename it. **Current Active** shows sessions available in your local client; **Projects** also keeps inactive sessions.
+4. Select a node and choose **Activate** to continue from its context. Choose a working folder, confirm, then use **Open in VS Code** when available. Continue chatting in the client and click **Update** in Grove to read new work.
+
+For another computer's library, use **Set up sync** in the sidebar. Create an empty **private** GitHub repository (or use an existing Grove data repository), configure Git SSH access on this computer, then paste its SSH address into **Settings → Git repository → Verify and connect**. Use a separate data repository, not this application's source repository. **Pull** brings in remote work; **Push** pulls first, then sends local changes. Both buttons stay disabled until a connection is configured. See [Git setup](docs/operations.md) if verification fails.
+
+The sidebar's **ⓘ Information** button opens the guide at any time. No setup wizard blocks local use.
+
 ## Start automatically at login
 
 Login startup is **off by default**. After opening Grove, go to **Settings → Local service → Start automatically at login**:

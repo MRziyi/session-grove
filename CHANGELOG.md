@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.1.5
+
+- Guide empty libraries through local Update, exploring sessions and organizing projects. Distinguish empty scan results, empty views and empty searches; reveal scanned folders and keep help available through the compact ⓘ Information button.
+- Disable Pull/Push until sync is configured, hide unavailable upload indicators, and offer a sidebar shortcut to Git settings. Clarify that sync is optional.
+- Document the first-run flow and session/tree terminology in both READMEs. Add browser coverage for onboarding, native discovery, languages, compact footer alignment and sync readiness.
+
 ## 1.1.4
 
 - Reject obsolete async tree builds before caching them, and avoid caching a wire response after a concurrent update invalidates its graph.
