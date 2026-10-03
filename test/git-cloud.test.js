@@ -16,9 +16,12 @@ import { stageTrash,cleanupLocal,restoreTrash } from '../src/trash.js';
 function fixture(t) {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'grove-git-test-'));
     const url = path.join(root, 'remote.git'); execFileSync('git', ['init', '--bare', '-b', 'main', url]);
+    // The disposable receiver must not launch maintenance that outlives Push
+    // and recreates info/refs or objects/info/packs during fixture teardown.
+    fs.appendFileSync(path.join(url,'config'),'\n[receive]\n\tautoGC = false\n');
     const config = { provider: 'git', url, allowLocal: true }, devices = [];
     const device = name => { const store = new Store(path.join(root, name)); const auto = new AutoSync(store, () => config, null, { provider: 'git' }); const d = { store, auto, cloud: auto.cloud }; devices.push(d); return d; };
-    t.after(() => { devices.forEach(d => { d.auto.close(); d.store.close(); }); fs.rmSync(root, { recursive: true, force: true }); });
+    t.after(() => { devices.forEach(d => { d.auto.close(); d.store.close(); }); fs.rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); });
     return { root, url, device };
 }
 const branch = (d, name = 'Sample') => d.store.branch(null, name, 'codex', codexSample('/synthetic', [['Hello ' + name, 'Ready']]));
