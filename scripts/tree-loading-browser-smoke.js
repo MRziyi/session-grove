@@ -33,11 +33,39 @@ try{
  assert.equal(layout.controls,1,'nineteen rewritten copies share one compaction control');assert.equal(layout.overlaps,false);assert.equal(layout.coversNode,false);assert.equal(layout.tooltips,false);
  const selected=await evaluate('document.querySelector("#branch-picker").value'),owner=await evaluate('document.querySelector(".compaction-edge button").dataset.compactionPath');assert.equal(owner,selected);
  assert.equal(await evaluate('document.querySelector(".compaction-edge button").getAttribute("aria-pressed")'),'mixed');
- assert.ok(await evaluate('document.querySelector(".compaction-edge button").textContent.includes("19 paths")'),'control discloses its full target scope');
+ assert.ok(await evaluate('!document.querySelector(".compaction-edge button").textContent.includes("paths")'),'edge controls do not advertise a cross-edge shared scope');
  await evaluate('document.querySelector(".compaction-edge button").click()');await wait('document.querySelector(".compaction-edge button").getAttribute("aria-pressed")==="true"');
  assert.ok(store.all('branch').every(b=>!b.contextPolicy?.disabled?.length),'one explicit choice resolves mixed legacy settings together');
  await evaluate('document.querySelector(".compaction-edge button").click()');await wait('document.querySelector(".compaction-edge button").getAttribute("aria-pressed")==="false"');
  const chosen=store.get('branch',selected);assert.equal(chosen.contextPolicy.disabled.length,1);assert.ok(store.all('branch').every(b=>b.contextPolicy?.disabled?.length===1),'shared toggle updates every inherited copy');
  const screenshot=await call('Page.captureScreenshot',{format:'png'});fs.writeFileSync('test-results/compaction-layout.png',Buffer.from(screenshot.data,'base64'));
- assert.deepEqual(errors,[]);console.log('Browser passed: immediate task feedback, responsive cancellation, shared compactions on reserved connections, no tooltip or overlap, shared policy updates every inherited path.');
+ // A fan-out has five real edges, four with the same recorded compaction.
+ const fan=store.branch(project.id,'Five-edge fan','codex',base),fanChildren=[];
+ for(let i=0;i<5;i++){const child=store.branch(project.id,'Fan '+i,'codex',base+(i<4?compact(i):'')+turn('Different continuation '+i,'Different answer '+i));store.put('branch',{...child,parentId:fan.id,forkRevision:fan.head,forkEnd:base.trim().split('\n').length,forkParentEnd:base.trim().split('\n').length});fanChildren.push(child);}
+ await evaluate(`document.querySelector('[data-scope="${project.id}"]').click()`);await wait(`document.querySelector('[data-open="${fan.id}"]')`);await evaluate(`document.querySelector('[data-open="${fan.id}"]').click()`);await wait('document.querySelectorAll(".compaction-edge").length===4&&document.querySelector("#main").getAttribute("aria-busy")!=="true"');
+ const targets=await evaluate('[...document.querySelectorAll(".compaction-edge")].map(e=>e.dataset.after)');assert.equal(new Set(targets).size,4,'each outgoing edge owns a separate control');
+ const target=await evaluate('document.querySelector(".compaction-edge button").dataset.compactionPath');await evaluate('document.querySelector(".compaction-edge button").click()');await wait('document.querySelectorAll(".compaction-edge button[aria-pressed=false]").length===1');
+ assert.ok(store.get('branch',target).contextPolicy.disabled.length);assert.ok(fanChildren.filter(b=>b.id!==target).every(b=>!store.get('branch',b.id).contextPolicy?.disabled?.length),'other edges remain unchanged despite sharing the same result ID');
+ // Switching the transcript must persistently mark the whole route and frame it.
+ const routeIds=[fanChildren[0].id,fanChildren[3].id];let priorTransform;
+ for(const branchId of routeIds){
+  await evaluate(`(()=>{const picker=document.querySelector('#branch-picker');picker.value='${branchId}';picker.dispatchEvent(new Event('change',{bubbles:true}));})()`);
+  const graph=store.treeGraph(fan.id,'in-use'),route=graph.paths.find(p=>p.branchId===branchId);
+  assert.deepEqual((await evaluate('[...document.querySelectorAll(".graph-node.path-active")].map(e=>e.dataset.node)')).sort(),[...route.nodeIds].sort());
+  assert.equal(await evaluate('document.querySelectorAll("[data-path-edge=current]").length'),route.nodeIds.length-1);
+  assert.equal(await evaluate('document.querySelector("#graph-path-label").textContent'),route.transcriptionTitle||route.originalTitle||route.name);
+  assert.ok(await evaluate(`(()=>{const v=document.querySelector('#graph-scroll').getBoundingClientRect(),e=document.querySelector('[data-node="${route.nodeIds.at(-1)}"]').getBoundingClientRect();return e.left>=v.left&&e.right<=v.right&&e.top>=v.top&&e.bottom<=v.bottom})()`),'selected endpoint is framed after switching');
+  const transform=await evaluate('document.querySelector("#graph").style.transform');if(priorTransform)assert.notEqual(transform,priorTransform);priorTransform=transform;
+ }
+ const activeBefore=await evaluate('[...document.querySelectorAll(".graph-node.path-active")].map(e=>e.dataset.node)');
+ await evaluate('document.querySelector("#graph-fit").click();document.querySelector("#graph-reset").click();document.querySelector("#graph-fit-path").click()');
+ assert.deepEqual(await evaluate('[...document.querySelectorAll(".graph-node.path-active")].map(e=>e.dataset.node)'),activeBefore,'camera controls never erase the selected route');
+ const pathShot=await call('Page.captureScreenshot',{format:'png'});fs.writeFileSync('test-results/selected-transcript-path.png',Buffer.from(pathShot.data,'base64'));
+ await evaluate('document.querySelector("#graph-fit").click()');const fanShot=await call('Page.captureScreenshot',{format:'png'});fs.writeFileSync('test-results/edge-controls.png',Buffer.from(fanShot.data,'base64'));
+ const serialBranch=store.branch(project.id,'Consecutive compactions','codex',base+compact(100)+compact(101)+turn('After both','Answer'));
+ await evaluate(`document.querySelector('[data-scope="${project.id}"]').click()`);await wait(`document.querySelector('[data-open="${serialBranch.id}"]')`);await evaluate(`document.querySelector('[data-open="${serialBranch.id}"]').click()`);await wait('document.querySelectorAll(".context-point").length===1&&document.querySelector("#main").getAttribute("aria-busy")!=="true"');
+ assert.equal(await evaluate('document.querySelectorAll(".compaction-edge").length'),2);assert.equal(await evaluate('document.querySelectorAll(".graph-node").length'),2,'context point is not an invented conversation node');
+ const pairs=await evaluate('[...document.querySelectorAll(".compaction-edge")].map(e=>[e.dataset.before,e.dataset.after])');assert.equal(pairs[0][1],pairs[1][0]);
+ await evaluate('document.querySelector("#graph-fit").click()');const serialShot=await call('Page.captureScreenshot',{format:'png'});fs.writeFileSync('test-results/serial-compaction-edges.png',Buffer.from(serialShot.data,'base64'));
+ assert.deepEqual(errors,[]);console.log('Browser passed: immediate task feedback, responsive cancellation, shared compactions on reserved connections, no tooltip or overlap, edge policies stay independent at fan-outs; serial compactions use context-only points.');
 }finally{release();await closeBrowser(chrome,ws);await new Promise(r=>app.close(r));fs.rmSync(root,{recursive:true,force:true,maxRetries:10,retryDelay:100});}

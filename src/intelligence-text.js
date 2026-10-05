@@ -2,8 +2,9 @@
 const injected = /^(?:\s*<(recommended_plugins|environment_context|external_codex_apps_open_page|ide_opened_file|ide_selection|system-reminder|local-command-caveat|local-command-stdout|command-name|command-message|command-args|skills_instructions|apps_instructions|plugins_instructions)>[\s\S]*?<\/\1>\s*)/;
 export function humanText(text) {
     let value = String(text || '').trim();
+    while (injected.test(value)) value = value.replace(injected, '').trim();
     if (/^# Context from my IDE setup:\s/.test(value)) {
-        const request = value.match(/^## My request:\s*\n/m);
+        const request = value.match(/^## My request(?: for Codex)?:[ \t]*\r?\n/m);
         value = request ? value.slice(request.index + request[0].length).trim() : '';
     }
     while (injected.test(value)) value = value.replace(injected, '').trim();

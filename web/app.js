@@ -1,6 +1,6 @@
 import {installInlineNames} from './inline-name.js';
 import { installSessionDrag } from './session-drag.js';
-import { graphLayout, foldedItems, pendingLabels, projectGroups, selectRange, inactiveProject, olderProject, transferStages } from './library-view.js';
+import { graphLayout, pathCamera, foldedItems, pendingLabels, projectGroups, selectRange, inactiveProject, olderProject, transferStages } from './library-view.js';
 import { markdown } from './markdown.js';
 import { enhanceSelect } from './select.js';
 import { t, locale, setLocale, errorText } from './i18n.js';
@@ -144,7 +144,7 @@ function translateBanner() {
     $('#back').innerHTML = icon('back'); $('#back').title = t('Back to list'); $('#back').setAttribute('aria-label', t('Back to list'));
     $('#source').innerHTML = icon('source')+'<span>'+t('Source')+'</span>'; $('#source').title = t('Source & revisions'); $('#source').setAttribute('aria-label', t('Source & revisions'));
     $('#transcripts-title').textContent = t('Transcripts'); $('#graph-title').textContent = t('Graph'); $('#graph-reset').textContent = t('Reset view'); $('#zoom-in').title = t('Zoom in'); $('#zoom-out').title = t('Zoom out');
-    $('#graph-fit').textContent = t('Fit tree');
+    $('#graph-fit').textContent = t('Fit tree');$('#graph-fit-path').textContent=t('Fit path');
 }
 function editableName(kind,id,name,css='') {
     return `<span class="editable-name ${css}" data-name-kind="${kind}" data-name-id="${esc(id)}">${esc(name)}</span>`;
@@ -474,13 +474,19 @@ function render({keepDetail=false} = {}) {
     const detail = !!state.tree;
     $('#layout').classList.toggle('detail', detail); $('#list-page').hidden = detail; $('#detail-page').hidden = !detail; $('#session-rail').hidden = !detail;
     if (detail) { renderRail(); if(keepDetail)renderDetailActions();else renderDetail(); }
-    else { drawnTree = null; $('#branch-picker').replaceChildren(); $('#transcripts').replaceChildren(); $('#graph').replaceChildren(); $('#ribbons').replaceChildren(); }
+    else {
+        // Drop the last transcript's object graph as well as its DOM. These caches
+        // and delegated handlers otherwise retain message bodies on the list page.
+        drawnTree=null;currentGraphLayout=null;labeledTree=null;nodeLabels=null;activityGroups=[];
+        $('#branch-picker').replaceChildren();$('#detail-actions').replaceChildren();
+        $('#transcripts').onclick=null;$('#transcripts').replaceChildren();$('#graph').replaceChildren();$('#ribbons').replaceChildren();
+    }
 }
 function renderDetail() {
     const tree = state.tree, p = route(); if (!p) { state.tree = null; render(); return; }
     $('#session-title').innerHTML = editableName('session',tree.id,tree.name);
     const tokens = p.nodeIds.reduce((sum, id) => sum + (tree.nodes.find(n => n.id === id)?.tokens?.recordedEstimate || 0), 0);
-    $('#session-meta').textContent = `${p.agent === 'codex' ? 'Codex' : 'Claude'} · ≈ ${compactNumber(tokens)} tokens${p.context?.compactions.length ? ' · ' + t('{count} compactions', { count: p.context.compactions.length }) : ''}`;
+    $('#session-meta').textContent = `${p.agent === 'codex' ? 'Codex' : 'Claude'} · ≈ ${compactNumber(tokens)} tokens${p.context?.compactions.some(e=>e.controlPrimary!==false) ? ' · ' + t('{count} compactions', { count: p.context.compactions.filter(e=>e.controlPrimary!==false).length }) : ''}`;
     $('#detail-count').textContent = `${t('{count} branches', { count: tree.paths.length })} · ${t('{count} chats', { count: tree.chatCount })} · ${t('{count} pending', { count: tree.pendingCount })}`;
     $('#branch-picker').innerHTML = tree.paths.map(v => `<option value="${esc(v.branchId)}" ${v.branchId === p.branchId ? 'selected' : ''}>${esc(v.transcriptionTitle || v.originalTitle || v.name)}</option>`).join('');
     enhanceSelect($('#branch-picker'));
@@ -530,7 +536,7 @@ function contextBreakdown(p) {
     const labels={'tool-call':'Tool inputs','tool-result':'Tool results',reasoning:'Readable reasoning',instructions:'Recorded instructions'};
     return fidelity + `<details class="context-breakdown"><summary>${t('Recorded context')} · ${t('Tool activity')}: ≈ ${compactNumber((ledger.totals['tool-call']||0)+(ledger.totals['tool-result']||0))} tokens${p.context.lastUsage?` · ${t('Last native input')}: ${compactNumber(p.context.lastUsage.input)}`:''}</summary><div class="token-breakdown">${Object.entries(ledger.totals).filter(([,n])=>n).map(([k,n])=>`<span>${t(labels[k])}<b>≈ ${compactNumber(n)}</b></span>`).join('')}</div>${activityHtml(ledger.entries.filter(e=>e.chatLine===null),p)}</details>`;
 }
-function compactionsAt(n, p) { return (p.context?.compactions || []).filter(e => n.chatIds.includes(p.messages.find(m => m.line > e.line)?.id)); }
+function compactionsAt(n, p) { return (p.context?.compactions || []).filter(e => e.controlPrimary!==false&&n.chatIds.includes(p.messages.find(m => m.line > e.line)?.id)); }
 function mutedNode(n, p) {
     const last = (p.context?.compactions || []).filter(e => e.enabled).at(-1);
     if (!last) return false;
@@ -539,7 +545,7 @@ function mutedNode(n, p) {
 }
 function compactionButton(e, compact = false, owner=route()) {
     const enabled=e.groupEnabled??e.enabled,mixed=!!e.groupMixed,canRewrite=e.groupCanRewrite??owner?.canRewriteContext,canDisable=e.groupCanDisable??e.canDisable;
-    const label=t(mixed?'Mixed':enabled?'On':'Off'),scope=e.groupSize>1?` · ${t('{count} paths',{count:e.groupSize})}`:'';
+    const label=t(mixed?'Mixed':enabled?'On':'Off'),scope='';
     if(!canRewrite||state.scope==='archived'||!canDisable&&enabled&&!mixed)return `<span class="context-switch">${t('Compact')}${scope} · ${label}</span>`;
     return `<button type="button" class="context-switch ${enabled&&!mixed?'enabled':''}" data-compaction="${esc(e.id)}" data-compaction-path="${esc(owner.branchId)}" aria-label="${esc(t('Use compaction')+scope)}" aria-pressed="${mixed?'mixed':!!enabled}">${compact?t('Compact'):t('Use compaction')}${scope}<span>${label}</span></button>`;
 }
@@ -571,7 +577,7 @@ function renderTranscript() {
         const n = state.tree.nodes.find(n => n.id === id), messages = p.messages.filter(m => n.chatIds.includes(m.id));
         return `${compactionsAt(n, p).map(e => `<div class="compaction-marker">${t('Context compacted here')}${compactionButton(e)}</div>`).join('')}<section class="transcript-segment ${mutedNode(n, p) ? 'context-muted' : ''} ${n.pending ? 'pending' : ''}" data-segment="${esc(n.id)}" style="${style(n)}"><div class="segment-caption"><button data-focus-node="${esc(n.id)}">${editableName('node',n.id,nodeName(n))} · ${t('{count} chats', { count: messages.length })}</button><span class="token-estimate">${tokenLabel(n)}</span></div>${messages.map(m => `<article data-message="${esc(m.id)}" class="chat ${m.role} ${state.chats.has(m.id) ? 'checked' : ''}">${state.scope === 'archived' ? '' : `<input type="checkbox" data-chat="${esc(m.id)}" aria-label="${esc(t('Select chat {number}', { number: p.messages.findIndex(x => x.id === m.id) + 1 }))}" ${state.chats.has(m.id) ? 'checked' : ''}>`}<div class="bubble"><span class="speaker">${m.role === 'user' ? t('You') : p.agent === 'codex' ? 'Codex' : 'Claude'}</span>${excerpt(m.text, state.expanded.has(m.id))}${activityHtml(m.activity,p)}${m.text.length >= 380 ? `<button class="expand-chat" data-expand="${esc(m.id)}">${t(state.expanded.has(m.id) ? 'Collapse' : 'Expand')}</button>` : ''}</div></article>`).join('')}</section>`;
     }).join('') || `<p class="empty">${t('No chats yet.')}</p>`;
-    const trailing = (p.context?.compactions || []).filter(e => !p.messages.some(m => m.line > e.line));
+    const trailing = (p.context?.compactions || []).filter(e => e.controlPrimary!==false&&!p.messages.some(m => m.line > e.line));
     reconcileTranscript(markup+trailing.map(e => `<div class="compaction-marker">${t('Context compacted here')}${compactionButton(e)}</div>`).join(''));
     bindCompactions($('#transcripts'));
     $('#transcripts').onclick=async event=>{
@@ -616,30 +622,36 @@ function updateRangeSelection() {
     $('#range-hint').textContent = state.rangeStart === null ? t('Select a start, then an end.') : state.rangeEnd === null ? t('Start: {number} · select the end', { number: state.rangeStart + 1 }) : t('Selected chats {start}–{end}', { start: Math.min(state.rangeStart, state.rangeEnd) + 1, end: Math.max(state.rangeStart, state.rangeEnd) + 1 });
     for (const el of $$('[data-chat]')) { const checked = state.chats.has(el.dataset.chat); el.checked = checked; el.closest('.chat').classList.toggle('checked', checked); }
 }
-let drawnTree = null;
+let drawnTree = null, currentGraphLayout;
 function renderGraph() {
     const nodes=state.tree.nodes,p=route(),byNode=new Map(nodes.map(n=>[n.id,n]));
-    const {positions,controls,edges,width,height,rootX}=graphLayout(state.tree,p.branchId);
+    const layout=currentGraphLayout=graphLayout(state.tree,p.branchId);
+    const {positions,controls,edges,junctions,activeNodes,contextNodes,endpoints,width,height,rootX}=layout;
+    const pathLabel=p.transcriptionTitle||p.originalTitle||p.name;$('#graph-path-label').textContent=pathLabel;$('#graph-path-label').title=t('Selected path')+': '+pathLabel;
+    const edgeMarkup=junctions.map(j=>`<path d="${j.d}" class="graph-junction" fill="none" stroke="#9badbb" stroke-width="1.5"/>`).join('')+[...edges].sort((a,b)=>Number(a.active)-Number(b.active)).map(e=>`<path data-path-edge="${e.active?'current':'other'}" class="path-edge ${e.active?'path-active':'path-inactive'}" d="${e.d}" fill="none" stroke="${palette[e.color][0]}" stroke-width="2" ${e.pending?'stroke-dasharray="4 4"':''}/>`).join('')+junctions.filter(j=>j.activeD).map(j=>`<path class="path-edge path-active" d="${j.activeD}" fill="none"/>`).join('');
     camera.width=width;camera.height=height;camera.rootX=rootX;
-    if (camera.newView) { const view = $('#graph-scroll'); camera.zoom = Math.max(.02, Math.min(1, (view.clientWidth-32)/width, (view.clientHeight-32)/height)); camera.x = (view.clientWidth-width*camera.zoom)/2; camera.y = (view.clientHeight-height*camera.zoom)/2; camera.newView = false; }
+    if(camera.newView){const view=$('#graph-scroll');Object.assign(camera,pathCamera(layout,p.branchId,view.clientWidth,view.clientHeight));camera.newView=false;}
     $('#graph').style.width = `${width}px`; $('#graph').style.height = `${height}px`;
     if (drawnTree !== state.tree) {
-    $('#graph').innerHTML = `<svg class="graph-edges" width="${width}" height="${height}" aria-hidden="true">${edges.map(e=>{const n=byNode.get(e.to||e.from);return `<path d="${e.d}" fill="none" stroke="${palette[n.color][0]}" stroke-width="2" ${n.pending?'stroke-dasharray="4 4"':''}/>`;}).join('')}</svg>${nodes.map(n => { const pos = positions.get(n.id); return `<button class="graph-node ${mutedNode(n, p) ? 'context-muted' : ''} ${n.pending ? 'pending' : ''} ${n.id === state.nodeId ? 'selected' : ''} ${p.nodeIds.includes(n.id) ? '' : 'dimmed'}" data-node="${esc(n.id)}" style="${style(n)};left:${pos.x}px;top:${pos.y}px" aria-pressed="${n.id === state.nodeId}"><span class="node-tools">${toolTags(n.agents || [p.agent],true)}</span><span class="node-title">${editableName('node',n.id,nodeName(n))}</span><span class="node-meta">${t('{count} chats', { count: n.count })} · <span>${tokenLabel(n)}</span></span>${n.endBranchIds.some(id => state.tree.paths.find(p => p.branchId === id)?.active) ? `<span class="active-node-dot" aria-label="${t('Active on this device')}" title="${t('Active on this device')}"></span>` : ''}</button>`; }).join('')}`;
+    $('#graph').innerHTML = `<svg class="graph-edges" width="${width}" height="${height}" aria-hidden="true"></svg>${nodes.map(n => { const pos = positions.get(n.id); return `<button class="graph-node ${mutedNode(n, p) ? 'context-muted' : ''} ${n.pending ? 'pending' : ''} ${n.id === state.nodeId ? 'selected' : ''} ${activeNodes.has(n.id)?'path-active':'dimmed path-inactive'}" data-node="${esc(n.id)}" style="${style(n)};left:${pos.x}px;top:${pos.y}px" aria-pressed="${n.id === state.nodeId}"><span class="node-tools">${toolTags(n.agents || [p.agent],true)}</span><span class="node-title">${editableName('node',n.id,nodeName(n))}</span><span class="node-meta">${t('{count} chats', { count: n.count })} · <span>${tokenLabel(n)}</span></span>${n.endBranchIds.some(id => state.tree.paths.find(p => p.branchId === id)?.active) ? `<span class="active-node-dot" aria-label="${t('Active on this device')}" title="${t('Active on this device')}"></span>` : ''}</button>`; }).join('')}`;
+        $('#graph').insertAdjacentHTML('beforeend',contextNodes.map(n=>{const pos=positions.get(n.id);return `<div class="context-point ${activeNodes.has(n.id)?'path-active':'path-inactive'}" data-context-point="${esc(n.id)}" style="left:${pos.x}px;top:${pos.y}px"><span>${t('Compacted context')}</span><small>${t('No new chats')}</small></div>`;}).join(''));
         drawnTree = state.tree;
     } else {
         for (const el of $$('[data-node]')) {
             const n = byNode.get(el.dataset.node);
             el.classList.toggle('selected', n.id === state.nodeId);
-            el.classList.toggle('dimmed', !p.nodeIds.includes(n.id));
+            el.classList.toggle('dimmed', !activeNodes.has(n.id));el.classList.toggle('path-active',activeNodes.has(n.id));el.classList.toggle('path-inactive',!activeNodes.has(n.id));
             el.classList.toggle('context-muted', mutedNode(n, p));
             el.setAttribute('aria-pressed', String(n.id === state.nodeId));
         }
     }
+    $('#graph .graph-edges').innerHTML=edgeMarkup;
+    $$('#graph .context-point').forEach(el=>{el.classList.toggle('path-active',activeNodes.has(el.dataset.contextPoint));el.classList.toggle('path-inactive',!activeNodes.has(el.dataset.contextPoint));});
     $$('#graph .compaction-edge').forEach(el => el.remove());
-    $('#graph').insertAdjacentHTML('beforeend',controls.map(({owner,e,before,after,x,y})=>`<div class="compaction-edge" data-before="${esc(before?.id||'')}" data-after="${esc(after?.id||'')}" style="left:${x}px;top:${y}px">${compactionButton(e,true,owner)}</div>`).join(''));
+    $('#graph').insertAdjacentHTML('beforeend',controls.map(({owner,e,before,after,x,y})=>`<div class="compaction-edge ${p.context.compactions.some(c=>c.groupId===e.groupId)?'path-active':'path-inactive'}" data-before="${esc(before?.id||'')}" data-after="${esc(after?.id||'')}" style="left:${x}px;top:${y}px">${compactionButton(e,true,owner)}</div>`).join(''));
     $$('#graph .transcription-end').forEach(el=>el.remove());
-    for(const node of nodes){const paths=state.tree.paths.filter(v=>v.nodeIds.at(-1)===node.id);if(!paths.length)continue;const pos=positions.get(node.id),title=[...new Set(paths.map(v=>v.transcriptionTitle||v.originalTitle||v.name))].join(' · ');
-        $('#graph').insertAdjacentHTML('beforeend',`<div class="transcription-end" style="left:${pos.x}px;top:${pos.y+82}px" title="${esc(title)}">${esc(title)}</div>`);camera.height=Math.max(camera.height,pos.y+110);
+    for(const [nodeId,paths] of endpoints){const pos=positions.get(nodeId),title=[...new Set(paths.map(v=>v.transcriptionTitle||v.originalTitle||v.name))].join(' · ');
+        $('#graph').insertAdjacentHTML('beforeend',`<div class="transcription-end ${paths.some(v=>v.branchId===p.branchId)?'path-active':''}" data-current-end="${paths.some(v=>v.branchId===p.branchId)}" style="left:${pos.x}px;top:${pos.y+82}px" title="${esc(title)}">${esc(title)}</div>`);camera.height=Math.max(camera.height,pos.y+110);
     }
     $('#graph').style.height=camera.height+'px';
     bindCompactions($('#graph'));
@@ -1082,9 +1094,10 @@ $('#collect').onclick = updateSessions;
 $('#search').oninput = e => { state.query = e.target.value; state.selected.clear(); clearTimeout(searchTimer); searchTimer = setTimeout(() => refresh().catch(e => toast(e.message)), 180); };
 $('#back').onclick = () => { ++requestId;cancelOpening();const target=state.tree?.projectId || INBOX;state.tree=null;clearRange();if(state.scope===PROJECTS)state.projectFocus=target;render();if(state.scope===PROJECTS&&listView?.entryProject!==target)focusProject(target);else if(listView)$('#session-list').scrollTo({top:listView.scroll,behavior:'instant'});listView=null;animateView($('#list-page')); };
 $('#source').onclick = showSource;
-$('#branch-picker').onchange = e => {if(opening){++requestId;cancelOpening();}state.branchId = e.target.value; clearRange(); state.nodeId = null; state.compactionId = null; renderDetail(); };
+$('#branch-picker').onchange = e => {if(opening){++requestId;cancelOpening();}state.branchId = e.target.value; clearRange(); state.nodeId = null; state.compactionId = null;camera.newView=true;renderDetail(); };
 $('#transcripts').onscroll = () => scheduleRibbons();
 $('#zoom-in').onclick = () => zoom(1.15); $('#zoom-out').onclick = () => zoom(1 / 1.15); $('#graph-reset').onclick = resetCamera;
+$('#graph-fit-path').onclick=()=>{const view=$('#graph-scroll');if(currentGraphLayout){Object.assign(camera,pathCamera(currentGraphLayout,state.branchId,view.clientWidth,view.clientHeight));applyCamera();}};
 $('#graph-fit').onclick = () => { const view = $('#graph-scroll'); camera.zoom = Math.max(.02, Math.min(1, (view.clientWidth - 32) / camera.width, (view.clientHeight - 32) / camera.height)); camera.x = (view.clientWidth - camera.width * camera.zoom) / 2; camera.y = (view.clientHeight - camera.height * camera.zoom) / 2; applyCamera(); };
 let pan = null;
 $('#graph-scroll').addEventListener('pointerdown', e => {

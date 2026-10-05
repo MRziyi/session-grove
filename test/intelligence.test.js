@@ -200,3 +200,26 @@ test('compaction names completed nodes in a single path without renaming its cha
  graph=f.store.treeGraph(b.id);const tail=graph.nodes.at(-1);f.store.organize(b.id,{version:graph.version,pathId:b.id,nodeId:tail.id,action:'rename',name:'Manual tail',nameOrigin:'manual'});
  head=f.store.get('branch',b.id).head;f.store.ingest(b.id,f.store.raw(head)+JSON.stringify(compact)+'\n',head,{});f.smart.observe();await f.flush();assert.equal(calls.length,1);assert.ok(f.store.treeGraph(b.id).nodes.some(n=>n.name==='Manual tail'));
 });
+
+test('older IDE request headings retain the human request while omitting editor metadata',()=>{
+ for(const heading of ['## My request:','## My request for Codex:']){
+  const wrapped='# Context from my IDE setup:\n\n## Active file: private-file.md\n\n'+heading+'\n请梳理论文研究缺口。';
+  assert.equal(humanText(wrapped),'请梳理论文研究缺口。');
+  assert.equal(humanText('<environment_context>metadata</environment_context>\n'+wrapped),'请梳理论文研究缺口。');
+ }
+ assert.equal(humanText('# Context from my IDE setup:\n## Open tabs:\nprivate-file.md'),'');
+});
+
+test('startup backfills previously seen closed nodes and single-child segments without renaming open tails',async t=>{
+ const calls=[],f=setup(t,async(_key,kind,e)=>{calls.push({kind,e});return {name:'Recovered '+calls.length};});await f.smart.save({classify:false,nameNodes:true});
+ const request=text=>'# Context from my IDE setup:\n## Active file: private.md\n## My request for Codex:\n'+text;
+ const a=f.store.branch(null,'Root','codex',codexSample(f.root,[[request('First topic'),'First answer'],[request('Second topic'),'Second answer'],['Still writing','Tail']]));
+ const b=f.store.fork(a.id,{name:'Fork',end:f.store.detail(a.id).checkpoints[0].end});
+ let graph=f.store.treeGraph(a.id);const path=graph.paths.find(p=>p.branchId===a.id);f.store.organize(a.id,{version:graph.version,pathId:a.id,chatIds:[path.messages.at(-2).id,path.messages.at(-1).id],action:'combine',name:'Manual tail'});
+ graph=f.store.treeGraph(a.id);f.smart.data.trees[a.id]={policy:2,signature:'previous-version',splits:graph.nodes.map(n=>n.id)};
+ f.smart.observe(false);await f.flush();
+ graph=f.store.treeGraph(a.id);assert.ok(graph.nodes.filter(n=>!n.empty&&n.childIds.length).every(n=>n.name));assert.ok(graph.nodes.some(n=>n.name==='Manual tail'));
+ assert.equal(calls.length,2);assert.ok(calls.every(c=>c.kind==='node'&&!c.e.user.includes('private.md')));
+ f.smart.observe(false);await f.flush();assert.equal(calls.length,2,'successful backfill is not repeated');
+ const child=f.store.get('branch',b.id);assert.equal(f.store.treeGraph(a.id).paths.find(p=>p.branchId===child.id).nodeIds.length>0,true);
+});

@@ -108,7 +108,9 @@ For local context configuration, warning acknowledgement and diagnostic logging,
 
 Each path retains a synchronized `contextPolicy` listing disabled compaction IDs. From 1.1.3, IDs derive from the complete recorded compaction payload and its occurrence order, excluding physical timestamps and ordinals. This tracks inherited compactions even when older native clients reserialize a fork. The original timestamp-based IDs remain readable aliases for saved choices; new choices use stable IDs.
 
-A control represents one identified compaction at a shared history boundary and applies atomically to all matching live paths in the tree. Its path count is visible. Existing differing choices display Mixed and are preserved until an explicit choice; archived paths retain their settings. Different compaction results or unidentifiable results do not share a control, and distinct resulting contexts are not merged merely because their visible prose matches. The newest enabled event determines which earlier graph Nodes are superseded in the preview. Raw history remains unchanged.
+A control belongs to one directed edge. It applies only to the live paths traversing that exact edge; other outgoing edges remain independent even when they contain the same inherited compaction result. Each rendered edge has zero or one control. Existing differing choices on a common edge display Mixed and are preserved until an explicit choice; archived paths retain their settings.
+
+An older paginated fork can contain a user-only window snapshot immediately followed, without conversation or tool work, by the same window lineage completed with an encrypted compaction. Only an exact retained-history match and matching window metadata qualify these records as revisions of one boundary. One edge decision applies to both raw records. Genuine successive compactions remain separate and use context-only intermediate points when no chat lies between them; these points do not invent messages or activation nodes. Different compaction results or unidentifiable results do not share a control, and distinct resulting contexts are not merged merely because their visible prose matches. The newest enabled event determines which earlier graph Nodes are superseded in the preview. Raw history remains unchanged.
 
 Apply is explicit for active paths; inactive paths use the choice on Activate. For adopted native sessions, a changed context is materialized into a new native instance and the previous instance is parked under the normal journal/rollback mechanism. Capturing subsequent native updates reattaches the new suffix to the retained original revision, so toggling does not destroy earlier history.
 
@@ -116,7 +118,7 @@ Codex legacy materialization preserves all recorded response items, tool inputs/
 
 For recognized Claude boundaries, expanding omits the boundary/summary and reconnects known parent UUIDs to the retained prefix. Real Claude-client verification is still outstanding. The UI cannot offer expansion when no recorded prefix is available.
 
-All devices editing context policies should use 1.1.3+ to honor stable compaction identities and shared control groups. A native agent may compact again during later work; the switch does not change its global auto-compaction configuration. Expanded-history token estimates can differ substantially from the previous compacted input usage and are checked again at activation.
+All devices editing context policies should use the same current Grove version so stable compaction identities and edge-scoped controls behave consistently. A native agent may compact again during later work; the switch does not change its global auto-compaction configuration. Expanded-history token estimates can differ substantially from the previous compacted input usage and are checked again at activation.
 
 
 ## Optional encryption and key changes

@@ -47,21 +47,21 @@ test('older projects use the session fold threshold, not an independent project 
 });
 
 test('backend compaction groups occupy connection lanes once, with all target paths retained',async()=>{
- const {graphLayout}=await import('../web/library-view.js');
+ const {graphLayout}=await import('../web/library-view.js');const {compactionPaths}=await import('../src/compaction-identity.js');
  const nodes=[{id:'a',depth:0,chatIds:['a'],parentIds:[],childIds:['b','c'],endBranchIds:[]},{id:'b',depth:1,chatIds:['b'],parentIds:['a'],childIds:[],endBranchIds:['p']},{id:'c',depth:1,chatIds:['c'],parentIds:['a'],childIds:[],endBranchIds:['q']}];
- const paths=Array.from({length:16},(_,i)=>({branchId:'p'+i,messages:[{id:'a',line:1},{id:'b',line:3}],context:{compactions:[{id:'same-event',groupId:'shared-boundary',line:2,enabled:i!==7,groupMixed:true,groupSize:16}]}}));
- paths.push({branchId:'q',messages:[{id:'a',line:1},{id:'c',line:3}],context:{compactions:[{id:'right',line:2,enabled:true},{id:'tail',line:4,enabled:true}]}});
- const graph={nodes,paths,edges:[{from:'a',to:'b'},{from:'a',to:'c'}]},layout=graphLayout(graph,'p7');
+ const paths=Array.from({length:16},(_,i)=>({branchId:'p'+i,nodeIds:['a','b'],messages:[{id:'a',line:1},{id:'b',line:3}],context:{compactions:[{id:'same-event',groupId:'shared-boundary',line:2,enabled:i!==7,groupMixed:true,groupSize:16}]}}));
+ paths.push({branchId:'q',nodeIds:['a','c'],messages:[{id:'a',line:1},{id:'c',line:3}],context:{compactions:[{id:'right',line:2,enabled:true},{id:'tail',line:4,enabled:true}]}});
+ const graph={nodes,paths:compactionPaths(paths,nodes),edges:[{from:'a',to:'b'},{from:'a',to:'c'}]},layout=graphLayout(graph,'p7');
  assert.equal(layout.controls.length,3,'rewritten native event IDs do not duplicate one shared boundary');
  const other=graphLayout(graph,'q');assert.deepEqual([...other.positions], [...layout.positions],'path selection keeps node geometry stable');
  assert.deepEqual(other.controls.map(c=>[c.key,c.x,c.y]).sort(),layout.controls.map(c=>[c.key,c.x,c.y]).sort(),'path selection keeps compactions on the same connectors');
  const shared=layout.controls.find(c=>c.after?.id==='b');assert.equal(shared.owner.branchId,'p7');assert.equal(shared.e.enabled,false);
  for(const control of layout.controls){
   assert.ok(layout.edges.some(e=>e.controls.includes(control)&&e.d.includes(`${control.x},${control.y}`)),'control center is on its actual connector');
-  for(const node of nodes){const p=layout.positions.get(node.id),height=node.endBranchIds.length?110:80;assert.ok(control.x+70<=p.x||control.x-70>=p.x+148||control.y+12<=p.y||control.y-12>=p.y+height,'controls do not cover nodes or endpoint titles');}
+  for(const node of nodes){const p=layout.positions.get(node.id),height=layout.endpoints.has(node.id)?110:80;assert.ok(control.x+70<=p.x||control.x-70>=p.x+148||control.y+12<=p.y||control.y-12>=p.y+height,'controls do not cover nodes or endpoint titles');}
  }
  for(let a=0;a<layout.controls.length;a++)for(let b=a+1;b<layout.controls.length;b++){const x=layout.controls[a],y=layout.controls[b];assert.ok(Math.abs(x.x-y.x)>=140||Math.abs(x.y-y.y)>=24);}
- paths[7].context.compactions.push({id:'second-on-the-same-path',line:2.5,enabled:true});assert.equal(graphLayout(graph,'p7').controls.length,4,'consecutive compactions on one path stay distinct');
+ const serial={...graph,paths:compactionPaths([{...paths[7],context:{compactions:[...paths[7].context.compactions,{id:'second-on-the-same-path',line:2.5,enabled:true}]}}],nodes)};const chain=graphLayout(serial,'p7');assert.equal(chain.controls.length,2);assert.equal(chain.contextNodes.length,1);assert.ok(chain.edges.every(e=>e.controls.length<=1));
 });
 
 test('deep conversation layouts do not overflow the JavaScript stack',async()=>{
@@ -70,4 +70,17 @@ test('deep conversation layouts do not overflow the JavaScript stack',async()=>{
  const result=graphLayout({nodes,paths:[],edges:[]},'p');
  assert.equal(result.positions.size,count);assert.equal(result.positions.get('0').x,12);
  assert.ok(result.positions.get(String(count-1)).y>result.positions.get('0').y);
+});
+
+test('selected transcript highlights its full route and only its part of a shared junction',async()=>{
+ const {graphLayout,pathCamera}=await import('../web/library-view.js');
+ const nodes=[{id:'a',chatIds:['a'],childIds:['b','c'],parentIds:[],endBranchIds:[],color:'color-0'},{id:'b',chatIds:['b'],childIds:[],parentIds:['a'],endBranchIds:['p'],color:'color-1'},{id:'c',chatIds:['c'],childIds:[],parentIds:['a'],endBranchIds:['q'],color:'color-2'}];
+ const paths=[{branchId:'p',nodeIds:['a','b'],context:{compactions:[]}},{branchId:'q',nodeIds:['a','c'],context:{compactions:[]}}],tree={nodes,paths,edges:[{from:'a',to:'b'},{from:'a',to:'c'}]};
+ const first=graphLayout(tree,'p'),second=graphLayout(tree,'q');assert.deepEqual([...first.activeNodes],['a','b']);assert.deepEqual([...second.activeNodes],['a','c']);assert.deepEqual([...first.positions],[...second.positions]);assert.deepEqual(second.edges.filter(e=>e.active).map(e=>e.to),['c']);assert.ok(second.junctions[0].activeD.includes((second.positions.get('c').x+74)+','));
+ const camera=pathCamera(second,'q',500,400);for(const id of ['a','c']){const p=second.positions.get(id);assert.ok(p.x*camera.zoom+camera.x>=0);assert.ok((p.x+148)*camera.zoom+camera.x<=500);assert.ok(p.y*camera.zoom+camera.y>=0);assert.ok((p.y+110)*camera.zoom+camera.y<=400);}
+});
+
+test('long transcript framing brings the endpoint into view without shrinking it to a miniature',async()=>{
+ const {pathCamera}=await import('../web/library-view.js'),positions=new Map(Array.from({length:100},(_,i)=>[String(i),{x:i<50?0:900,y:i*150}])),layout={positions,activeNodes:new Set(positions.keys()),endpoints:new Map([['99',[]]])};
+ const camera=pathCamera(layout,'p',500,500),end=positions.get('99');assert.ok(camera.zoom>=.75);assert.ok(end.x*camera.zoom+camera.x>=0);assert.ok((end.y+110)*camera.zoom+camera.y<=500);
 });

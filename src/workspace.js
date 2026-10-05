@@ -102,15 +102,16 @@ function* graphSteps(store, branchId) {
             if (childPrefix.length === parentPrefix.length && childPrefix.every((m, i) => m.role === parentPrefix[i].role && m.text === parentPrefix[i].text))
                 inherited = parentPrefix.map((m, i) => ({ ...m, line: childPrefix[i].line }));
         }
-        let prefix = '',contextKey='',eventIndex=0;
+        let prefix = '',contextKey='',previousContextKey='',eventIndex=0;
         const path = visible.map((m, index) => {
-            while(eventIndex<p.context.compactions.length&&p.context.compactions[eventIndex].line<m.line){const event=p.context.compactions[eventIndex++];contextKey=hash(contextKey+event.id+(event.shareable===false?b.id:''));}
+            while(eventIndex<p.context.compactions.length&&p.context.compactions[eventIndex].line<m.line){const event=p.context.compactions[eventIndex++];previousContextKey=hash(previousContextKey+event.id+(event.shareable===false?b.id:''));if(event.supersededBy)continue;contextKey=hash(contextKey+event.id+(event.shareable===false?b.id:''));}
             const inheritedMessage=inherited[index],sameContext=!inheritedMessage||inheritedMessage.contextKey===contextKey;
             prefix = hash(prefix + JSON.stringify([m.role, m.text]));
             const message = sameContext&&inheritedMessage || { ...m, id: `${b.chatIdentity || b.id}:${(contextKey?hash(prefix+contextKey):prefix).slice(0, 24)}`, ownerId: b.id, agent: b.agent, origin: contentOrigin(store, revisionId) };
             const ownId = `${b.chatIdentity || b.id}:${prefix.slice(0, 24)}`;
             if (ownId !== message.id) aliases.set(ownId, message.id);
-            const oldIds=contextAliases.get(message.id)||new Set();if(ownId!==message.id)oldIds.add(ownId);if(inheritedMessage&&!sameContext)oldIds.add(inheritedMessage.id);contextAliases.set(message.id,oldIds);
+            const previousId=`${b.chatIdentity||b.id}:${(previousContextKey?hash(prefix+previousContextKey):prefix).slice(0,24)}`;
+            const oldIds=contextAliases.get(message.id)||new Set();if(previousId!==message.id)oldIds.add(previousId);if(ownId!==message.id)oldIds.add(ownId);if(inheritedMessage&&!sameContext)oldIds.add(inheritedMessage.id);contextAliases.set(message.id,oldIds);
             const value = { ...message, contextKey, line: m.line, toolTokens: (byChat.get(m.line) || []).filter(e => ['tool-call', 'tool-result'].includes(e.kind)).reduce((n,e) => n + e.tokens, 0), activity: byChat.get(m.line) || [] };
             if (!messages.has(value.id)) messages.set(value.id, value);
             return value;
@@ -221,9 +222,9 @@ function* graphSteps(store, branchId) {
         store.parseCache.clear(); store.parseBytes = 0; store.recordCache.clear(); store.recordBytes = 0;
     }
     return { id: root.id, sessionName:root.sessionName||null, sessionNameVersion:root.metaVersion, projectId: root.projectId, layoutHead: root.layoutHead || null,
-        version: hash(JSON.stringify(['compaction-v2',members.map(b => [b.id, b.head, b.nodeHead, b.parentId, b.archived, b.contextPolicy, b.name, b.endpointName]), root.layoutHead || null,root.sessionName||null, paths.map(p=>[p.branchId,p.active])])),
+        version: hash(JSON.stringify(['edge-compaction-v1',members.map(b => [b.id, b.head, b.nodeHead, b.parentId, b.archived, b.contextPolicy, b.name, b.endpointName]), root.layoutHead || null,root.sessionName||null, paths.map(p=>[p.branchId,p.active])])),
         name: store.collections().items.find(i => i.id === root.id)?.name || root.name,
-        nodes: ordered, edges: [...edges.values()], paths:compactionPaths(paths), assignments,
+        nodes: ordered, edges: [...edges.values()], paths:compactionPaths(paths,ordered), assignments,
         chatCount: new Set(paths.flatMap(p => p.messages.map(m => m.id))).size,
         pendingCount: ordered.filter(n => n.pending).reduce((n, s) => n + s.count, 0) };
 }
@@ -251,7 +252,7 @@ export function treeGraph(store, branchId, view = 'all') {
     const graph = store.memo('graph:' + root.id, () => buildGraph(store, root.id));
     if (view === 'all') return graph;
     const projectArchived = root.projectId && store.get('project', root.projectId).archived;
-    const paths = compactionPaths(graph.paths.filter(p => view === 'archived' ? p.archived || projectArchived : !p.archived && !projectArchived));
+    const paths = compactionPaths(graph.paths.filter(p => view === 'archived' ? p.archived || projectArchived : !p.archived && !projectArchived),graph.nodes);
     const pathIds = new Set(paths.map(p => p.branchId)), nodeIds = new Set(paths.flatMap(p => p.nodeIds)), chats = new Set(paths.flatMap(p => p.messages.map(m => m.id)));
     const nodes = graph.nodes.filter(n => nodeIds.has(n.id)).map(n => ({ ...n, branchIds: n.branchIds.filter(id => pathIds.has(id)), endBranchIds: n.endBranchIds.filter(id => pathIds.has(id)), parentIds: n.parentIds.filter(id => nodeIds.has(id)), childIds: n.childIds.filter(id => nodeIds.has(id)) }));
     return { ...graph, view, projectArchived: !!projectArchived, paths, nodes, edges: graph.edges.filter(e => nodeIds.has(e.from) && nodeIds.has(e.to)), assignments: Object.fromEntries(Object.entries(graph.assignments).filter(([id]) => chats.has(id))), name: graph.sessionName || paths.find(p => p.branchId === root.id)?.name || paths[0]?.name || graph.name, chatCount: chats.size, pendingCount: nodes.filter(n => n.pending).reduce((sum, n) => sum + n.count, 0) };

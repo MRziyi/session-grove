@@ -1,6 +1,6 @@
 {
   "name": "session-grove",
-  "version": "1.1.5",
+  "version": "1.1.6",
   "private": true,
   "description": "A project-centered workspace for branching and managing agent sessions.",
   "type": "module",
@@ -24,6 +24,7 @@
     "bench:sync": "node --expose-gc scripts/sync-benchmark.js",
     "bench:store": "node --expose-gc scripts/store-benchmark.js",
     "bench:local": "node --expose-gc scripts/local-resource-benchmark.js",
+    "bench:ui": "node scripts/ui-resource-benchmark.js",
     "bench:git": "node --expose-gc scripts/git-performance.js",
     "bench:provider": "node scripts/provider-benchmark.js",
     "migrate:git": "node scripts/migrate-git.js"

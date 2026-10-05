@@ -59,6 +59,10 @@ const dictionary = {
     "Session folders": "扫描目录",
     "Optional: connect an empty private GitHub repository or an existing Grove library using its SSH address. Set up Git SSH access on this computer first. Local Update works without Git sync.": "可选：填写空的私有 GitHub 仓库或已有 Grove 资料库的 SSH 地址，并先在本机配置 Git SSH 访问。本地 Update 无需配置 Git 同步。",
 
+    "Compacted context": "压缩后上下文",
+    "No new chats": "无新增对话",
+    "Selected path": "当前路径",
+    "Fit path": "定位路径",
     "Mixed": "混合",
     "{count} paths": "{count} 条路径",
     "Open session": "打开会话",

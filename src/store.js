@@ -1,4 +1,4 @@
-import {matchesCompaction,policyForCompactions} from './compaction-identity.js';
+import {matchesCompaction,policyForCompactions,compactionDisabled} from './compaction-identity.js';
 import {claudeFork} from './claude.js';
 import {retainedGraph,bodyRefs,withForkMetadata} from './retention.js';
 import {deletedIds,isTrashed} from './trash.js';
@@ -273,16 +273,20 @@ export class Store {
         assert(selected,'Original pre-compaction history is unavailable.');
         const targets=graph.paths.flatMap(path=>path.context.compactions.filter(e=>e.groupId===selected.groupId).map(event=>({path,event})));
         assert(targets.every(({path,event})=>path.canRewriteContext&&(enabled||event.canDisable)),'Original pre-compaction history is unavailable.');
+        const affected=new Map();for(const {path,event} of targets){if(!affected.has(path.branchId))affected.set(path.branchId,{path,events:[]});affected.get(path.branchId).events.push(event);}
         this.transaction(()=>{
-            for(const {path,event} of targets){
+            for(const {path,events} of affected.values()){
                 const branch=this.get('branch',path.branchId),disabled=new Set(branch.contextPolicy?.disabled||[]);
-                // Accept old physical IDs on read, but new decisions use stable IDs.
-                disabled.delete(event.legacyId);disabled.delete(event.id);if(!enabled)disabled.add(event.id);
+                // Normalize aliases for every event before changing this edge, so
+                // one legacy ID matching repeated records cannot enable another edge.
+                for(const candidate of path.context.compactions)if(compactionDisabled(branch.contextPolicy,candidate))disabled.add(candidate.id);
+                for(const candidate of path.context.compactions)disabled.delete(candidate.legacyId);
+                for(const event of events){disabled.delete(event.id);if(!enabled)disabled.add(event.id);}
                 const contextPolicy={disabled:[...disabled].sort()};
                 if(JSON.stringify(branch.contextPolicy||{disabled:[]})!==JSON.stringify(contextPolicy))this.edit(branch.id,{contextPolicy});
             }
         });
-        return {...this.get('branch',branchId).contextPolicy,groupId:selected.groupId,changedPaths:targets.length};
+        return {...this.get('branch',branchId).contextPolicy,groupId:selected.groupId,changedPaths:affected.size};
     }
     commitPending(branchId, options) { return commitPending(this, branchId, options); }
     moveTree(branchId, projectId, group) { return moveTree(this, branchId, projectId, group); }

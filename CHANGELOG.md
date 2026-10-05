@@ -1,5 +1,18 @@
 # Changelog
 
+## 1.1.6
+
+- Include the conflict-resolution panel with affected items, previous/current differences, stale-review protection and return to pending uploads. Disable background Git maintenance in disposable integration-test repositories to avoid cleanup races.
+- Release transcript/layout references and handlers when leaving a tree, compute edge-group flags once per group, and add a synthetic browser CPU/heap benchmark.
+
+- Recover node naming evidence from legacy “My request for Codex” IDE prompts and backfill previously seen, closed unnamed nodes, including single-child segments. Preserve manual labels and changing tails.
+- Persistently highlight the selected transcription’s nodes, connectors, compaction controls and endpoint. Frame the selected path on switching, keep long paths readable near their endpoint, and add Fit path without resetting the camera during background refreshes.
+
+- Scope compaction controls to directed edges instead of sharing one control across a fan-out. Each edge has at most one switch; changing it leaves other outgoing edges untouched.
+- Recognize strictly matching user-only fork snapshots completed by an encrypted compaction as revisions of one boundary. Preserve the original records and apply the boundary choice to both. Represent genuinely successive compactions with explicit context-only points.
+- Place switches near their target nodes, preserve separate branch connectors, move terminal labels to their actual context endpoints, and open large trees at a readable scale with Fit tree available for overview.
+- Preserve legacy policy aliases and named-node assignments while adding coverage for fan-outs, repeated compactions and per-edge mutation isolation.
+
 ## 1.1.5
 
 - Guide empty libraries through local Update, exploring sessions and organizing projects. Distinguish empty scan results, empty views and empty searches; reveal scanned folders and keep help available through the compact ⓘ Information button.

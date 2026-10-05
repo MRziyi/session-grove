@@ -93,3 +93,27 @@ test('old named-node assignments survive adding compaction identity to message p
  s.put('layout',{id:'old-layout',rootId:a.id,assignments});s.put('branch',{...s.get('branch',a.id),layoutHead:'old-layout'});
  const graph=s.treeGraph(a.id);for(const p of graph.paths)assert.ok(p.nodeIds.some(id=>graph.nodes.find(n=>n.id===id).name==='My preserved node'));
 });
+
+test('the same compacted result on different outgoing edges has independent controls',t=>{
+ const s=setup(t),a=s.branch(null,'A','codex',raw()),prefix=codexSample('/fixture',[['Shared question','Shared answer']]),b=s.branch(null,'B','codex',prefix+lines([marker()])+lines(codexTurn('Different branch question','Different answer')));
+ s.put('branch',{...b,parentId:a.id,forkRevision:a.head,forkEnd:prefix.trim().split('\n').length,forkParentEnd:prefix.trim().split('\n').length});
+ const g=s.treeGraph(a.id,'in-use'),left=g.paths.find(p=>p.branchId===a.id).context.compactions[0],right=g.paths.find(p=>p.branchId===b.id).context.compactions[0];
+ assert.equal(left.id,right.id);assert.equal(left.edgeFrom,right.edgeFrom);assert.notEqual(left.edgeTo,right.edgeTo);assert.notEqual(left.groupId,right.groupId);
+ const result=s.setCompaction(a.id,{eventId:left.id,head:a.head,enabled:false,version:g.version});assert.equal(result.changedPaths,1);assert.equal(s.treeGraph(a.id,'in-use').paths.find(p=>p.branchId===b.id).context.compactions[0].enabled,true);
+});
+
+test('consecutive compactions create separate edge scopes without inventing a chat',t=>{
+ const s=setup(t),body=codexSample('/fixture',[['Before','Answer']])+lines([marker(),marker()])+lines(codexTurn('After','Answer')),a=s.branch(null,'Two compactions','codex',body),parsed=s.parsed(a.head,'codex');
+ s.put('branch',{...a,contextPolicy:{disabled:[parsed.context.compactions[0].legacyId]}});
+ const g=s.treeGraph(a.id,'in-use'),events=g.paths[0].context.compactions;assert.equal(events[0].edgeTo,events[1].edgeFrom);assert.ok(events[0].edgeTo.startsWith('context-between:'));assert.notEqual(events[0].groupId,events[1].groupId);assert.equal(g.chatCount,4);
+ s.setCompaction(a.id,{eventId:events[0].id,head:a.head,enabled:true,version:g.version});const next=s.treeGraph(a.id,'in-use').paths[0].context.compactions;assert.equal(next[0].enabled,true);assert.equal(next[1].enabled,false,'changing one edge preserves a second legacy-disabled occurrence');
+});
+
+test('a user-only fork snapshot completed in the next start is one edge decision',t=>{
+ const s=setup(t),retained=[{type:'message',role:'user',content:[{type:'input_text',text:'Retained request'}]}],first={message:'',window_number:6,first_window_id:'first',previous_window_id:'previous',window_id:'provisional',replacement_history:retained},last={...first,window_id:'completed',replacement_history:[...retained,{type:'compaction',encrypted_content:'completed-summary'}]},between=[{type:'event_msg',payload:{type:'thread_settings_applied'}},{type:'event_msg',payload:{type:'task_started'}}];
+ const body=codexSample('/fixture',[['Before','Answer']])+lines([marker(first),...between,marker(last)])+lines(codexTurn('After','Answer')),a=s.branch(null,'Fork snapshot','codex',body),g=s.treeGraph(a.id,'in-use'),events=g.paths[0].context.compactions;
+ assert.notEqual(events[0].id,events[1].id);assert.equal(events[1].replaces,events[0].id);assert.equal(events[0].controlPrimary,false);assert.equal(events[0].groupId,events[1].groupId);assert.equal(events[1].groupSize,1);assert.equal(events[1].edgeFrom,events[0].edgeFrom);assert.equal(events[1].edgeTo,events[0].edgeTo);
+ const result=s.setCompaction(a.id,{eventId:events[1].id,enabled:false,head:a.head,version:g.version});assert.equal(result.changedPaths,1);assert.ok(s.treeGraph(a.id).paths[0].context.compactions.every(e=>!e.enabled));assert.equal(parse(renderNative(body,'codex','new','/fixture','Expanded',s.get('branch',a.id).contextPolicy),'codex').context.compactions.length,0);
+ for(const middle of [[{type:'response_item',payload:{type:'function_call',call_id:'new',name:'tool',arguments:'{}'}}],[{type:'event_msg',payload:{type:'user_message',message:'new input'}}]]){const changed=parse(codexSample('/fixture',[['Before','Answer']])+lines([marker(first),...middle,marker(last)]),'codex').context.compactions;assert.equal(changed[1].replaces,undefined,'actual intervening work must not be folded into a snapshot revision');}
+ const changedResult=parse(codexSample('/fixture',[['Before','Answer']])+lines([marker(first),...between,marker({...last,replacement_history:[{type:'message',role:'user',content:[{type:'input_text',text:'Different retained request'}]},{type:'compaction',encrypted_content:'completed-summary'}]})]),'codex').context.compactions;assert.equal(changedResult[1].replaces,undefined);
+});
