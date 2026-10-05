@@ -25,6 +25,14 @@ Records are plain `[contentHash, originalRecordText]` JSONL, grouped into bounde
 
 The split Pull / Push buttons contain the progress fill. Push fills Pull first, then Push. Workflow milestones allocate portions of the fill to preparation, transfer and import; the separately displayed percentage measures the named current phase, not total operation bytes. Unknown work uses a moving highlight. The action text remains to the left of the aligned toolbar buttons; measured speed and phase ETA appear only when available. Errors remain inline with expandable, bounded details. There is no separate transfer-progress panel or duplicate stage tags. Completed buttons briefly show a check and fade back to their idle appearance. New local edits clear Push success and add a pending dot. A Pull with no remote change and no outstanding local imports reports “Already up to date”.
 
+## Reviewing sync conflicts
+
+Click the sync error or open the Push dropdown to review affected sessions/projects. Each row compares the synced version (**Keep previous**) with the current local version (**Keep current**). Select individual rows or Select all, then apply one choice to the selected items. These labels describe the two sources, not their wall-clock order.
+
+Choices update local records and acknowledge both metadata/organization histories. A changed item must be reviewed again before applying a stale selection. Keeping a previous transcript saves a local recovery copy, deactivates the replaced client copy and detaches/suppresses its native identity so a later Update does not import the discarded history again. Resolving metadata alone preserves conversation records. Resolutions remain ordinary local changes for the next Push.
+
+Project membership is inherited from the tree root before conflict comparison. Older same-version child-project conflicts caused solely by stale derived membership are repaired automatically; real field differences remain explicit choices.
+
 ## Trash and initial migration
 
 Trash disappears from the latest version after Push; old Git commits keep the previous content. Local 30-day recovery can remain as a convenience. This is not a promise of historical erasure. The migration excludes existing Trash and Archive before the **first** Git commit. Shared prefixes still required by surviving paths are retained.

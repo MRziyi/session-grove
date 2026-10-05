@@ -1,3 +1,4 @@
+import {conflictItems,resolveConflicts,repairInheritedProjectConflicts,clearConflictFailure,conflictId} from './conflicts.js';
 import {TranscriptionTitles} from './transcription-titles.js';
 import {Autostart} from './autostart.js';
 import {installedClientLinks} from './client-links.js';
@@ -37,12 +38,15 @@ const webRoot = fileURLToPath(new URL('../web/', import.meta.url));
 export function createApp({ root, roots, guard, demo = false, startupOptions = {} }) {
     const store = new Store(root), native = new Native(store, { roots, guard }), token = randomBytes(32).toString('hex');
     const lineageRepair=repairLegacyRecoveries(store);
+    const repairedConflicts=repairInheritedProjectConflicts(store);
     const webAssets = new Map(['index.html', 'app.js', 'library-view.js', 'session-drag.js', 'inline-name.js', 'select.js', 'markdown.js', 'i18n.js', 'style.css'].map(file => [file, fs.readFileSync(path.join(webRoot, file))]));
     const configFile = path.join(root, 'git-sync.json');
     const diagnostics = new Diagnostics(root);
     if(lineageRepair.repaired.length||lineageRepair.skipped.length)diagnostics.record('recovery-lineage-repair',lineageRepair);
     const autoSync = new AutoSync(store, () => ({ ...json(configFile, {}), provider: 'git' }), null, { provider: 'git' });
     autoSync.diagnostics = diagnostics;
+    clearConflictFailure(autoSync);
+    if(repairedConflicts)diagnostics.record('conflict-repair',{count:repairedConflicts});
     if (store.local('localUpdateStarted') === null) store.local('localUpdateStarted', demo || store.instances().length > 0);
     if (store.local('syncStarted') === null) store.local('syncStarted', !!store.local('lastSync') || !!autoSync.status().lastCheck);
     autoSync.configureTimer();
@@ -124,6 +128,7 @@ export function createApp({ root, roots, guard, demo = false, startupOptions = {
                 return send(200,{path:directory,parent:path.dirname(directory),home:os.homedir(),folders});
             }
             if (req.method === 'GET' && route === '/api/status') return send(200, { ...timing(), cloud: autoSync.status() });
+            if(req.method==='GET'&&route==='/api/conflicts')return send(200,{items:conflictItems(store),stateVersion:timing().stateVersion});
             if (req.method === 'GET' && route === '/api/synchronize/pending') return send(200, { items: autoSync.pendingItems() });
             if(req.method==='POST'&&route==='/api/synchronize/discard'){
                 if(discardRequest)return send(200,await discardRequest);
@@ -423,41 +428,19 @@ export function createApp({ root, roots, guard, demo = false, startupOptions = {
                     autoSync.unlock(body.passphrase);
                 return send(200, await autoSync.flush(body.direction || 'both', true));
             }
-            if (req.method === 'POST' && route === '/api/conflicts/resolve') {
-                const conflicts = store.local('conflicts') || [], c = conflicts[body.index];
-                assert(c, '冲突不存在');
-                if (c.kind === 'session') {
-                    assert(['local', 'remote'].includes(body.choice), 'Unknown session choice.');
-                    const current = store.get('branch', c.local.id), chosen = body.choice === 'remote' ? c.remote : current;
-                    store.put('branch', metadata(current, { ...chosen, metaAncestors: [...new Set([...(chosen.metaAncestors || []), c.remote.metaVersion].filter(Boolean))] }));
-                } else if (c.kind === 'layout') {
-                    assert(['local', 'remote'].includes(body.choice), 'Unknown conflict choice.');
-                    const b = store.get('branch', c.local.id);
-                    const chosen = store.get('layout', body.choice === 'remote' ? c.remote.layoutHead : b.layoutHead);
-                    const layout = { ...chosen, id: id(), parent: b.layoutHead, mergeParents: [c.remote.layoutHead], createdAt: now() };
-                    store.put('layout', layout);
-                    store.put('branch', { ...b, layoutHead: layout.id });
-                }
-                else if (body.choice === 'remote') {
-                    if (c.kind === 'organization') {
-                        const b = store.get('branch', c.local.id);
-                        store.put('branch', { ...b, nodeHead: c.remote.nodeHead, updatedAt: now() });
-                    }
-                    else if (c.kind === 'branch') {
-                        store.edit(c.local.id, { name: c.remote.name, group: c.remote.group, archived: c.remote.archived, contextPolicy: c.remote.contextPolicy });
-                        if (c.remote.archived)
-                            native.setActive(c.local.id, null, false);
-                    }
-                    else {
-                        const p = store.get('project', c.local.id);
-                        store.put('project', metadata(p, { name: c.remote.name, description: c.remote.description, archived: c.remote.archived }));
-                    }
-                }
-                else
-                    assert(body.choice === 'local', '未知选择');
-                conflicts.splice(body.index, 1);
-                store.local('conflicts', conflicts);
-                return send(200, { resolved: true });
+            if(req.method==='POST'&&route==='/api/conflicts/resolve'){
+                assert(!autoSync.running&&!autoSync.pending&&!autoSync.migrating,'Wait for sync to finish before resolving conflicts.',409);
+                let selections=body.selections,choice=body.choice;
+                if(body.index!==undefined){const c=(store.local('conflicts')||[])[body.index];assert(c,'冲突不存在');const item=conflictItems(store).find(i=>i.conflictIds.includes(conflictId(c)));selections=[{id:item.id,version:item.version}];choice=choice==='remote'?'previous':choice==='local'?'current':choice;}
+                autoSync.migrating=true;try{
+                const result=await runTrash('resolve',report=>resolveConflicts(store,native,selections,choice,{onProgress:report,deactivate:async branchIds=>{
+                    const before=store.instances();
+                    if(!demo&&!guard)await archiveNative(store,native,branchIds,{archiveBranches:false,onProgress:report});
+                    else{for(const id of branchIds)native.setActive(id,null,false);await native.applyAsync(branchIds,{onProgress:report});}
+                    await refreshNativeClients(native,before);
+                }}));
+                clearConflictFailure(autoSync);autoSync.schedule();configureExpiry();return send(200,result);
+                }finally{autoSync.migrating=false;autoSync.reconcileTimer();}
             }
             return send(404, { error: '接口不存在' });
         }

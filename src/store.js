@@ -342,6 +342,14 @@ export class Store {
         assert([1, 2, 3].includes(graph?.schema) && Array.isArray(graph.projects) && Array.isArray(graph.branches) && Array.isArray(graph.revisions), '不兼容的同步格式');
         assert(graph.revisions.length < 100000 && graph.branches.length < 100000, '远端资料库过大');
         graph = { ...graph, projects: graph.projects.filter(p => p.id !== INBOX_ID), branches: graph.branches.map(b => b.projectId === INBOX_ID ? { ...b, projectId: null } : b) };
+        // Project membership belongs to the family root, not to cached copies
+        // of individual native paths. Normalize before comparing metadata.
+        const incomingBranches=new Map(graph.branches.map(b=>[b.id,b]));
+        graph={...graph,branches:graph.branches.map(b=>{
+            let root=b;const seen=new Set();
+            while(root.parentId){assert(!seen.has(root.id),'分支图存在环');seen.add(root.id);root=incomingBranches.get(root.parentId)||this.find('branch',root.parentId);assert(root,'Parent session is missing.');}
+            return b.projectId===root.projectId?b:{...b,projectId:root.projectId};
+        })};
         return this.transaction(() => {
             for (const [h, body] of Object.entries(objects)) {
                 assert(hash(body) === h, '远端对象校验失败');
@@ -401,6 +409,7 @@ export class Store {
                     continue;
                 }
                 assert(old.agent === b.agent, '分支身份冲突');
+                if(old.resolvedHeads?.includes(b.head)&&old.metaAncestors?.includes(b.metaVersion)){winners.set(b.id,'local');keptLocal++;continue;}
                 if (latest) {
                     const incomingTime = modifiedAt(b), localTime = modifiedAt(old);
                     if (protectedIds.has(b.id) || incomingTime < localTime) { winners.set(b.id, 'local'); keptLocal++; continue; }
@@ -423,7 +432,7 @@ export class Store {
                         remapped.set(b.id, forkId);
                     }
                 }
-                if (old.name !== b.name || old.endpointName !== b.endpointName || old.archived !== b.archived || old.group !== b.group || old.projectId !== b.projectId || old.parentId !== b.parentId || old.forkRevision !== b.forkRevision || JSON.stringify(old.contextPolicy || {}) !== JSON.stringify(b.contextPolicy || {})) {
+                if (old.name !== b.name || old.endpointName !== b.endpointName || old.archived !== b.archived || old.group !== b.group || old.projectId !== b.projectId&&(!old.parentId||old.parentId!==b.parentId) || old.parentId !== b.parentId || old.forkRevision !== b.forkRevision || JSON.stringify(old.contextPolicy || {}) !== JSON.stringify(b.contextPolicy || {})) {
                     if (b.metaAncestors?.includes(old.metaVersion))
                         this.put('branch', { ...this.get('branch', b.id), name: b.name, endpointName: b.endpointName, archived: b.archived, group: b.group, projectId: b.projectId, contextPolicy: b.contextPolicy, parentId: b.parentId, forkRevision: b.forkRevision, forkEnd: b.forkEnd, forkParentEnd: b.forkParentEnd, metaVersion: b.metaVersion, metaAncestors: b.metaAncestors });
                     else if (!old.metaAncestors?.includes(b.metaVersion))
@@ -436,13 +445,21 @@ export class Store {
                 const revision = this.get('revision', incoming.revisionId);
                 assert(Number.isInteger(incoming.start) && Number.isInteger(incoming.end) && incoming.start >= 0 && incoming.end > incoming.start && incoming.end <= revision.refs.length, 'Invalid logical node range');
                 const forkId = remapped.get(incoming.branchId);
-                const n = forkId ? { ...incoming, id: `${incoming.id}-${forkId}`, previousId: incoming.previousId ? `${incoming.previousId}-${forkId}` : null, branchId: forkId } : incoming;
+                const n = forkId ? { ...incoming, id: `${incoming.id}-${forkId}`, previousId: incoming.previousId ? `${incoming.previousId}-${forkId}` : null,...(incoming.mergeParents?{mergeParents:incoming.mergeParents.map(id=>`${id}-${forkId}`)}:{}), branchId: forkId } : incoming;
                 const existing = this.find('node', n.id);
                 if (existing)
                     assert(JSON.stringify(existing) === JSON.stringify(n), 'Immutable node conflict');
                 else
                     this.put('node', n);
             }
+            const checkedNodes=new Set();
+            const checkNode=(node,visiting=new Set())=>{
+                if(checkedNodes.has(node.id))return;assert(!visiting.has(node.id),'Logical node history contains a cycle');visiting.add(node.id);
+                assert(!node.mergeParents||Array.isArray(node.mergeParents),'Invalid logical node merge history');
+                for(const id of [node.previousId,...(node.mergeParents||[])].filter(Boolean)){const parent=this.get('node',id);assert(parent.branchId===node.branchId,'Logical node belongs to another session');checkNode(parent,visiting);}
+                visiting.delete(node.id);checkedNodes.add(node.id);
+            };
+            for(const n of graph.nodes||[]){const fork=remapped.get(n.branchId);checkNode(this.get('node',fork?`${n.id}-${fork}`:n.id));}
             for (const l of graph.layouts || []) {
                 assert(typeof l.id === 'string' && l.assignments && typeof l.assignments === 'object' && !Array.isArray(l.assignments), 'Invalid organization layout.');
                 this.get('branch', l.rootId);
@@ -489,18 +506,9 @@ export class Store {
                 if (layoutAncestor(current.layoutHead, b.layoutHead)) this.put('branch', { ...current, layoutHead: b.layoutHead });
                 else if (!layoutAncestor(b.layoutHead, current.layoutHead)) conflicts.push({ kind: 'layout', local: { id: b.id, name: b.name, layoutHead: current.layoutHead }, remote: { id: b.id, name: b.name, layoutHead: b.layoutHead } });
             }
-            const nodeAncestor = (older, newer) => {
-                if (!older)
-                    return true;
-                const seen = new Set();
-                while (newer) {
-                    assert(!seen.has(newer), 'Logical node chain contains a cycle');
-                    if (newer === older)
-                        return true;
-                    seen.add(newer);
-                    newer = this.get('node', newer).previousId;
-                }
-                return false;
+            const nodeAncestor=(older,newer)=>{
+                if(!older)return true;
+                const seen=new Set(),pending=[newer];while(pending.length){const id=pending.pop();if(!id||seen.has(id))continue;if(id===older)return true;seen.add(id);const node=this.get('node',id);pending.push(node.previousId,...(node.mergeParents||[]));}return false;
             };
             for (const b of graph.branches) {
                 if (winners.get(b.id) === 'local') continue;
