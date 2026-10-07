@@ -27,3 +27,20 @@ test('CLI status and stop identify the server and close a live event stream', as
     assert.equal(code, 0); assert.equal(fs.existsSync(path.join(root, 'server.lock')), false);
     assert.match(execFileSync(process.execPath, [cli, 'status', '--data-dir', root], { encoding: 'utf8' }), /stopped/);
 });
+
+test('normal start survives its launching terminal process group exiting',async t=>{
+    const root=fs.mkdtempSync(path.join(os.tmpdir(),'grove-background-')),cli=path.resolve('bin/session-grove.js');
+    const start=JSON.parse(fs.readFileSync('package.json','utf8')).scripts.start.split(' ').slice(1);
+    const launcherCode=`const {spawn}=require('node:child_process');const c=spawn(process.execPath,${JSON.stringify([...start,'--demo','--port','0','--data-dir',root])},{stdio:'inherit'});c.on('exit',code=>{if(code)process.exit(code);});setInterval(()=>{},1000);`;
+    const terminal=spawn(process.execPath,['-e',launcherCode],{detached:process.platform!=='win32',stdio:['ignore','pipe','pipe']});
+    const exited=once(terminal,'exit');let output='';terminal.stdout.on('data',c=>output+=c);terminal.stderr.resume();let info;
+    const closeTerminal=()=>{if(terminal.exitCode===null&&terminal.signalCode===null){if(process.platform==='win32')terminal.kill();else process.kill(-terminal.pid,'SIGHUP');}};
+    t.after(async()=>{closeTerminal();await exited;if(info)try{execFileSync(process.execPath,[cli,'stop','--data-dir',root],{stdio:'ignore'});}catch{}for(let i=0;i<100&&fs.existsSync(path.join(root,'server.lock'));i++)await new Promise(r=>setTimeout(r,100));fs.rmSync(root,{recursive:true,force:true,maxRetries:5,retryDelay:100});});
+    for(let i=0;i<400&&!output.includes('is running');i++)await new Promise(r=>setTimeout(r,50));
+    if(fs.existsSync(path.join(root,'server.json')))info=JSON.parse(fs.readFileSync(path.join(root,'server.json'),'utf8'));
+    assert.match(output,/is running/,'the start command reports readiness');assert.ok(info);
+    closeTerminal();await exited;
+    await new Promise(r=>setTimeout(r,250));
+    const state=await fetch('http://127.0.0.1:'+info.port+'/api/service',{signal:AbortSignal.timeout(5000)}).then(r=>r.json());
+    assert.equal(state.pid,info.pid);assert.equal(state.instance,info.instance);assert.equal(state.stopping,false);
+});

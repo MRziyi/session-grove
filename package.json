@@ -8,7 +8,7 @@
     "node": ">=24.0.0"
   },
   "scripts": {
-    "start": "node bin/session-grove.js",
+    "start": "node bin/session-grove.js --background",
     "stop": "node bin/session-grove.js stop",
     "status": "node bin/session-grove.js status",
     "dev": "node --watch bin/session-grove.js",

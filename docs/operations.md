@@ -16,7 +16,7 @@ The sections below retain older operational notes; WebDAV credentials, passphras
 
 ## Local service
 
-Node.js 24+ and `pnpm install` are required. `pnpm dev` and `npm run dev` start the local server with source watching; `pnpm start` is also available. Demo mode (`pnpm run demo`) uses isolated sample data. The default URL is `http://127.0.0.1:7421`; the service binds only to loopback.
+Node.js 24+ and `pnpm install` are required. `pnpm dev` and `npm run dev` start the local server with source watching; `pnpm start` / `npm start` run in the background and return when ready, so closing the terminal does not stop the service. Use `pnpm status` / `pnpm stop` (or `npm run status` / `npm stop`) to manage it. `pnpm dev` intentionally stays attached to the terminal. Login startup is separate: it starts at the next sign-in; stopping that service does not disable the login setting. Demo mode (`pnpm run demo`) uses isolated sample data. The default URL is `http://127.0.0.1:7421`; the service binds only to loopback.
 
 ```sh
 pnpm start --port 7421 --data-dir /path/to/library \

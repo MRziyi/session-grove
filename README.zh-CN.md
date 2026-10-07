@@ -66,7 +66,7 @@ pnpm run demo
 
 打开 **http://127.0.0.1:7421**。Demo 使用示例会话，不读取个人历史。上面的截图来自真实界面中的合成示例。
 
-管理自己的会话时，先停止 Demo，运行 `pnpm start`，再点击 **Update**。Grove 会读取本机 Claude Code 和 Codex 会话目录。浏览、整理和创建续接时，可以继续运行原生 Agent。
+管理自己的会话时，先停止 Demo，运行 `pnpm start`，再点击 **Update**。启动命令会让 Grove 在后台运行，可以关闭 Terminal。使用 `pnpm stop` 停止服务，`pnpm status` 查看运行状态。Grove 会读取本机 Claude Code 和 Codex 会话目录。浏览、整理和创建续接时，可以继续运行原生 Agent。
 
 也可以使用 npm：`npm install`、`npm run demo`、`npm start`。左下角可切换中英文。
 

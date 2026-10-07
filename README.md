@@ -66,7 +66,7 @@ pnpm run demo
 
 Open **http://127.0.0.1:7421**. Demo mode uses sample sessions and does not read personal history. The screenshots above use synthetic examples in the real interface.
 
-To use your own history, stop the demo, run `pnpm start`, then click **Update**. Grove reads the local Claude Code and Codex session folders. You can keep the agents running while browsing, organizing or creating a new continuation.
+To use your own history, stop the demo, run `pnpm start`, then click **Update**. The start command runs Grove in the background; you can close Terminal. Use `pnpm stop` to stop the service and `pnpm status` to check it. Grove reads the local Claude Code and Codex session folders. You can keep the agents running while browsing, organizing or creating a new continuation.
 
 Prefer npm? Use `npm install`, `npm run demo` and `npm start`. Switch between English and Chinese at the bottom of the sidebar.
 
