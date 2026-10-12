@@ -100,14 +100,14 @@ export class Store {
             return result;
         }
         catch (e) {
-            this.db.exec('ROLLBACK'); this.invalidate(); this.parseCache.clear(); this.parseBytes = 0; this.recordCache.clear(); this.recordBytes = 0; this.instanceCache = undefined; this.summaryCache.clear(); this.cloudCache.clear(); this.cloudVersion++;
+            this.db.exec('ROLLBACK'); this.graphProjections=null; this.invalidate(); this.parseCache.clear(); this.parseBytes = 0; this.recordCache.clear(); this.recordBytes = 0; this.instanceCache = undefined; this.summaryCache.clear(); this.cloudCache.clear(); this.cloudVersion++;
             throw e;
         }
     }
     all(kind) { return this.allStatement.all(kind).map(x => JSON.parse(x.body)); }
     get(kind, key) { const row = this.getStatement.get(kind, key); assert(row, `${kind} 不存在`, 404); return JSON.parse(row.body); }
     find(kind, key) { const row = this.getStatement.get(kind, key); return row ? JSON.parse(row.body) : undefined; }
-    put(kind, value) { if(this.entityWrite.run(kind, value.id, JSON.stringify(value)).changes)this.invalidate(); return value; }
+    put(kind, value) { if(this.entityWrite.run(kind, value.id, JSON.stringify(value)).changes){if(kind==='revision')this.graphProjections=null;this.invalidate();} return value; }
     local(key, value, options = {}) {
         if (key.startsWith('cloud:')) {
             if (!this.cloudCache.has(key)) { const body = this.localRead.get(key)?.body; this.cloudCache.set(key, { body, value: body ? JSON.parse(body) : null }); }

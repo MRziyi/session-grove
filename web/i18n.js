@@ -1,5 +1,13 @@
 let language = localStorage.getItem('grove-language') === 'zh' ? 'zh' : 'en';
 const dictionary = {
+"Waiting for the local service. Reconnecting automatically…":"正在等待本地服务，将自动重新连接…",
+"Rename transcription":"重命名 Transcription",
+"Updating client title":"正在更新客户端标题",
+"Transcription title":"Transcription 标题",
+"Live transcription renaming requires a supported Codex VS Code client.":"同步重命名需要受支持的 Codex VS Code 客户端。",
+"This transcription title is already being updated.":"该 Transcription 标题正在更新。",
+"A transcription title is being updated.":"正在更新 Transcription 标题，请稍后再试。",
+"Enter a name (1–200 characters).":"请输入名称（1–200 个字符）。",
     "Visible messages match; recorded context differs.": "可见消息相同，但记录的上下文不同。",
     "Keeping previous saves a recovery copy and deactivates the current client copy.": "保留之前会先保存恢复副本，并停用当前客户端副本。",
     "History preview is unavailable.": "暂时无法预览历史。",

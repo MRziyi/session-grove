@@ -26,9 +26,11 @@ export class TranscriptionTitles {
     capabilities(){return this.support();}
     instances(branchId){return this.store.instances().filter(i=>i.branchId===branchId&&i.agent==='codex'&&isActive(i)&&!i.nativeArchived);}
     ready(branchId){return this.capabilities().supported&&this.instances(branchId).length>0&&fs.existsSync(path.join(this.native.roots.codex,'ipc','ipc.sock'));}
-    async rename(branchId,title,{signal,expected,validate=()=>true}={}){
+    async rename(branchId,title,{signal,expected,validate=()=>true,origin='automatic'}={}){
         assert(this.ready(branchId),'Open the supported Codex VS Code client to update transcription titles.',409);
+        this.renaming ||= new Set();assert(!this.renaming.has(branchId),'This transcription title is already being updated.',409);
         const instances=this.instances(branchId),client=this.clientFactory(this.binary(),this.native.roots.codex),changed=[];
+        this.renaming.add(branchId);
         try{
             await client.init();const snapshots=[];
             for(const instance of instances){
@@ -48,14 +50,15 @@ export class TranscriptionTitles {
             signal?.throwIfAborted();assert(validate(),'The transcription path changed. Retry with its current nodes.',409);
             const refreshed=await this.refresh(this.native.roots.codex);assert(refreshed.status==='sent','The client title refresh is unavailable. The previous name was restored.',409);signal?.throwIfAborted();
             for(const {instance} of snapshots){const current=await client.request('thread/read',{threadId:instance.nativeId,includeTurns:false});assert(current.thread.name===title,'The client title changed before it could be applied in Grove.',409);}
+            assert(validate(),'The transcription path changed. Retry with its current nodes.',409);
             this.store.transaction(()=>{
                 const ids=new Set(instances.map(i=>i.id));this.store.local('instances',this.store.instances().map(i=>ids.has(i.id)?{...i,title,observedTitle:title}:i));
-                const b=this.store.get('branch',branchId);this.store.put('branch',metadata(b,{transcriptionTitle:title,transcriptionNameOrigin:'automatic',originalTitle:title}));
+                const b=this.store.get('branch',branchId);this.store.put('branch',metadata(b,{transcriptionTitle:title,transcriptionNameOrigin:origin,originalTitle:title}));
             });return {nativeIds:instances.map(i=>i.nativeId),refresh:refreshed.status,at:now()};
         }catch(error){
             const failed=[];for(const item of changed.reverse())try{const current=await client.request('thread/read',{threadId:item.id,includeTurns:false});if(current.thread.name===title)await client.request('thread/name/set',{threadId:item.id,name:item.name});}catch{failed.push(item.id);}
             if(changed.length)await this.refresh(this.native.roots.codex).catch(()=>{});
             if(failed.length)throw Error('Some client titles could not be rolled back. Update the client list before retrying.');throw error;
-        }finally{await client.close();}
+        }finally{try{await client.close();}finally{this.renaming.delete(branchId);}}
     }
 }

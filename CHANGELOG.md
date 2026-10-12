@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.1.7
+
+- Redirect localhost page visits to the canonical 127.0.0.1 address, retaining strict API Host/Origin checks.
+
+- Retry failed page initialization, render disconnected controls safely, and recover on reconnect. Bound read waits and serialize status polling.
+- Reuse lightweight tree projections for node rename refreshes; invalidate them on history writes and rollbacks.
+- Add inline editing of graph transcription titles with compatible Codex client synchronization, manual-name ownership, progress, stale-edit rejection and rollback.
+- Start normal service commands in the background, retaining foreground development mode.
+
 ## 1.1.6
 
 - Include the conflict-resolution panel with affected items, previous/current differences, stale-review protection and return to pending uploads. Disable background Git maintenance in disposable integration-test repositories to avoid cleanup races.

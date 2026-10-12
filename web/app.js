@@ -91,13 +91,13 @@ const nodeName = n => { if(labeledTree!==state.tree){labeledTree=state.tree;node
 function toast(message) { $('#toast').textContent = message; $('#toast').classList.add('show'); clearTimeout(toastTimer); toastTimer = setTimeout(() => $('#toast').classList.remove('show'), 6000); }
 async function api(path, method = 'GET', body, retried = false, options = {}) {
     let r;
-    try { r = await fetch('/api' + path, { method, headers: { 'Content-Type': 'application/json', 'X-Grove-Token': state.token, 'X-Grove-Graph': 'shared-messages-v1',...(options.openId?{'X-Grove-Open-Id':options.openId}:{}) },signal:options.signal, ...(body ? { body: JSON.stringify(body) } : {}) }); }
+    try { r = await fetch('/api' + path, { method, headers: { 'Content-Type': 'application/json', 'X-Grove-Token': state.token, 'X-Grove-Graph': 'shared-messages-v1',...(options.openId?{'X-Grove-Open-Id':options.openId}:{}) },signal:options.signal||(method==='GET'?AbortSignal.timeout(path==='/status'?10000:120000):undefined), ...(body ? { body: JSON.stringify(body) } : {}) }); }
     catch (e) { if(e.name==='AbortError')throw e;state.connected = false; if (state.data) renderCloudStatus(); throw e; }
     await options.onStage?.('Receiving session history');
     const data = await r.json();
     options.signal?.throwIfAborted();
     if (r.status === 403 && data.error === '本地访问凭证无效，请刷新页面' && !retried) {
-        const boot = await (await fetch('/api/bootstrap')).json(); state.token = boot.token;
+        const boot = await (await fetch('/api/bootstrap',{signal:AbortSignal.timeout(30000)})).json(); state.token = boot.token;
         return api(path, method, body, true, options);
     }
     state.connected = r.status !== 503;
@@ -147,7 +147,7 @@ function translateBanner() {
     $('#graph-fit').textContent = t('Fit tree');$('#graph-fit-path').textContent=t('Fit path');
 }
 function editableName(kind,id,name,css='') {
-    return `<span class="editable-name ${css}" data-name-kind="${kind}" data-name-id="${esc(id)}">${esc(name)}</span>`;
+    return `<span class="editable-name ${css}" data-name-kind="${kind}" ${kind==='transcription'?'tabindex="0"':''} data-name-id="${esc(id)}">${esc(name)}</span>`;
 }
 function projectName(id,name){const project=state.data.projects.find(p=>p.id===id);return project&&!project.builtin&&id!==INBOX?editableName('project',id,name):esc(name);}
 function listedSession(item){return item.sessions.find(s=>s.id===item.id)||item.sessions[0];}
@@ -261,7 +261,7 @@ function renderTransfer() {
     }
 }
 function renderTrashProgress() {
-    const op=[operations.open,operations.trash||state.data?.trashOperation].filter(value=>value&&state.dismissedTask!==value.id&&!(value.state==='success'&&Date.now()-(value.finishedAt||0)>3500)).sort((a,b)=>Number(b.state==='running')-Number(a.state==='running')||(b.startedAt||b.finishedAt||0)-(a.startedAt||a.finishedAt||0))[0],box=$('#trash-progress');
+    const op=[operations.rename,operations.open,operations.trash||state.data?.trashOperation].filter(value=>value&&state.dismissedTask!==value.id&&!(value.state==='success'&&Date.now()-(value.finishedAt||0)>3500)).sort((a,b)=>Number(b.state==='running')-Number(a.state==='running')||(b.startedAt||b.finishedAt||0)-(a.startedAt||a.finishedAt||0))[0],box=$('#trash-progress');
     box.hidden=!op||state.dismissedTask===op.id||op.state==='success'&&Date.now()-(op.finishedAt||0)>3500;
     if(box.hidden){box.hidePopover?.();return;}
     if(box.showPopover&&!box.matches(':popover-open'))box.showPopover();
@@ -627,7 +627,7 @@ function renderGraph() {
     const nodes=state.tree.nodes,p=route(),byNode=new Map(nodes.map(n=>[n.id,n]));
     const layout=currentGraphLayout=graphLayout(state.tree,p.branchId);
     const {positions,controls,edges,junctions,activeNodes,contextNodes,endpoints,width,height,rootX}=layout;
-    const pathLabel=p.transcriptionTitle||p.originalTitle||p.name;$('#graph-path-label').textContent=pathLabel;$('#graph-path-label').title=t('Selected path')+': '+pathLabel;
+    const pathLabel=p.transcriptionTitle||p.originalTitle||p.name;$('#graph-path-label').innerHTML=editableName('transcription',p.branchId,pathLabel);$('#graph-path-label').removeAttribute('title');
     const edgeMarkup=junctions.map(j=>`<path d="${j.d}" class="graph-junction" fill="none" stroke="#9badbb" stroke-width="1.5"/>`).join('')+[...edges].sort((a,b)=>Number(a.active)-Number(b.active)).map(e=>`<path data-path-edge="${e.active?'current':'other'}" class="path-edge ${e.active?'path-active':'path-inactive'}" d="${e.d}" fill="none" stroke="${palette[e.color][0]}" stroke-width="2" ${e.pending?'stroke-dasharray="4 4"':''}/>`).join('')+junctions.filter(j=>j.activeD).map(j=>`<path class="path-edge path-active" d="${j.activeD}" fill="none"/>`).join('');
     camera.width=width;camera.height=height;camera.rootX=rootX;
     if(camera.newView){const view=$('#graph-scroll');Object.assign(camera,pathCamera(layout,p.branchId,view.clientWidth,view.clientHeight));camera.newView=false;}
@@ -650,8 +650,8 @@ function renderGraph() {
     $$('#graph .compaction-edge').forEach(el => el.remove());
     $('#graph').insertAdjacentHTML('beforeend',controls.map(({owner,e,before,after,x,y})=>`<div class="compaction-edge ${p.context.compactions.some(c=>c.groupId===e.groupId)?'path-active':'path-inactive'}" data-before="${esc(before?.id||'')}" data-after="${esc(after?.id||'')}" style="left:${x}px;top:${y}px">${compactionButton(e,true,owner)}</div>`).join(''));
     $$('#graph .transcription-end').forEach(el=>el.remove());
-    for(const [nodeId,paths] of endpoints){const pos=positions.get(nodeId),title=[...new Set(paths.map(v=>v.transcriptionTitle||v.originalTitle||v.name))].join(' · ');
-        $('#graph').insertAdjacentHTML('beforeend',`<div class="transcription-end ${paths.some(v=>v.branchId===p.branchId)?'path-active':''}" data-current-end="${paths.some(v=>v.branchId===p.branchId)}" style="left:${pos.x}px;top:${pos.y+82}px" title="${esc(title)}">${esc(title)}</div>`);camera.height=Math.max(camera.height,pos.y+110);
+    for(const [nodeId,paths] of endpoints){const pos=positions.get(nodeId),title=paths.map(v=>editableName('transcription',v.branchId,v.transcriptionTitle||v.originalTitle||v.name)).join(' · ');
+        $('#graph').insertAdjacentHTML('beforeend',`<div class="transcription-end ${paths.some(v=>v.branchId===p.branchId)?'path-active':''}" data-current-end="${paths.some(v=>v.branchId===p.branchId)}" style="left:${pos.x}px;top:${pos.y+82}px">${title}</div>`);camera.height=Math.max(camera.height,pos.y+110);
     }
     $('#graph').style.height=camera.height+'px';
     bindCompactions($('#graph'));
@@ -758,6 +758,7 @@ async function refresh({ checkCloud = false } = {}) {
     state.selected = new Set([...state.selected].filter(id => list.items.some(i => i.id === id)||scope==='archived'&&(data.trashNative||[]).some(i=>'client:'+i.id===id)));
     if (tree && tree.view !== (scope === 'archived' ? 'archived' : 'in-use')) return;
     if (tree) {
+        if(keepDetail)for(const path of state.tree.paths)path.metaVersion=tree.paths.find(p=>p.branchId===path.branchId)?.metaVersion;
         state.tree = tree.paths.length ? (keepDetail?Object.assign(state.tree,{sessionNameVersion:tree.sessionNameVersion}):tree) : null;
         if (!state.tree) { clearRange(); render(); return; } if (!route()) state.branchId = tree.paths[0]?.branchId;
         if (state.nodeId&&!tree.nodes.some(n => n.id === state.nodeId)) state.nodeId = tree.nodes.find(n=>n.branchIds.includes(state.branchId)&&n.chatIds.some(id=>oldNode?.chatIds.includes(id)))?.id || oldNode?.parentIds.find(id=>tree.nodes.some(n=>n.id===id&&n.branchIds.includes(state.branchId))) || null;
@@ -1101,7 +1102,7 @@ $('#graph-fit-path').onclick=()=>{const view=$('#graph-scroll');if(currentGraphL
 $('#graph-fit').onclick = () => { const view = $('#graph-scroll'); camera.zoom = Math.max(.02, Math.min(1, (view.clientWidth - 32) / camera.width, (view.clientHeight - 32) / camera.height)); camera.x = (view.clientWidth - camera.width * camera.zoom) / 2; camera.y = (view.clientHeight - camera.height * camera.zoom) / 2; applyCamera(); };
 let pan = null;
 $('#graph-scroll').addEventListener('pointerdown', e => {
-    if (e.button !== 0 || e.target.closest('button')) return;
+    if (e.button !== 0 || e.target.closest('button,[data-name-kind]')) return;
     pan = { x: e.clientX, y: e.clientY, startX: camera.x, startY: camera.y }; e.currentTarget.setPointerCapture(e.pointerId); e.currentTarget.classList.add('panning');
 });
 $('#graph-scroll').addEventListener('pointermove', e => { if (!pan) return; camera.x = pan.startX + e.clientX - pan.x; camera.y = pan.startY + e.clientY - pan.y; applyCamera(); });
@@ -1114,6 +1115,12 @@ $('#graph-scroll').addEventListener('wheel', e => {
 }, { passive: false });
 // Window focus never performs remote I/O; Sync explicitly refreshes the cloud directory.
 window.addEventListener('resize', () => scheduleRibbons());
+async function renameTranscription(path,name){
+    const operation={id:'rename-'+Date.now(),action:'rename',startedAt:Date.now()};
+    showOperation('rename',{...operation,state:'running',progress:{phase:'Updating client title'}});
+    try{const result=await api('/branches/'+path.branchId+'/transcription-title','POST',{name,head:path.head,metaVersion:path.metaVersion});showOperation('rename',{...operation,state:'success',finishedAt:Date.now()});return result;}
+    catch(error){showOperation('rename',{...operation,state:'error',error:error.message,finishedAt:Date.now()});throw error;}
+}
 const inlineNames=installInlineNames({translate:t,saved:()=>refresh(),onError:e=>toast(e.message),describe:anchor=>{
     if(working||state.connected===false)return null;
     const {nameKind:kind,nameId:id}=anchor.dataset;
@@ -1125,31 +1132,53 @@ const inlineNames=installInlineNames({translate:t,saved:()=>refresh(),onError:e=
         const item=state.data.items.find(i=>i.id===id),tree=state.tree?.id===id?state.tree:null;if(!item&&!tree)return null;
         return {value:tree?.name||item.name,label:t('Session name'),save:name=>api('/trees/'+id,'POST',{action:'rename-session',name,metaVersion:tree?.sessionNameVersion||item.sessionNameVersion})};
     }
+    if(kind==='transcription'){
+        const path=state.tree?.paths.find(p=>p.branchId===id);if(!path)return null;
+        return {value:path.transcriptionTitle||path.originalTitle||path.name,label:t('Transcription title'),save:name=>renameTranscription(path,name)};
+    }
     const graph=state.tree,node=graph?.nodes.find(n=>n.id===id);if(!node)return null;
     const pathId=node.branchIds.includes(state.branchId)?state.branchId:node.branchIds[0];
     return {value:node.name||'',label:t('Node title'),save:name=>api('/trees/'+graph.id,'POST',{action:'rename',nodeId:id,pathId,version:graph.version,name})};
 }});
 
-try {
-    const boot = await (await fetch('/api/bootstrap')).json(); if (boot.error) throw new Error(errorText(boot.error));
-    state.token = boot.token; state.data = boot; state.roots = boot.roots;if(!boot.items.length&&!boot.update.started)state.scope=PROJECTS; $('#demo-badge').textContent = boot.demo ? 'DEMO' : '';
-    setLocale(locale()); await refresh(); watchOperations();
-    document.addEventListener('visibilitychange',()=>{if(document.hidden)eventController?.abort();else api('/status').then(next=>{state.data.cloud=next.cloud;state.data.update=next.update;renderCloudStatus();}).catch(()=>{});renderCloudStatus();});renderCloudStatus();
-    setInterval(async () => {
-        if (document.hidden) return;
-        try {
-            const next = await api('/status');
-            if(next.intelligence)showOperation('intelligence',next.intelligence);
-            if(next.cloud.operation)showOperation('sync',next.cloud.operation);
-            if(next.discardOperation&&working)showOperation('discard',next.discardOperation);
-            if(next.trashOperation)showOperation('trash',next.trashOperation);
-            if(next.update.operation)showOperation('update',next.update.operation);
-            const canRefresh = !working && !inlineNames.editing && !opening && !$('#dialog').open && !state.chats.size;
-            if (next.stateVersion !== state.data.stateVersion && canRefresh) await refresh();
-            else { state.data.cloud = next.cloud; state.data.update = next.update; state.data.trashOperation = next.trashOperation; renderCloudStatus(); }
-        } catch { /* Explicit Update reports connection errors. */ }
-    }, 5000);
-} catch (e) { toast(e.message); }
+// A transient startup failure must not skip installation of reconnection logic.
+for (;;) {
+    try {
+        const response=await fetch('/api/bootstrap',{signal:AbortSignal.timeout(30000)}),boot=await response.json();
+        if(!response.ok||!boot.token)throw Error(boot.error||'Local service unavailable');
+        state.token=boot.token;state.data=boot;state.roots=boot.roots;if(!boot.items.length&&!boot.update.started)state.scope=PROJECTS;
+        $('#demo-badge').textContent=boot.demo?'DEMO':'';
+        setLocale(locale());translateBanner();await refresh();$('#settings').disabled=false;break;
+    } catch(e) {
+        state.connected=false;
+        if(state.data)renderCloudStatus();
+        else {translateBanner();$('#cloud-status').textContent=t('Service disconnected');$$('#sync,#upload,#collect,#settings').forEach(el=>el.disabled=true);}
+        $('#list-title').textContent=t('Service disconnected');
+        $('#session-list').innerHTML=`<p class="empty" role="status">${t('Waiting for the local service. Reconnecting automatically…')}<br>${esc(e.message)}</p>`;
+        await new Promise(resolve=>setTimeout(resolve,3000));
+    }
+}
+watchOperations();
+let statusPolling=false;
+async function pollStatus(){
+    if(document.hidden||statusPolling)return;
+    statusPolling=true;
+    try {
+        const next=await api('/status');
+        if(next.intelligence)showOperation('intelligence',next.intelligence);
+        if(next.cloud.operation)showOperation('sync',next.cloud.operation);
+        if(next.discardOperation&&working)showOperation('discard',next.discardOperation);
+        if(next.trashOperation)showOperation('trash',next.trashOperation);
+        if(next.update.operation)showOperation('update',next.update.operation);
+        const canRefresh=!working&&!inlineNames.editing&&!opening&&!$('#dialog').open&&!state.chats.size;
+        if(next.stateVersion!==state.data.stateVersion&&canRefresh)await refresh();
+        else {state.data.cloud=next.cloud;state.data.update=next.update;state.data.trashOperation=next.trashOperation;renderCloudStatus();}
+    } catch { /* Connection state is visible; the next probe retries safely. */ }
+    finally {statusPolling=false;}
+}
+document.addEventListener('visibilitychange',()=>{if(document.hidden)eventController?.abort();else pollStatus();renderCloudStatus();});
+window.addEventListener('online',pollStatus);
+setInterval(pollStatus,5000);renderCloudStatus();
 
 installSessionDrag({
     canDrag:()=>state.scope!=='archived'&&state.scope!=='trash'&&!state.tree&&!working&&state.connected!==false,

@@ -20,8 +20,8 @@ export function installInlineNames({describe,saved,onError,translate=x=>x}) {
         input.onkeydown=e=>{if(e.key==='Enter'&&(e.isComposing||e.keyCode===229)){e.preventDefault();e.stopPropagation();return;}if(e.key==='Escape'){e.preventDefault();const target=current.anchor;close();target.closest('button')?.focus();}e.stopPropagation();};
         box.onsubmit=async e=>{
             e.preventDefault();if(!current||current.saving||e.isComposing)return;const name=input.value.trim();if(!name){error.textContent=translate('Enter a name.');input.focus();return;}
-            current.saving=true;input.disabled=true;confirm.disabled=true;box.setAttribute('aria-busy','true');
-            try{await edit.save(name);close();await saved();}catch(reason){if(current){current.saving=false;input.disabled=false;confirm.disabled=false;box.removeAttribute('aria-busy');error.textContent=reason.message;input.focus();}else onError?.(reason);}
+            current.saving=true;input.disabled=true;confirm.disabled=true;confirm.textContent='…';box.setAttribute('aria-busy','true');
+            try{await edit.save(name);close();await saved();}catch(reason){if(current){current.saving=false;input.disabled=false;confirm.disabled=false;confirm.textContent='✓';box.removeAttribute('aria-busy');error.textContent=reason.message;input.focus();}else onError?.(reason);}
         };
     };
     document.addEventListener('pointerdown',e=>{clearClick();if(current&&!current.box.contains(e.target)&&!current.saving)close();},true);

@@ -1,0 +1,19 @@
+import test from 'node:test';import assert from 'node:assert/strict';import fs from 'node:fs';import os from 'node:os';import path from 'node:path';import {once} from 'node:events';
+import {metadata} from '../src/organization.js';
+import {createApp} from '../src/server.js';import {codexSample} from '../src/demo.js';
+test('manual transcription API checks versions and client availability, preserves Session and rolls back failed refresh',async t=>{
+ const root=fs.mkdtempSync(path.join(os.tmpdir(),'grove-title-api-')),app=createApp({root:path.join(root,'data'),roots:{codex:path.join(root,'codex'),claude:path.join(root,'claude')},guard:()=>{}}),s=app.store;
+ app.server.listen(0,'127.0.0.1');await once(app.server,'listening');t.after(async()=>{await new Promise(r=>app.close(r));fs.rmSync(root,{recursive:true,force:true,maxRetries:5,retryDelay:100});});
+ const b=s.branch(null,'Separate Session','codex',codexSample(root,[['Question','Answer']]));s.local('instances',[{id:'copy',branchId:b.id,nativeId:'native',agent:'codex',applied:true,title:'Original',observedTitle:'Original'}]);
+ let title='Original',available=false,refresh=true,writes=0;const manager=app.intelligence.transcriptions;
+ manager.ready=()=>available;manager.binary=()=>'/fixture';manager.refresh=async()=>({status:refresh?'sent':'unavailable'});manager.clientFactory=()=>({init:async()=>{},close:async()=>{},request:async(method,p)=>{if(method==='thread/read')return{thread:{name:title}};assert.equal(method,'thread/name/set');writes++;title=p.name;return{};}});
+ const url='http://127.0.0.1:'+app.server.address().port+'/api/branches/'+b.id+'/transcription-title';
+ const call=async(name,patch={})=>{const current=s.get('branch',b.id);return fetch(url,{method:'POST',headers:{'Content-Type':'application/json','X-Grove-Token':app.token},body:JSON.stringify({name,head:current.head,metaVersion:current.metaVersion,...patch})});};
+ const raw=s.raw(b.head);assert.equal((await call('New')).status,409);assert.equal(writes,0);
+ available=true;assert.equal((await call('New',{metaVersion:'stale'})).status,409);assert.equal((await call(' ')).status,400);assert.equal(writes,0);
+ assert.equal((await call('New')).status,200);assert.equal(title,'New');assert.equal(s.get('branch',b.id).transcriptionTitle,'New');assert.equal(s.get('branch',b.id).transcriptionNameOrigin,'manual');assert.equal(s.get('branch',b.id).name,'Separate Session');assert.equal(s.raw(b.head),raw);
+ assert.ok(app.autoSync.queue.has(b.id),'manual path titles participate in sync scheduling');
+ refresh=false;assert.equal((await call('Unconfirmed')).status,409);assert.equal(title,'New');assert.equal(s.get('branch',b.id).transcriptionTitle,'New');assert.equal(s.raw(b.head),raw);
+ manager.refresh=async()=>{s.put('branch',metadata(s.get('branch',b.id),{sessionName:'Concurrent Session edit'}));return{status:'sent'};};
+ assert.equal((await call('Racing title')).status,409);assert.equal(title,'New');assert.equal(s.get('branch',b.id).transcriptionTitle,'New');assert.equal(s.get('branch',b.id).sessionName,'Concurrent Session edit');
+});

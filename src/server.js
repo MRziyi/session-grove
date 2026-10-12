@@ -51,12 +51,12 @@ export function createApp({ root, roots, guard, demo = false, startupOptions = {
     if (store.local('syncStarted') === null) store.local('syncStarted', !!store.local('lastSync') || !!autoSync.status().lastCheck);
     autoSync.configureTimer();
     autoSync.beforeUpload = () => store.local('localUpdateStarted') ? captureLocal() : null;
-    let capturePromise; let interval, nextCaptureAt = null, lastCaptureAt = null;
+    let capturePromise,transcriptionPromise; let interval, nextCaptureAt = null, lastCaptureAt = null;
     const settings = new Settings(root, store, autoSync, configureCapture); settings.diagnostics = diagnostics;
     const contextSettings=new NativeContextSettings(root,native.roots);
 
     const management = () => new Map(store.collections().items.map(i => [i.id, hash(JSON.stringify([
-        i.projectId ? store.get('project', i.projectId) : inboxProject(), i.sessionIds.map(id => { const b = store.get('branch', id); return [b.id, b.name, b.projectId, b.archived, b.parentId, b.forkEnd, b.nodeHead, b.layoutHead, b.contextPolicy, b.endpointName]; }),
+        i.projectId ? store.get('project', i.projectId) : inboxProject(), i.sessionIds.map(id => { const b = store.get('branch', id); return [b.id, b.name, b.projectId, b.archived, b.parentId, b.forkEnd, b.nodeHead, b.layoutHead, b.contextPolicy, b.endpointName, b.transcriptionTitle, b.transcriptionNameOrigin]; }),
         store.get('branch', i.id).layoutHead,store.get('branch',i.id).sessionName
     ]))]));
     const streams = new Set(); let updateOperation = null, trashOperation = null, trashPromise = null;
@@ -65,7 +65,7 @@ export function createApp({ root, roots, guard, demo = false, startupOptions = {
     const autostart=new Autostart({...startupOptions,root,roots:native.roots,demo,port:()=>server.address()?.port||7421});
     const operation = (kind, value) => { for (const res of streams) res.write('event: operation\ndata: ' + JSON.stringify({kind, ...value}) + '\n\n'); };
     autoSync.onOperation = value => operation('sync', {...value, status:autoSync.status()});
-    const intelligence = new Intelligence(store, { transcriptions:new TranscriptionTitles(store,native,demo?{support:()=>({supported:false,reason:'Transcription updates are unavailable in demo mode.'})}:{}), onChange: id => autoSync.schedule([id]), onStatus: value => operation('intelligence', value), canApply: () => !capturePromise && !trashPromise && !discardPromise && !stopping });
+    const intelligence = new Intelligence(store, { transcriptions:new TranscriptionTitles(store,native,demo?{support:()=>({supported:false,reason:'Transcription updates are unavailable in demo mode.'})}:{}), onChange: id => autoSync.schedule([id]), onStatus: value => operation('intelligence', value), canApply: () => !capturePromise && !trashPromise && !discardPromise && !transcriptionPromise && !stopping });
     const timing = () => ({ discardOperation, intelligence: intelligence.status(), trashOperation, appVersion: VERSION, serverNow: Date.now(), stateVersion: diagnostics.startedAt + ':' + store.version + ':' + store.cloudVersion, update: { nextRunAt: nextCaptureAt, lastRunAt: lastCaptureAt, started: !!store.local('localUpdateStarted'), operation: updateOperation } });
     let expiryTimer;const configureExpiry=()=>{clearTimeout(expiryTimer);const entries=expireTrash(store),next=entries.filter(e=>!e.expired).map(e=>Date.parse(e.expiresAt)).sort((a,b)=>a-b)[0];if(next){expiryTimer=setTimeout(configureExpiry,Math.max(1000,Math.min(2147483647,next-Date.now())));expiryTimer.unref();}};configureExpiry();
     const trashSnapshot = () => ({ trashEntries:(store.local('trashEntries')||[]).filter(e=>!e.expired&&!e.restoredAt).map(e=>({...e,projectIds:e.projectIds||[...new Set(e.branchIds.map(id=>store.find('branch',id)?.projectId||INBOX_ID))]})), trashNative:nativeTrashCandidates(store) });
@@ -79,6 +79,10 @@ export function createApp({ root, roots, guard, demo = false, startupOptions = {
         } };
         try {
             const expected = `127.0.0.1:${server.address().port}`;
+            // Canonicalize human navigation only; API Host/Origin checks stay strict.
+            if(['GET','HEAD'].includes(req.method)&&req.headers.host===`localhost:${server.address().port}`&&/^\/(?:\?.*)?$/.test(req.url)){
+                res.writeHead(302,{Location:`http://${expected}${req.url}`,'Cache-Control':'no-store'});return res.end();
+            }
             assert(req.headers.host === expected, '请使用启动时显示的本地地址', 403);
             assert(!req.headers.origin || req.headers.origin === `http://${expected}`, '不允许跨站请求', 403);
             assert(!req.headers['sec-fetch-site'] || ['same-origin', 'none'].includes(req.headers['sec-fetch-site']), '不允许跨站请求', 403);
@@ -113,6 +117,7 @@ export function createApp({ root, roots, guard, demo = false, startupOptions = {
                     throw Object.assign(new Error('JSON 格式错误'), { status: 400 });
                 }
                 assert(!trashPromise, 'A Trash operation is in progress.', 409);
+                assert(!transcriptionPromise,'A transcription title is being updated.',409);
                 assert(!capturePromise || route==='/api/collect', 'Local update in progress.', 409);
                 assert(settings.job?.state !== 'running' || !/^\/api\/(sync|synchronize|settings|webdav)/.test(route), 'Settings migration in progress.', 409);
             }
@@ -372,6 +377,16 @@ export function createApp({ root, roots, guard, demo = false, startupOptions = {
                 return { changed: members.filter(b => !b.synthetic).length, clientRefresh,branchIds:members.filter(b=>!b.synthetic).map(b=>b.id),projectIds:[...new Set(members.map(b=>b.projectId||INBOX_ID))] };
                 });return send(200,managed);
             }
+            const transcription = route.match(/^\/api\/branches\/([^/]+)\/transcription-title$/);
+            if(req.method==='POST'&&transcription){
+                const branch=store.get('branch',transcription[1]),name=typeof body.name==='string'?body.name.trim():'';
+                assert(name.length>0&&name.length<=200,'Enter a name (1–200 characters).');
+                assert(branch.agent==='codex','Live transcription renaming requires a supported Codex VS Code client.',409);
+                const valid=()=>{const b=store.find('branch',branch.id);return b&&b.head===body.head&&b.metaVersion===body.metaVersion&&!isTrashed(store,b.id)&&!b.archived&&!(b.projectId&&store.find('project',b.projectId)?.archived);};
+                assert(body.metaVersion&&valid(),'The transcription path changed. Retry with its current nodes.',409);
+                transcriptionPromise=intelligence.transcriptions.rename(branch.id,name,{origin:'manual',validate:valid});
+                try{return send(200,await transcriptionPromise);}finally{transcriptionPromise=null;intelligence.kick();}
+            }
             const compaction = route.match(/^\/api\/branches\/([^/]+)\/compaction$/);
             if (req.method === 'POST' && compaction) return send(200, store.setCompaction(compaction[1], body));
             const record = route.match(/^\/api\/branches\/([^/]+)\/records\/(\d+)$/);
@@ -462,6 +477,7 @@ export function createApp({ root, roots, guard, demo = false, startupOptions = {
         try{return await trashPromise;}finally{trashPromise=null;intelligence.kick();}
     }
     function captureLocal() {
+        if(transcriptionPromise)return transcriptionPromise.catch(()=>{}).then(()=>captureLocal());
         if(discardPromise)return discardPromise.catch(()=>{}).then(()=>captureLocal());
         if(trashPromise)return trashPromise.catch(()=>{}).then(()=>captureLocal());
         if(capturePromise) return capturePromise;
@@ -499,7 +515,7 @@ export function createApp({ root, roots, guard, demo = false, startupOptions = {
     }, close(callback) {
         app.quiesce();
         for(const res of streams)res.end(); streams.clear();
-        if(capturePromise||trashPromise||intelligence.pending||discardRequest||autostart.pending)Promise.allSettled([capturePromise,trashPromise,intelligence.pending,discardRequest,autostart.pending]).finally(()=>server.close(callback)); else server.close(callback);
+        if(capturePromise||trashPromise||intelligence.pending||discardRequest||autostart.pending||transcriptionPromise)Promise.allSettled([capturePromise,trashPromise,intelligence.pending,discardRequest,autostart.pending,transcriptionPromise]).finally(()=>server.close(callback)); else server.close(callback);
     } };
     return app;
 }

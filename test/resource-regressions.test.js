@@ -70,3 +70,18 @@ test('a mutation after graph construction cannot publish a stale async cache',as
  assert.ok(!s.memoCache.has('graph:'+b.id));
  assert.equal(s.treeGraph(b.id,'in-use').name,'After');
 });
+
+test('renaming reuses only lightweight revision projections and changed history is reread',t=>{
+ const s=setup(t),b=s.branch(null,'Session','codex',codexSample('/fixture',[['First','Done'],['Tail','Result']]));
+ s.fork(b.id,{name:'Child',end:s.detail(b.id).checkpoints[0].end});
+ const graph=s.treeGraph(b.id,'in-use'),node=graph.nodes[0];
+ s.parseCache.clear();s.parseBytes=0;s.recordCache.clear();s.recordBytes=0;
+ const parsed=s.parsed.bind(s);let reads=0;s.parsed=(...args)=>{reads++;return parsed(...args);};
+ s.organize(b.id,{action:'rename',nodeId:node.id,pathId:node.branchIds[0],version:graph.version,name:'Renamed'});
+ const renamed=s.treeGraph(b.id,'in-use');assert.equal(renamed.nodes.find(n=>n.id===node.id).name,'Renamed');assert.equal(reads,0);
+ for(const projection of s.graphProjections.values.values()){assert.ok(!projection.p.records);assert.ok(projection.p.messages.every(m=>m.role!=='tool'));}
+ const expected=structuredClone(renamed);s.graphProjections=null;s.invalidate();assert.deepEqual(s.treeGraph(b.id,'in-use'),expected);
+ const head=s.get('branch',b.id).head;s.ingest(b.id,codexSample('/fixture',[['Replaced','New answer']]),head,{});reads=0;
+ s.treeGraph(b.id,'in-use');assert.ok(reads>0,'new revision invalidates old projection inputs');
+ const other=s.branch(null,'Other','codex',codexSample('/elsewhere',[['Other','Done']]));s.treeGraph(other.id);assert.equal(s.graphProjections.rootId,other.id,'at most one tree retains projections');
+});

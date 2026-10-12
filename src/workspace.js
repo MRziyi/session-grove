@@ -74,12 +74,13 @@ function* graphSteps(store, branchId) {
     // Graphs need messages and derived activity, not every raw tool result.
     // Keep one lightweight projection per revision/prefix during this build;
     // oversized transcripts deliberately do not fit in the Store parse cache.
-    const projections=new Map();
+    const projections=new Map(),previousProjections=store.graphProjections?.rootId===root.id?store.graphProjections.values:null;
     function projection(revisionId,agent,end){
         const key=agent+':'+revisionId+':'+(end??'all');
+        if(!projections.has(key)&&previousProjections?.has(key))projections.set(key,previousProjections.get(key));
         if(!projections.has(key)){
             const p=store.parsed(revisionId,agent,end),inventory=store.activity(revisionId,agent,end,p);
-            projections.set(key,{p:{messages:p.messages,context:p.context,checkpoints:p.checkpoints,supported:supportedHistory(p)},inventory});
+            projections.set(key,{p:{messages:p.messages.filter(m=>m.role!=='tool'),context:p.context,checkpoints:p.checkpoints,supported:supportedHistory(p)},inventory});
         }
         return projections.get(key);
     }
@@ -123,7 +124,7 @@ function* graphSteps(store, branchId) {
     for(const b of visibleMembers){
         yield {phase:'Reading conversation paths',completed:paths.length,total:visibleMembers.length};
         const {p:parsed,inventory}=projection(b.head,b.agent);paths.push({ branchId: b.id, name: b.name, transcriptionTitle:b.transcriptionTitle||null, originalTitle: store.instances().find(i=>i.branchId===b.id && i.applied)?.observedTitle || b.originalTitle || store.instances().find(i=>i.branchId===b.id)?.title || store.summary(b.head,b.agent).nativeTitle || b.nativeObservedTitle || b.name, agent: b.agent, archived: !!b.archived, parentBranchId: b.parentId, prefixUnavailable: !!b.prefixUnavailable,
-        head: b.head, canRewriteContext: parsed.supported, canActivate: store.summary(b.head,b.agent).complete && !store.summary(b.head,b.agent).external && (parsed.supported || store.instances().some(i => i.branchId === b.id && i.adopted && i.baseRevision === b.head && (i.contextPolicyHash || policyHash(null)) === policyHash(b.contextPolicy))), active: store.instances().some(i => i.branchId === b.id && isActive(i)),
+        head: b.head, metaVersion:b.metaVersion, canRewriteContext: parsed.supported, canActivate: store.summary(b.head,b.agent).complete && !store.summary(b.head,b.agent).external && (parsed.supported || store.instances().some(i => i.branchId === b.id && i.adopted && i.baseRevision === b.head && (i.contextPolicyHash || policyHash(null)) === policyHash(b.contextPolicy))), active: store.instances().some(i => i.branchId === b.id && isActive(i)),
         context: { ...parsed.context, ledger: (() => { const l = inventory; return { ...l, entries: l.entries.filter(e => e.chatLine === null) }; })(), compactions: parsed.context.compactions.map(e => ({ ...e, enabled: !compactionDisabled(b.contextPolicy,e) })) }, contextPolicy: b.contextPolicy || null, contextPending: store.instances().some(i => i.branchId === b.id && isActive(i) && ((i.contextPolicyHash || policyHash(null)) !== policyHash(b.contextPolicy) || i.baseRevision !== b.head)), messages: pathFor(b), checkpoints: parsed.checkpoints });
     }
     yield {phase:'Building conversation tree',completed:paths.length,total:visibleMembers.length};
@@ -221,6 +222,9 @@ function* graphSteps(store, branchId) {
     if (store.parseBytes > 8 * 1024 * 1024 || store.recordBytes > 8 * 1024 * 1024) {
         store.parseCache.clear(); store.parseBytes = 0; store.recordCache.clear(); store.recordBytes = 0;
     }
+    // Retain only the lightweight inputs of the last tree, never raw records.
+    // Label edits can rebuild layout without rereading immutable revisions.
+    store.graphProjections={rootId:root.id,values:projections};
     return { id: root.id, sessionName:root.sessionName||null, sessionNameVersion:root.metaVersion, projectId: root.projectId, layoutHead: root.layoutHead || null,
         version: hash(JSON.stringify(['edge-compaction-v1',members.map(b => [b.id, b.head, b.nodeHead, b.parentId, b.archived, b.contextPolicy, b.name, b.endpointName]), root.layoutHead || null,root.sessionName||null, paths.map(p=>[p.branchId,p.active])])),
         name: store.collections().items.find(i => i.id === root.id)?.name || root.name,
