@@ -1,5 +1,14 @@
 let language = localStorage.getItem('grove-language') === 'zh' ? 'zh' : 'en';
 const dictionary = {
+"{count} chats selected":"已选 {count} 条消息",
+"Clear {count} selected chats":"取消选择 {count} 条消息",
+
+"Message selection":"消息选择",
+"Click behavior":"点击选择方式",
+"Whole turn":"整轮对话",
+"Individual messages":"逐条选择",
+"Start and end":"起点与终点",
+
 "Waiting for the local service. Reconnecting automatically…":"正在等待本地服务，将自动重新连接…",
 "Rename transcription":"重命名 Transcription",
 "Updating client title":"正在更新客户端标题",

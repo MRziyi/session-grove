@@ -39,7 +39,7 @@ export function createApp({ root, roots, guard, demo = false, startupOptions = {
     const store = new Store(root), native = new Native(store, { roots, guard }), token = randomBytes(32).toString('hex');
     const lineageRepair=repairLegacyRecoveries(store);
     const repairedConflicts=repairInheritedProjectConflicts(store);
-    const webAssets = new Map(['index.html', 'app.js', 'library-view.js', 'session-drag.js', 'inline-name.js', 'select.js', 'markdown.js', 'i18n.js', 'style.css'].map(file => [file, fs.readFileSync(path.join(webRoot, file))]));
+    const webAssets = new Map(['index.html', 'app.js', 'chat-selection.js', 'library-view.js', 'session-drag.js', 'inline-name.js', 'select.js', 'markdown.js', 'i18n.js', 'style.css'].map(file => [file, fs.readFileSync(path.join(webRoot, file))]));
     const configFile = path.join(root, 'git-sync.json');
     const diagnostics = new Diagnostics(root);
     if(lineageRepair.repaired.length||lineageRepair.skipped.length)diagnostics.record('recovery-lineage-repair',lineageRepair);
@@ -88,7 +88,7 @@ export function createApp({ root, roots, guard, demo = false, startupOptions = {
             assert(!req.headers['sec-fetch-site'] || ['same-origin', 'none'].includes(req.headers['sec-fetch-site']), '不允许跨站请求', 403);
             const url = new URL(req.url, `http://${expected}`), route = url.pathname;
             if (req.method === 'GET' && route === '/api/service') return send(200, { pid: process.pid, instance, stopping });
-            if (req.method === 'GET' && ['/', '/app.js', '/library-view.js', '/session-drag.js', '/inline-name.js', '/i18n.js', '/select.js', '/markdown.js', '/style.css'].includes(route)) {
+            if (req.method === 'GET' && ['/', '/app.js', '/chat-selection.js', '/library-view.js', '/session-drag.js', '/inline-name.js', '/i18n.js', '/select.js', '/markdown.js', '/style.css'].includes(route)) {
                 const file = route === '/' ? 'index.html' : route.slice(1);
                 return send(200, webAssets.get(file), file.endsWith('.css') ? 'text/css' : file.endsWith('.js') ? 'text/javascript' : 'text/html; charset=utf-8');
             }
@@ -229,7 +229,7 @@ export function createApp({ root, roots, guard, demo = false, startupOptions = {
                     assert(!store.instances().some(i=>selectedIds.has(i.branchId)&&isActive(i)),'Deactivate all active sessions in the selection before moving it to Trash.',409);
                     const entry=await stageTrashAsync(store,ids,treeIds,{onProgress:report});
                     const copies=store.instances().filter(i=>ids.includes(i.branchId)&&i.file&&fs.existsSync(i.file));
-                    const cleanup=copies.length?await moveNativeToRecovery(store,native,copies.map(i=>i.id),{onProgress:report}):{blocked:[]};
+                    const cleanup=copies.length?await moveNativeToRecovery(store,native,copies.map(i=>i.id),{onProgress:report,deferCleanup:true}):{blocked:[]};
                     await report({phase:'Removing unused local records',completed:0,total:null});cleanupLocal(store);
                     configureExpiry();autoSync.reconcileTimer();return {...entry,blocked:cleanup.blocked};
                 });return send(202,entry);

@@ -352,8 +352,12 @@ export function cleanupLocal(store) {
         store.parseBytes = 0;
         store.recordCache.clear();
         store.recordBytes = 0;
-        store.summaryCache.clear();
-        store.db.exec('DELETE FROM summaries');
+        // Summaries of fully retained immutable revisions are still valid. Clearing
+        // the whole library makes the next state/sync read reparse every session.
+        // Prefix-only ancestors must lose their full-history summaries.
+        const completeRevisions=new Set(kept.revisions.filter(r=>kept.retention.ranges[r.id]===r.refs.length).map(r=>r.id));
+        for(const key of store.summaryCache.keys())if(!completeRevisions.has(key.slice(key.indexOf(':')+1)))store.summaryCache.delete(key);
+        store.db.prepare('DELETE FROM summaries WHERE id NOT IN (SELECT value FROM json_each(?))').run(JSON.stringify([...completeRevisions]));
         store.local(
             'instances',
             store.instances().map((i) => (removed.has(i.branchId) ? { ...i, baseline: null } : i)),

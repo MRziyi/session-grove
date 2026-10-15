@@ -130,3 +130,22 @@ test('restoring into a surviving family reopens its archived project without act
  const child=store.fork(b.id,{name:'Child',end:store.detail(b.id).checkpoints[0].end}),entry=stageTrash(store,[child.id]);cleanupLocal(store);store.put('project',{...project,archived:true});
  const restored=restoreTrash(store,entry.id);assert.ok(store.listing('projects').items.some(i=>i.sessionIds.includes(restored.branchIds[0])));assert.equal(store.get('project',project.id).archived,false);assert.ok(!store.instances().some(i=>i.branchId===restored.branchIds[0]));
 });
+
+test('cleanup retains valid summaries without retaining stale full-history summaries of shared prefixes',t=>{
+ const {store,root,b}=setup(t),head=store.get('branch',b.id).head;
+ store.ingest(b.id,store.raw(head)+codexTurn('Discarded suffix','Never retain this summary').map(r=>JSON.stringify(r)+'\n').join(''),head,{});
+ const parent=store.get('branch',b.id),child=store.fork(b.id,{name:'Child',end:store.detail(b.id).checkpoints[0].end});
+ const other=store.branch(null,'Unrelated','codex',codexSample(root,[['Keep','Ready']]));
+ const summary=store.summary(other.head,'codex');store.summary(parent.head,'codex');store.summary(child.head,'codex');
+ stageTrash(store,[b.id]);cleanupLocal(store);
+ assert.equal(store.summaryCache.has('codex:'+parent.head),false);assert.equal(store.summaryRead.get(parent.head,'codex'),undefined);
+ let parses=0;const parse=store.parsed.bind(store);store.parsed=(...args)=>{parses++;return parse(...args);};
+ assert.deepEqual(store.summary(other.head,'codex'),summary);store.summary(child.head,'codex');assert.equal(parses,0,'live sessions reuse their immutable summaries');
+ store.summaryCache.clear();assert.deepEqual(store.summary(other.head,'codex'),JSON.parse(JSON.stringify(summary)));assert.equal(parses,0,'persistent summaries also survive cleanup');
+});
+
+test('native recovery can defer reclamation to its enclosing Trash operation',async t=>{
+ const {store,native,b,instance}=setup(t);stageTrash(store,[b.id]);
+ const result=await moveNativeToRecovery(store,native,[instance.id],{...options,deferCleanup:true});assert.deepEqual(result.blocked,[]);assert.equal(store.local('lastTrashCleanup'),null);
+ cleanupLocal(store);assert.ok(store.local('lastTrashCleanup'));const restored=restoreTrash(store,result.recoveryIds[0]);assert.match(store.raw(store.get('branch',restored.branchIds[0]).head),/Original/);
+});

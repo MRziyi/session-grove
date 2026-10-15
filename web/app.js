@@ -1,6 +1,7 @@
+import {selectChats} from './chat-selection.js';
 import {installInlineNames} from './inline-name.js';
 import { installSessionDrag } from './session-drag.js';
-import { graphLayout, pathCamera, foldedItems, pendingLabels, projectGroups, selectRange, inactiveProject, olderProject, transferStages } from './library-view.js';
+import { graphLayout, pathCamera, foldedItems, pendingLabels, projectGroups, inactiveProject, olderProject, transferStages } from './library-view.js';
 import { markdown } from './markdown.js';
 import { enhanceSelect } from './select.js';
 import { t, locale, setLocale, errorText } from './i18n.js';
@@ -505,14 +506,15 @@ function renderDetailActions() {
     const p = route(), node = selectedNode(), terminal = node?.endBranchIds.includes(p.branchId);
     const archived = p.archived || state.data.projects.find(v => v.id === state.tree.projectId)?.archived;
     const editable = !archived && state.scope !== 'archived';
-    const dissolve = state.tree.nodes.some(n => !n.pending && n.chatIds.some(id => state.chats.has(id)));
-    $('#detail-actions').innerHTML = state.chats.size ? `<span>${t('{count} selected', { count: state.chats.size })}</span>${editable && state.rangeEnd !== null && canCombine() ? '<button id="combine"></button>' : ''}${editable && state.rangeEnd !== null && dissolve ? '<button id="dissolve"></button>' : ''}<button id="clear-selection"></button>` : node ? `${editable ? '<button id="activate-node"></button>' : ''}${terminal && !p.active ? `${archived ? '<button id="restore-session"></button>' : ''}<button id="archive-path"></button>` : ''}` : '';
+    const positions=p.messages.flatMap((m,i)=>state.chats.has(m.id)?[i]:[]);
+    const consecutive=positions.length&&positions.at(-1)-positions[0]+1===positions.length;
+    const dissolve = consecutive && state.tree.nodes.some(n => !n.pending && n.chatIds.some(id => state.chats.has(id)));
+    $('#detail-actions').innerHTML = state.chats.size ? `${editable && state.rangeEnd !== null && canCombine() ? '<button id="combine"></button>' : ''}${editable && state.rangeEnd !== null && dissolve ? '<button id="dissolve"></button>' : ''}` : node ? `${editable ? '<button id="activate-node"></button>' : ''}${terminal && !p.active ? `${archived ? '<button id="restore-session"></button>' : ''}<button id="archive-path"></button>` : ''}` : '';
     const nativeInstance=terminal&&p.active&&state.data.instances.find(i=>i.branchId===p.branchId&&i.applied&&!i.missing);
     if(nativeInstance&&state.data.clientLinks?.[nativeInstance.agent]){const href=nativeInstance.agent==='claude'?'vscode://anthropic.claude-code/open?session='+encodeURIComponent(nativeInstance.nativeId):'vscode://openai.chatgpt/local/'+encodeURIComponent(nativeInstance.nativeId);$('#detail-actions').insertAdjacentHTML('beforeend',`<a class="native-client-link" href="${esc(href)}" title="${esc(t('Open the matching workspace in VS Code first.'))}">${t('Open in VS Code')}</a>`);}
     button('#activate-node', terminal && p.active ? 'Deactivate' : 'Activate', () => terminal && p.active ? run(()=>api('/manage','POST',{action:'deactivate',branchIds:[p.branchId]})) : activateDialog(p));
     button('#combine', 'Combine', combineDialog);
     button('#dissolve', 'Dissolve', () => run(async () => { await saveOrganization('dissolve'); clearRange(); }));
-    button('#clear-selection', 'Deselect', () => { clearRange(); updateRangeSelection(); renderDetailActions(); renderGraph(); });
     button('#restore-session', 'Restore', () => restore({ branchIds: [p.branchId] }));
     button('#archive-path', 'Move to Trash', archivePath);
 }
@@ -597,13 +599,20 @@ function renderTranscript() {
     };
     $$('#transcripts details').forEach(el=>el.ontoggle=()=>{if(el.hasAttribute('data-activity')&&el.open&&!el.dataset.loaded){const group=activityGroups[Number(el.dataset.activity)];el.querySelector('.activity-body').innerHTML=activityEntries(group.entries,group.p);el.dataset.loaded='true';}scheduleRibbons();});
     updateRangeSelection();
-    $$('[data-chat]').forEach(el => el.onclick = e => {
-        const index = p.messages.findIndex(m => m.id === el.dataset.chat);
-        const range=selectRange(state.rangeStart,state.rangeEnd,index,e.shiftKey); state.rangeStart=range.start;state.rangeEnd=range.end;
-        const end = state.rangeEnd ?? state.rangeStart;
-        state.chats = state.rangeStart===null?new Set():new Set(p.messages.slice(Math.min(state.rangeStart, end), Math.max(state.rangeStart, end) + 1).map(m => m.id));
-        state.nodeId = null; state.compactionId = null;
-        updateRangeSelection(); renderDetailActions(); renderGraph();
+    const selectChat=(id,e)=>{
+        const index=p.messages.findIndex(m=>m.id===id);
+        const result=selectChats(p.messages,state.chats,index,state.data.preferences.chatSelectionMode||'turn',state.rangeStart,state.rangeEnd,e.shiftKey,p.checkpoints);
+        state.rangeStart=result.start;state.rangeEnd=result.end;state.chats=result.chats;
+        state.nodeId=null;state.compactionId=null;
+        updateRangeSelection();renderDetailActions();renderGraph();
+    };
+    $$('[data-chat]').forEach(el=>el.onclick=e=>{e.stopPropagation();selectChat(el.dataset.chat,e);});
+    $$('#transcripts .chat').forEach(el=>el.onclick=e=>{
+        if(state.scope==='archived'||!el.querySelector('[data-chat]'))return;
+        if(e.target.closest('button,a,input,select,textarea,details,summary,label,[contenteditable]'))return;
+        // Dragging to copy prose must not change the selection.
+        if(window.getSelection()?.toString())return;
+        selectChat(el.dataset.message,e);
     });
     $$('[data-expand]').forEach(el => el.onclick = () => {
         const pane = $('#transcripts'), top = pane.scrollTop, id = el.dataset.expand;
@@ -618,8 +627,12 @@ function renderTranscript() {
     $$('[data-focus-node]').forEach(el => el.onclick = () => selectNode(el.dataset.focusNode, false));
 }
 function updateRangeSelection() {
-    $('#range-hint').hidden = state.scope === 'archived';
-    $('#range-hint').textContent = state.rangeStart === null ? t('Select a start, then an end.') : state.rangeEnd === null ? t('Start: {number} · select the end', { number: state.rangeStart + 1 }) : t('Selected chats {start}–{end}', { start: Math.min(state.rangeStart, state.rangeEnd) + 1, end: Math.max(state.rangeStart, state.rangeEnd) + 1 });
+    const tag=$('#chat-selection-tag');
+    tag.hidden=!state.chats.size||state.scope==='archived';
+    tag.textContent=t('{count} chats selected',{count:state.chats.size})+' ×';
+    tag.setAttribute('aria-label',t('Clear {count} selected chats',{count:state.chats.size}));
+    tag.onclick=()=>{clearRange();updateRangeSelection();renderDetailActions();renderGraph();};
+    $('#transcripts').dataset.selectionMode=state.data.preferences.chatSelectionMode||'turn';
     for (const el of $$('[data-chat]')) { const checked = state.chats.has(el.dataset.chat); el.checked = checked; el.closest('.chat').classList.toggle('checked', checked); }
 }
 let drawnTree = null, currentGraphLayout;
@@ -988,7 +1001,7 @@ async function settings(options = {}) {
           <section class="settings-card" id="native-context-settings"><h3>${t('Context windows')}</h3>
           ${['codex','claude'].map(agent=>{const context=contexts[agent]||{};return `<div class="native-context-tool"><strong>${agent==='codex'?'Codex':'Claude Code'}${context.profile?' · '+esc(context.profile):''}</strong>${context.error?`<p class="dialog-copy">${esc(errorText(context.error))}</p>`:`<div class="context-inputs"><label class="field">${t(agent==='codex'?'Context window (tokens)':'Auto-compact window (tokens)')}${contextSelect(agent+'Window',context.window,context)}</label>${agent==='codex'?`<label class="field">${t('Auto-compact at (tokens)')}${contextSelect('codexCompactAt',context.compactAt,context,true)}</label>`:''}</div>${agent==='codex'&&context.compactScope==='body_after_prefix'?`<p class="dialog-copy">${t('Compaction counts new context after the previous summary.')}</p>`:''}${agent==='claude'&&context.compactPercent?`<p class="dialog-copy">${t('Existing compaction percentage: {count}%',{count:context.compactPercent})}</p>`:''}`}</div>`;}).join('')}
           <p id="context-settings-status" role="status"></p></section>
-          <section class="settings-card"><h3>${t('Trash')}</h3><label class="field">${t('Local recovery days')}<input type="number" name="trashRetentionDays" min="1" max="365" value="${p.trashRetentionDays}"></label></section><section class="settings-card"><h3>${t('Project contents')}</h3><label class="field">${t('Collapse older sessions')}<select name="projectFoldMode">${[['time','By age'],['count','By count'],['none','Show all']].map(([v,l])=>`<option value="${v}" ${p.projectFoldMode===v?'selected':''}>${t(l)}</option>`).join('')}</select></label><label class="field" data-fold="time" ${p.projectFoldMode==='time'?'':'hidden'}>${t('Keep recent days')}<input type="number" name="projectFoldDays" min="1" max="365" value="${p.projectFoldDays}"></label><label class="field" data-fold="count" ${p.projectFoldMode==='count'?'':'hidden'}>${t('Visible sessions per project')}<input type="number" name="projectFoldCount" min="1" max="365" value="${p.projectFoldCount}"></label></section><section class="settings-card"><h3>${t('Automatic updates')}</h3><div class="timer-row"><label><input type="checkbox" name="showScheduledSessions" ${p.showScheduledSessions?'checked':''}>${t('Show scheduled and background sessions')}</label></div>
+          <section class="settings-card"><h3>${t('Message selection')}</h3><label class="field">${t('Click behavior')}<select name="chatSelectionMode">${[['turn','Whole turn'],['single','Individual messages'],['range','Start and end']].map(([v,l])=>`<option value="${v}" ${(p.chatSelectionMode||'turn')===v?'selected':''}>${t(l)}</option>`).join('')}</select></label></section><section class="settings-card"><h3>${t('Trash')}</h3><label class="field">${t('Local recovery days')}<input type="number" name="trashRetentionDays" min="1" max="365" value="${p.trashRetentionDays}"></label></section><section class="settings-card"><h3>${t('Project contents')}</h3><label class="field">${t('Collapse older sessions')}<select name="projectFoldMode">${[['time','By age'],['count','By count'],['none','Show all']].map(([v,l])=>`<option value="${v}" ${p.projectFoldMode===v?'selected':''}>${t(l)}</option>`).join('')}</select></label><label class="field" data-fold="time" ${p.projectFoldMode==='time'?'':'hidden'}>${t('Keep recent days')}<input type="number" name="projectFoldDays" min="1" max="365" value="${p.projectFoldDays}"></label><label class="field" data-fold="count" ${p.projectFoldMode==='count'?'':'hidden'}>${t('Visible sessions per project')}<input type="number" name="projectFoldCount" min="1" max="365" value="${p.projectFoldCount}"></label></section><section class="settings-card"><h3>${t('Automatic updates')}</h3><div class="timer-row"><label><input type="checkbox" name="showScheduledSessions" ${p.showScheduledSessions?'checked':''}>${t('Show scheduled and background sessions')}</label></div>
 
             ${[['localUpdate', 'Read local sessions', p.localUpdateEnabled, p.localUpdateMinutes], ['autoUpload', 'Automatically upload local changes', p.autoUploadEnabled, p.autoUploadMinutes]].map(([key,label,on,minutes]) => `<div class="timer-row"><label><input type="checkbox" name="${key}Enabled" ${on ? 'checked' : ''}>${t(label)}</label><label class="timer-interval"><input type="number" name="${key}Minutes" value="${minutes}" min="1" max="1440" ${!on ? 'disabled' : ''}><span>${t('minutes')}</span></label></div>`).join('')}
           </section>`, null);
@@ -1033,11 +1046,11 @@ async function settings(options = {}) {
             button.onclick = e => busy(e.currentTarget, async () => { await api('/settings/verify', 'POST', {url: input.value.trim()}); await refresh(); await settings(); });
         }
         for(const select of $$('#dialog-content select'))enhanceSelect(select);
-        for(const el of $$('[name=projectFoldMode],[name=projectFoldDays],[name=projectFoldCount],[name=trashRetentionDays]'))el.onchange=()=>{
+        for(const el of $$('[name=chatSelectionMode],[name=projectFoldMode],[name=projectFoldDays],[name=projectFoldCount],[name=trashRetentionDays]'))el.onchange=()=>{
             if(!el.checkValidity()){el.reportValidity();return;}
-            const key=el.name,value=key==='projectFoldMode'?el.value:Number(el.value);
+            const key=el.name,value=['projectFoldMode','chatSelectionMode'].includes(key)?el.value:Number(el.value);
             if(key==='projectFoldMode')for(const label of $$('[data-fold]'))label.hidden=label.dataset.fold!==value;
-            queueSave(async()=>{await api('/settings/timers','POST',{[key]:value});state.expandedProjects.clear();await refresh();});
+            queueSave(async()=>{await api('/settings/timers','POST',{[key]:value});state.expandedProjects.clear();if(key==='chatSelectionMode')clearRange();await refresh();if(state.tree){updateRangeSelection();renderDetailActions();}});
         };
         for(const el of $$('[name=showScheduledSessions],[name=localUpdateEnabled],[name=localUpdateMinutes],[name=autoUploadEnabled],[name=autoUploadMinutes]'))el.onchange=()=>{
             if(!el.checkValidity()){el.reportValidity();return;}

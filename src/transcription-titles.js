@@ -7,6 +7,11 @@ import {codexTitleSupport,refreshCodexTitles} from './client-refresh.js';
 import {isActive} from './workspace.js';
 import {metadata} from './organization.js';
 
+export const TRANSCRIPTION_PATH_CHANGED = 'The transcription path changed. Retry with its current nodes.';
+function validatePath(validate){
+    if(!validate())throw Object.assign(new Error(TRANSCRIPTION_PATH_CHANGED),{status:409,code:'TRANSCRIPTION_PATH_CHANGED'});
+}
+
 // Structural keys exclude changing tail text, token counts and node labels.
 export function transcriptionPlan(store,branchId,graph=store.treeGraph(branchId,'in-use')){
     const branch=store.get('branch',branchId),route=graph.paths.find(p=>p.branchId===branchId);if(!route)return null;
@@ -42,15 +47,15 @@ export class TranscriptionTitles {
                     throw Object.assign(Error('The client title changed. Its manual name was kept.'),{status:409,code:'CLIENT_TITLE_CHANGED'});
                 }snapshots.push({instance,name});
             }
-            assert(validate(),'The transcription path changed. Retry with its current nodes.',409);
+            validatePath(validate);
             for(const {instance,name} of snapshots){
                 signal?.throwIfAborted();if(name!==title){await client.request('thread/name/set',{threadId:instance.nativeId,name:title});changed.push({id:instance.nativeId,name});}
                 const read=await client.request('thread/read',{threadId:instance.nativeId,includeTurns:false});assert(read.thread.name===title,'The client did not confirm the new transcription title.');
             }
-            signal?.throwIfAborted();assert(validate(),'The transcription path changed. Retry with its current nodes.',409);
+            signal?.throwIfAborted();validatePath(validate);
             const refreshed=await this.refresh(this.native.roots.codex);assert(refreshed.status==='sent','The client title refresh is unavailable. The previous name was restored.',409);signal?.throwIfAborted();
             for(const {instance} of snapshots){const current=await client.request('thread/read',{threadId:instance.nativeId,includeTurns:false});assert(current.thread.name===title,'The client title changed before it could be applied in Grove.',409);}
-            assert(validate(),'The transcription path changed. Retry with its current nodes.',409);
+            validatePath(validate);
             this.store.transaction(()=>{
                 const ids=new Set(instances.map(i=>i.id));this.store.local('instances',this.store.instances().map(i=>ids.has(i.id)?{...i,title,observedTitle:title}:i));
                 const b=this.store.get('branch',branchId);this.store.put('branch',metadata(b,{transcriptionTitle:title,transcriptionNameOrigin:origin,originalTitle:title}));

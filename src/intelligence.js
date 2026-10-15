@@ -1,4 +1,4 @@
-import {transcriptionPlan} from './transcription-titles.js';
+import {transcriptionPlan,TRANSCRIPTION_PATH_CHANGED} from './transcription-titles.js';
 import {writePrivateFile} from './private-file.js';
 import path from 'node:path';
 import { json, assert, hash, now } from './util.js';
@@ -28,7 +28,8 @@ export class Intelligence {
         Object.assign(this,{store,request,onChange,onStatus,canApply,transcriptions});
         this.file=path.join(store.root,'intelligence.json');
         this.data=store.local('intelligenceState') || {seen:{},trees:{},waiting:[],jobs:[]};
-        this.running=false;this.closed=false;this.error=this.data.error||null;this.timer=null;this.generation=0;this.tasks=new Map();this.lastStartedAt=0;
+        // Older versions persisted a harmless stale-path race as a global failure.
+        this.running=false;this.closed=false;this.error=this.data.error===TRANSCRIPTION_PATH_CHANGED?null:this.data.error||null;this.timer=null;this.generation=0;this.tasks=new Map();this.lastStartedAt=0;
         // Preserve existing node labels; backfill missing session-name provenance when enabled.
         this.observe(false);this.kick();
     }
@@ -129,6 +130,9 @@ export class Intelligence {
     }
     observeTranscriptions(branches,enqueue){
         const paths=this.data.transcriptPaths||={}, scans=this.data.transcriptScans||={};
+        const eligibleIds=new Set(branches.filter(b=>active(this.store,b)&&b.agent==='codex'&&!b.synthetic&&b.transcriptionNameOrigin!=='manual'&&this.transcriptions?.instances(b.id).length).map(b=>b.id));
+        // Waiting jobs never reach run(), so retire archived/deleted/manual paths here too.
+        this.data.jobs=this.data.jobs.filter(job=>job.kind!=='transcript'||eligibleIds.has(job.id));
         const families=new Map();
         for(const b of branches){
             const root=rootOf(this.store,b.id).id;
@@ -138,7 +142,7 @@ export class Intelligence {
         // A tree is shared by all its native paths. Rebuild it once, and only
         // when its membership, history, layout or eligible client copies change.
         for(const [root,members] of families){
-            const eligible=members.filter(b=>active(this.store,b)&&b.agent==='codex'&&!b.synthetic&&b.transcriptionNameOrigin!=='manual'&&this.transcriptions?.instances(b.id).length);
+            const eligible=members.filter(b=>eligibleIds.has(b.id));
             if(!eligible.length){delete scans[root];continue;}
             const signature=hash(JSON.stringify([members,eligible.map(b=>b.id)]));
             for(const job of this.data.jobs.filter(j=>j.kind==='transcript'&&eligible.some(b=>b.id===j.id)))job.waitingForClient=!this.transcriptions.ready(job.id);
@@ -230,7 +234,7 @@ export class Intelligence {
                     const evidence=source&&sessionEvidence(this.store.parsed(source.head,source.agent).records,source.agent);
                     if(evidence&&hash(evidence.user)===job.userHash){this.recordName(job.id,result,prepared.evidence);this.onChange(job.id);}
                 }
-                this.finish(job);return;
+                this.finish(job);if(job.kind==='transcript')this.observe();return;
             }
             if(job.kind==='transcript'){
                 const renamed=await this.transcriptions.rename(job.id,result.name,{signal:task.controller.signal,expected:job.expectedNames,validate:()=>!!this.prepare(job)});
@@ -245,12 +249,12 @@ export class Intelligence {
                 this.recordName(job.id,result,prepared.evidence);
             }else this.store.organize(job.id,{version:latest.graph.version,pathId:latest.branchId,nodeId:latest.node.id,action:'rename',name:result.name,nameOrigin:'automatic',evidenceHash:evidenceHash(prepared.evidence)});
             this.onChange(job.id);this.completed=(this.completed||0)+1;this.finish(job);this.observe();
-        }catch(error){if(error.code==='CLIENT_TITLE_CHANGED'){this.finish(job);this.onChange(job.id);}else if(!this.closed&&generation===this.generation){this.error=error.message;this.errorCurrent=task.name;}}
+        }catch(error){if(error.code==='TRANSCRIPTION_PATH_CHANGED'&&!this.closed&&generation===this.generation){this.finish(job);this.observe();}else if(error.code==='CLIENT_TITLE_CHANGED'){this.finish(job);this.onChange(job.id);}else if(!this.closed&&generation===this.generation){this.error=error.message;this.errorCurrent=task.name;}}
         finally{this.tasks.delete(job.key);this.updateActivity();this.persist();this.publish();this.kick();}
         })();return task.promise;
     }
     recordName(id,result,evidence){const b=this.store.get('branch',id),record={name:result.name,model:MODEL,basis:'session-start',at:now(),evidenceHash:hash(JSON.stringify(evidence))};this.store.put('branch',metadata(b,{sessionAutomaticName:record}));}
     updateActivity(){const tasks=[...this.tasks.values()];this.running=tasks.length>0;this.phase=tasks.length?(tasks.every(t=>t.job.kind==='node')?'Naming branch point':tasks.every(t=>t.job.kind==='classify')?'Classifying session':tasks.every(t=>t.job.kind==='session')?'Naming session':tasks.every(t=>t.job.kind==='transcript')?'Updating transcription title':'Smart organization'):this.data.jobs.some(j=>j.waitingForClient)?'Waiting for Codex client':null;this.current=this.error?this.errorCurrent:tasks.map(t=>t.name).join(' · ')||null;}
-    finish(job){this.data.jobs=this.data.jobs.filter(j=>j.key!==job.key);if(!['node','transcript'].includes(job.kind))this.data.waiting=this.data.waiting.filter(id=>id!==job.id);this.persist();}
+    finish(job){if(job.kind==='transcript'){const b=this.store.find('branch',job.id);if(b&&this.data.transcriptScans)delete this.data.transcriptScans[rootOf(this.store,b.id).id];}this.data.jobs=this.data.jobs.filter(j=>j.key!==job.key);if(!['node','transcript'].includes(job.kind))this.data.waiting=this.data.waiting.filter(id=>id!==job.id);this.persist();}
     close(){this.closed=true;this.generation++;clearTimeout(this.timer);for(const task of this.tasks.values())task.controller.abort();}
 }

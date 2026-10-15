@@ -46,7 +46,7 @@ function verifiedRecovery(store, entry) {
         return Array.isArray(backup.graph?.branches) && backup.graph.branches.length>0 && bodyRefs(backup.graph).every(h=>typeof backup.objects[h]==='string'&&hash(backup.objects[h])===h);
     } catch { return false; }
 }
-export async function moveNativeToRecovery(store,native,instanceIds,{checkFile=checkFileIdle,archive=archiveCodex,onProgress=async()=>{}}={}) {
+export async function moveNativeToRecovery(store,native,instanceIds,{checkFile=checkFileIdle,archive=archiveCodex,onProgress=async()=>{},deferCleanup=false}={}) {
     const candidates=new Set(nativeTrashCandidates(store).map(i=>i.id)),result={moved:[],blocked:[],recoveryIds:[]};
     for(const instanceId of [...new Set(instanceIds)]) {
         let temporary;const target=store.instances().find(i=>i.id===instanceId),detail=target&&(store.find('branch',target.branchId)?.name||target.title);
@@ -105,8 +105,10 @@ export async function moveNativeToRecovery(store,native,instanceIds,{checkFile=c
             result.blocked.push({instanceId,reason:error.message});
         }
     }
-    await onProgress({phase:'Removing unused local records',completed:0,total:null});cleanupLocal(store);
-    await onProgress({phase:'Recovery move finished',completed:instanceIds.length,total:instanceIds.length});
+    if(!deferCleanup){
+        await onProgress({phase:'Removing unused local records',completed:0,total:null});cleanupLocal(store);
+        await onProgress({phase:'Recovery move finished',completed:instanceIds.length,total:instanceIds.length});
+    }
     return result;
 }
 export function deleteRecoveryCopies(store,entryIds) {

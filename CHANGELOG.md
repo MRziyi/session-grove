@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.1.8
+
+- Select messages by clicking their cards, with whole-turn selection by default and configurable individual or start/end modes. Fill skipped messages automatically, trim trailing fragments when deselecting an interior message, and clear selection from a count tag in the transcript heading.
+- Use thin, flush outlines for the current graph path and a compact rounded context card with equal vertical spacing. Remove permanent selection instructions.
+- Recover automatic transcription naming when paths change during a request or client update; retire archived waiting jobs and reuse cached naming results.
+- Reclaim Trash records once per operation and preserve summaries of fully retained revisions, avoiding full-library reparsing after deletion.
+- Rewrite both READMEs as user-facing introductions with features, installation and an entry point to in-app help.
+
 ## 1.1.7
 
 - Redirect localhost page visits to the canonical 127.0.0.1 address, retaining strict API Host/Origin checks.

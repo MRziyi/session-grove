@@ -54,3 +54,37 @@ test('transcription observation shares trees and skips unchanged history across 
  const fork=f.store.fork(b.id,{name:'New fork',end:f.store.detail(b.id).checkpoints[1].end});f.enabled.add(fork.id);
  restarted.observe();clearTimeout(restarted.timer);assert.equal(builds,3,'new membership invalidates the tree');
 });
+
+for(const phase of ['request','client'])test(`a path changed during ${phase} naming is replanned without blocking other work`,async t=>{
+ const f=setup(t),b=f.store.branch(null,'Native','codex',codexSample(f.root,[['First','One'],['Second','Two'],['Tail','Three']]));f.enabled.add(b.id);await f.smart.save({nameTranscripts:true});
+ f.store.fork(b.id,{name:'First fork',end:f.store.detail(b.id).checkpoints[0].end});
+ let changed=false;const change=()=>{if(changed)return;changed=true;f.store.fork(b.id,{name:'Second fork',end:f.store.detail(b.id).checkpoints[1].end});f.smart.observe();};
+ const request=f.smart.request,rename=f.adapter.rename;
+ if(phase==='request')f.smart.request=async(...args)=>{const result=await request(...args);change();return result;};
+ else f.adapter.rename=async(id,name,options)=>{if(!changed){change();assert.equal(options.validate(),false);throw Object.assign(Error('The transcription path changed. Retry with its current nodes.'),{code:'TRANSCRIPTION_PATH_CHANGED'});}return rename(id,name,options);};
+ f.smart.observe();await f.flush();assert.equal(f.smart.error,null);assert.equal(f.smart.data.jobs.length,0);assert.equal(f.requests.length,2,'each distinct completed evidence is named once');assert.equal(f.renames.length,1,'only the current plan is applied');assert.equal(f.store.get('branch',b.id).transcriptionNaming.shape,transcriptionPlan(f.store,b.id).shape);
+});
+
+test('a path archived during client naming is dropped without pausing the queue',async t=>{
+ const f=setup(t),b=f.store.branch(null,'Native','codex',codexSample(f.root,[['First','One'],['Tail','Two']]));f.enabled.add(b.id);await f.smart.save({nameTranscripts:true});f.store.fork(b.id,{name:'Fork',end:f.store.detail(b.id).checkpoints[0].end});
+ f.adapter.rename=async(id,name,options)=>{f.store.put('branch',{...f.store.get('branch',id),archived:true});assert.equal(options.validate(),false);throw Object.assign(Error('The transcription path changed. Retry with its current nodes.'),{code:'TRANSCRIPTION_PATH_CHANGED'});};
+ f.smart.observe();await f.flush();assert.equal(f.smart.error,null);assert.equal(f.smart.data.jobs.length,0);assert.equal(f.requests.length,1);
+});
+
+test('stale validation after native writes restores the client title and returns a typed race',async t=>{
+ const f=setup(t),b=f.store.branch(null,'Alias','codex',codexSample(f.root,[['Question','Answer']]));f.store.local('instances',[{id:'copy',branchId:b.id,nativeId:'thread',agent:'codex',applied:true,title:'Original'}]);let title='Original',valid=true,refreshes=0;
+ const manager=new TranscriptionTitles(f.store,{roots:{codex:f.root}},{support:()=>({supported:true}),binary:()=>'/fixture',refresh:async()=>{refreshes++;valid=false;return {status:'sent'};},clientFactory:()=>({init:async()=>{},close:async()=>{},request:async(method,p)=>{if(method==='thread/read')return {thread:{name:title}};title=p.name;return {};}})});manager.ready=()=>true;
+ await assert.rejects(manager.rename(b.id,'Proposed',{validate:()=>valid}),e=>e.code==='TRANSCRIPTION_PATH_CHANGED'&&e.status===409);assert.equal(title,'Original');assert.equal(refreshes,2);assert.equal(f.store.get('branch',b.id).transcriptionTitle,undefined);
+});
+
+test('restart clears only the legacy stale-path error, preserving genuine failures',async t=>{
+ const f=setup(t);f.smart.close();
+ for(const [error,expected] of [['The transcription path changed. Retry with its current nodes.',null],['Client unavailable','Client unavailable']]){
+ f.store.local('intelligenceState',{...f.smart.data,error});const restarted=new Intelligence(f.store,{transcriptions:f.adapter,canApply:()=>false});assert.equal(restarted.error,expected);assert.equal(f.store.local('intelligenceState').error,expected);restarted.close();
+ }
+});
+
+test('archiving a path waiting for the client removes its dormant job on observation',async t=>{
+ const f=setup(t),b=f.store.branch(null,'Native','codex',codexSample(f.root,[['First','One'],['Tail','Two']]));f.enabled.add(b.id);await f.smart.save({nameTranscripts:true});f.adapter.ready=()=>false;f.store.fork(b.id,{name:'Fork',end:f.store.detail(b.id).checkpoints[0].end});f.smart.observe();assert.equal(f.smart.data.jobs.length,1);assert.equal(f.smart.data.jobs[0].waitingForClient,true);
+ f.store.put('branch',{...f.store.get('branch',b.id),archived:true});f.smart.observe();assert.equal(f.smart.data.jobs.length,0);assert.equal(f.smart.status().phase,null);await f.flush();assert.equal(f.requests.length,0);
+});

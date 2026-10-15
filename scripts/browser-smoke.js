@@ -107,6 +107,9 @@ assert.notEqual(await evaluate('document.querySelector("#graph").style.transform
 await evaluate('document.querySelector("#graph-reset").click()');
 
 await evaluate('{ const picker=document.querySelector("#branch-picker");picker.value=[...picker.options].find(o=>o.text.includes("Introduction")).value;picker.dispatchEvent(new Event("change")); }');
+await evaluate('document.querySelector("#settings").click()');await wait('document.querySelector("[name=chatSelectionMode]")');
+await evaluate(`(()=>{const el=document.querySelector('[name=chatSelectionMode]');el.value='range';el.dispatchEvent(new Event('change',{bubbles:true}));})()`);
+await wait(`document.querySelector('#transcripts').dataset.selectionMode==='range'`);await evaluate('document.querySelector("#dialog-close").click()');
 const selectRange = async (start, end) => {
     await evaluate(`document.querySelectorAll("[data-chat]")[${start}].click()`);
     assert.equal(await evaluate('!!document.querySelector("#combine")'), false);

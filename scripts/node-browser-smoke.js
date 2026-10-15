@@ -48,8 +48,49 @@ try{
  }
  assert.ok(await evaluate(`!!document.querySelector('#graph [data-compaction-path="${parent.id}"]')`),'the parent compaction stays visible while reading the child path');
  const compactionSelector=`#graph [data-compaction-path="${parent.id}"]`;await evaluate(`document.querySelector(${JSON.stringify(compactionSelector)}).click()`);await wait(`document.querySelector(${JSON.stringify(compactionSelector)})?.getAttribute('aria-pressed')==='false'`);assert.equal(store.get('branch',parent.id).contextPolicy.disabled.length,1,'graph toggle changes its owning path');assert.equal(await evaluate('document.querySelector("#branch-picker").value'),child.id);await evaluate(`document.querySelector(${JSON.stringify(compactionSelector)}).click()`);await wait(`document.querySelector(${JSON.stringify(compactionSelector)})?.getAttribute('aria-pressed')==='true'`);await clickNode(targets.at(-1));
+ assert.ok(await evaluate(`(()=>{const nodes=[...document.querySelectorAll('.graph-node.path-active:not(.selected)')];return nodes.length>0&&nodes.every(n=>{const s=getComputedStyle(n);return s.outlineWidth==='1px'&&s.outlineOffset==='0px'&&s.boxShadow==='none'&&!s.backgroundColor.includes('color(srgb');});})()`),'original node colors remain with a thin flush outline and no backing layer');
+ // Card and checkbox clicks share the default whole-turn selection; nested controls do not.
+ const firstChats=graph.paths.find(p=>p.branchId===child.id).messages.slice(0,2).map(m=>m.id);
+ await evaluate(`document.querySelector('[data-message="${firstChats[0]}"] .speaker').click()`);
+ assert.equal(await evaluate('document.querySelectorAll("[data-chat]:checked").length'),2);
+ await evaluate(`document.querySelector('[data-message="${firstChats[1]}"] [data-expand]').click()`);
+ assert.equal(await evaluate('document.querySelectorAll("[data-chat]:checked").length'),2,'Expand never selects a message');
+ await evaluate(`(()=>{const card=document.querySelector('[data-message="${firstChats[1]}"] .bubble');card.insertAdjacentHTML('beforeend','<details data-selection-test><summary>Recorded activity</summary><a href="#fixture">Record link</a></details>');card.querySelector('[data-selection-test] summary').click();})()`);
+ assert.equal(await evaluate('document.querySelectorAll("[data-chat]:checked").length'),2,'recorded activity never selects a message');
+ await evaluate(`document.querySelector('[data-chat="${firstChats[1]}"]').click()`);
+ assert.equal(await evaluate('document.querySelectorAll("[data-chat]:checked").length'),0);
+ await clickNode(targets.at(-1));
  assert.ok(await evaluate('document.querySelectorAll(".transcription-end").length>=2'),'native path titles appear below graph endpoints');
  assert.ok(await evaluate('[...document.querySelectorAll(".transcription-end")].every(el=>parseFloat(getComputedStyle(el).width)<=148&&getComputedStyle(el).textOverflow==="ellipsis")'));
+ // Settings persist all three modes using the shared styled select.
+ const setSelectionMode=async(mode)=>{
+  await evaluate('document.querySelector("#settings").click()');await wait('document.querySelector("[name=chatSelectionMode]")');
+  assert.ok(await evaluate('!!document.querySelector("[name=chatSelectionMode]")._groveSelect'));
+  await evaluate(`(()=>{const el=document.querySelector('[name=chatSelectionMode]');el.value='${mode}';el.dispatchEvent(new Event('change',{bubbles:true}));})()`);
+  await wait(`document.querySelector('#transcripts').dataset.selectionMode==='${mode}'`);
+  assert.equal(store.local('preferences').chatSelectionMode,mode);await evaluate('document.querySelector("#dialog-close").click()');
+ };
+ await setSelectionMode('single');
+ await evaluate(`document.querySelector('[data-message="${firstChats[0]}"] .speaker').click()`);
+ assert.equal(await evaluate('document.querySelectorAll("[data-chat]:checked").length'),1);
+ const third=graph.paths.find(p=>p.branchId===child.id).messages[2].id;
+ await evaluate(`document.querySelector('[data-message="${third}"] .speaker').click()`);
+ assert.equal(await evaluate('document.querySelectorAll("[data-chat]:checked").length'),3,'clicking separated cards selects the intervening messages');
+ await evaluate(`document.querySelector('[data-message="${firstChats[1]}"] .speaker').click()`);
+ assert.equal(await evaluate('document.querySelectorAll("[data-chat]:checked").length'),1,'removing the middle trims the trailing fragment');
+ await setSelectionMode('range');
+ await evaluate(`document.querySelector('[data-message="${firstChats[0]}"] .speaker').click()`);
+ assert.equal(await evaluate('!!document.querySelector("#combine")'),false);
+ await evaluate(`document.querySelector('[data-message="${third}"] .speaker').click()`);
+ assert.equal(await evaluate('document.querySelectorAll("[data-chat]:checked").length'),3);
+ assert.equal(await evaluate('document.querySelector("#chat-selection-tag").textContent'),'3 chats selected ×');
+ assert.ok(await evaluate('!document.querySelector("#chat-selection-tag").hidden&&!document.querySelector("#range-hint")'));
+ assert.ok(await evaluate(`(()=>{const tag=document.querySelector('#chat-selection-tag').getBoundingClientRect(),title=document.querySelector('#transcripts-title').getBoundingClientRect();return tag.left>=title.right&&Math.abs(tag.top+tag.height/2-title.top-title.height/2)<3})()`),'selection tag shares the transcript heading row');
+ await evaluate('document.querySelector("#chat-selection-tag").click()');
+ assert.equal(await evaluate('document.querySelectorAll("[data-chat]:checked").length'),0);
+ assert.ok(await evaluate('document.querySelector("#chat-selection-tag").hidden&&!document.querySelector("#combine,#dissolve")'));
+ await setSelectionMode('turn');
+ await clickNode(targets.at(-1));
  // Background metadata changes must not replace an unrelated transcript DOM.
  await evaluate(`window.__stateReads=0;const original=window.fetch;window.fetch=async(...args)=>{const response=await original(...args);if(String(args[0])==='/api/state')window.__stateReads++;return response;};window.__readingNode=document.querySelector('#transcripts [data-segment]');`);
  const reading=()=>evaluate(`(()=>{const pane=document.querySelector('#transcripts'),top=pane.getBoundingClientRect().top,segment=[...pane.querySelectorAll('[data-segment]')].find(el=>el.getBoundingClientRect().bottom>top),message=[...segment.querySelectorAll('[data-message]')].find(el=>el.getBoundingClientRect().bottom>top);return {message:message?.dataset.message,offset:message?.getBoundingClientRect().top-top,scroll:pane.scrollTop,selected:document.querySelector('.graph-node.selected')?.dataset.node,camera:document.querySelector('#graph').style.transform,path:document.querySelector('#branch-picker').value}})()`);
