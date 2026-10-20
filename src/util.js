@@ -50,7 +50,7 @@ export function safePath(root, file) {
     }
     return file;
 }
-export function walk(root, limit = 20000) {
+export function walk(root, limit = 20000, accepts = name => name.endsWith('.jsonl')) {
     const out = [];
     function visit(dir) {
         if (!fs.existsSync(dir))
@@ -61,7 +61,7 @@ export function walk(root, limit = 20000) {
             const file = path.join(dir, e.name);
             if (e.isDirectory())
                 visit(file);
-            else if (e.isFile() && e.name.endsWith('.jsonl'))
+            else if (e.isFile() && accepts(e.name))
                 out.push(file);
             assert(out.length <= limit, '记录数量过多，请缩小数据目录');
         }

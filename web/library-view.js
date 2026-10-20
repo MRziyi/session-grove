@@ -86,10 +86,16 @@ export function graphLayout(tree,selectedBranchId){
     const controls=[...compactions.values()],bands=new Map();
     for(const c of controls){c.depth=c.after.depth;c.x=positions.get(c.after.id).x+74;}
     for(const c of [...controls].sort((a,b)=>a.depth-b.depth||a.x-b.x||a.key.localeCompare(b.key))){if(!bands.has(c.depth))bands.set(c.depth,[]);const rows=bands.get(c.depth);let row=rows.findIndex(xs=>xs.every(x=>Math.abs(x-c.x)>=148));if(row<0){row=rows.length;rows.push([]);}rows[row].push(c.x);c.row=row;}
-    let y=12,maxDepth=0;const endpointDepths=new Set();for(const n of nodes){maxDepth=Math.max(maxDepth,n.depth);if(endpoints.has(n.id))endpointDepths.add(n.depth);}
+    let y=12,maxDepth=0;for(const n of nodes)maxDepth=Math.max(maxDepth,n.depth);
     const levels=new Map();for(const n of nodes){if(!levels.has(n.depth))levels.set(n.depth,[]);levels.get(n.depth).push(n);}
-    for(let depth=0;depth<=maxDepth;depth++){if(depth)y+=Math.max(36,(endpointDepths.has(depth-1)?30:0)+16+(bands.get(depth)?.length||0)*28);for(const n of levels.get(depth)||[])positions.get(n.id).y=y;y+=80;}
-    for(const c of controls)c.y=positions.get(c.after.id).y-16-c.row*28;
+    // Endpoint titles reserve extra space only in lanes occupied by a control.
+    const titleSpace=new Set();
+    for(const n of nodes)if(endpoints.has(n.id)&&n.childIds.length>1)titleSpace.add(n.depth+1);
+    for(const c of controls){
+        const titles=(levels.get(c.depth-1)||[]).filter(n=>endpoints.has(n.id));
+        if(endpoints.has(c.before.id)||titles.some(n=>{const x=positions.get(n.id).x;return c.x+70>x&&c.x-70<x+148;}))titleSpace.add(c.depth);
+    }
+    for(let depth=0;depth<=maxDepth;depth++){if(depth)y+=Math.max(36,(titleSpace.has(depth)?30:0)+16+(bands.get(depth)?.length||0)*28);for(const n of levels.get(depth)||[])positions.get(n.id).y=y;y+=80;}
     // A fan-out is one clean junction plus separate vertical branches. Drawing
     // every long curve over the same narrow band produces a dark unreadable braid.
     const junctions=[],junctionByParent=new Map();
@@ -97,6 +103,11 @@ export function graphLayout(tree,selectedBranchId){
         const from=positions.get(node.id),xs=node.childIds.map(id=>positions.get(id).x+74),busY=from.y+(endpoints.has(node.id)?110:80)+8;
         const left=xs.reduce((a,x)=>Math.min(a,x),Infinity),right=xs.reduce((a,x)=>Math.max(a,x),-Infinity);junctions.push({from:node.id,d:`M${from.x+74},${from.y+80} L${from.x+74},${busY} M${left},${busY} L${right},${busY}`});junctionByParent.set(node.id,busY);
         const child=node.childIds.find(id=>activePairs.has(JSON.stringify([node.id,id])));if(child)junctions.at(-1).activeD=`M${from.x+74},${from.y+80} L${from.x+74},${busY} L${positions.get(child).x+74},${busY}`;
+    }
+    for(const c of controls){
+        const from=positions.get(c.before.id),to=positions.get(c.after.id);
+        const start=junctionByParent.get(c.before.id)??from.y+(endpoints.has(c.before.id)?110:80);
+        c.y=(start+to.y)/2+((bands.get(c.depth).length-1)/2-c.row)*28;
     }
     const edges=[...connections.values()].map(edge=>{const from=positions.get(edge.from),to=positions.get(edge.to),busY=junctionByParent.get(edge.from),points=[busY===undefined?{x:from.x+74,y:from.y+80}:{x:to.x+74,y:busY},...edge.controls,{x:to.x+74,y:to.y}];const d=points.map((p,i)=>{if(!i)return `M${p.x},${p.y}`;const a=points[i-1],mid=(a.y+p.y)/2;return `C${a.x},${mid} ${p.x},${mid} ${p.x},${p.y}`;}).join(' ');return {...edge,d,active:activePairs.has(JSON.stringify([edge.from,edge.to])),color:byNode.get(edge.to).color||byNode.get(edge.from).color||'color-0',pending:!!byNode.get(edge.to).pending};});
     return {positions,controls,edges,junctions,activeNodes,contextNodes:nodes.filter(n=>n.contextOnly),endpoints,width:Math.max(180,lane*190),height:Math.max(160,y+42),rootX:(positions.get(nodes.find(n=>!n.parentIds.length)?.id)?.x||0)+74};

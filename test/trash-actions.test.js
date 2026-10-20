@@ -1,3 +1,4 @@
+import {zstdCompressSync} from 'node:zlib';
 import test from 'node:test';import assert from 'node:assert/strict';import fs from 'node:fs';import path from 'node:path';import os from 'node:os';
 import {Store} from '../src/store.js';import {Native} from '../src/native.js';import {codexSample,codexTurn,claudeSample} from '../src/demo.js';import {stageTrash,restoreTrash,cleanupLocal,expireTrash} from '../src/trash.js';import {moveNativeToRecovery,deleteRecoveryCopies,nativeTrashCandidates} from '../src/trash-actions.js';
 function setup(t,agent='codex'){
@@ -148,4 +149,12 @@ test('native recovery can defer reclamation to its enclosing Trash operation',as
  const {store,native,b,instance}=setup(t);stageTrash(store,[b.id]);
  const result=await moveNativeToRecovery(store,native,[instance.id],{...options,deferCleanup:true});assert.deepEqual(result.blocked,[]);assert.equal(store.local('lastTrashCleanup'),null);
  cleanupLocal(store);assert.ok(store.local('lastTrashCleanup'));const restored=restoreTrash(store,result.recoveryIds[0]);assert.match(store.raw(store.get('branch',restored.branchIds[0]).head),/Original/);
+});
+
+
+test('compressed native children still protect the prefix file from deletion',async t=>{
+ const {store,native,b,instance}=setup(t);stageTrash(store,[b.id]);
+ const child=path.join(native.roots.codex,'sessions','compressed-child.jsonl.zst');fs.mkdirSync(path.dirname(child),{recursive:true});
+ fs.writeFileSync(child,zstdCompressSync(Buffer.from(JSON.stringify({type:'session_meta',payload:{id:crypto.randomUUID(),history_base:{thread_id:instance.nativeId,end_ordinal_exclusive:1,end_byte_offset:1}}})+'\n')));
+ const result=await moveNativeToRecovery(store,native,[instance.id],options);assert.equal(result.moved.length,0);assert.ok(result.blocked.some(b=>/forks still reference/.test(b.reason)));assert.ok(fs.existsSync(instance.file));
 });

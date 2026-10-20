@@ -4,8 +4,9 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
+import {zstdCompressSync} from 'node:zlib';
 import { randomUUID } from 'node:crypto';
-import { readCodexHistory, codexFiles, supportedHistory } from '../src/codex-history.js';
+import { readCodexHistory, codexFiles, supportedHistory, codexHeader } from '../src/codex-history.js';
 import { codexSample, codexTurn } from '../src/demo.js';
 import { parse, renderNative } from '../src/transcript.js';
 import { Store } from '../src/store.js';
@@ -80,4 +81,29 @@ test('restart reuses verified summaries and file stamps without reading unchange
  const reopened=new Store(f.store.root);try{const next=new Native(reopened,{roots,guard:()=>{}});reopened.raw=()=>{throw new Error('Unchanged history should not be read again');};
  assert.equal(next.refreshLocal().errors.length,0);assert.equal(reopened.snapshot().items.length,1);assert.ok(reopened.snapshot().instances.every(i=>!('summaryJson' in i)&&!('baseline' in i)));
  }finally{reopened.close();}
+});
+
+
+test('compressed parent and version segments resolve the exact original byte prefixes',t=>{
+ const f=fixture(t),expected=readCodexHistory(f.currentFile,codexFiles(f.home));
+ for(const file of [f.parentFile,f.oldFile]){fs.writeFileSync(file+'.zst',zstdCompressSync(fs.readFileSync(file)));fs.unlinkSync(file);}
+ const files=codexFiles(f.home),before=files.map(file=>hash(fs.readFileSync(file)));
+ assert.equal(readCodexHistory(f.currentFile,files),expected);assert.deepEqual(files.map(file=>hash(fs.readFileSync(file))),before,'reading never rewrites native compressed bytes');
+ assert.equal(codexHeader(f.parentFile+'.zst').payload.id,f.parentId);
+ const native=new Native(f.store,{roots:{codex:f.home,claude:path.join(f.root,'claude')},guard:()=>{}});assert.equal(native.refreshLocal().errors.length,0);assert.equal(f.store.listing('active:codex').sessionCount,1);
+});
+
+test('compressed version aliases retain their identity when referenced by a later fork',t=>{
+ const f=fixture(t),expected=readCodexHistory(f.currentFile,codexFiles(f.home)),rows=parse(expected,'codex').records;
+ const nextId=randomUUID(),last=rows.at(-1).value.ordinal+1,next=path.join(path.dirname(f.currentFile),'rollout-'+nextId+'.jsonl');
+ const prefixLength=fs.statSync(f.currentFile).size;
+ fs.writeFileSync(next,lines([{type:'session_meta',ordinal:last,payload:{...f.childRows[0].payload,id:nextId,session_id:nextId,history_base:{thread_id:f.windowId,end_ordinal_exclusive:last,end_byte_offset:prefixLength}}}]));
+ fs.writeFileSync(f.currentFile+'.zst',zstdCompressSync(fs.readFileSync(f.currentFile)));fs.unlinkSync(f.currentFile);
+ const resolved=readCodexHistory(next,codexFiles(f.home));assert.equal(resolved,expected+fs.readFileSync(next,'utf8'));assert.ok(supportedHistory(parse(resolved,'codex')));
+ assert.equal(readCodexHistory(f.currentFile,codexFiles(f.home)),expected,'a native path may still use the old uncompressed filename');
+});
+
+test('damaged compressed prefixes fail without accepting partial history',t=>{
+ const f=fixture(t);fs.writeFileSync(f.parentFile+'.zst','not a zstd frame');fs.unlinkSync(f.parentFile);
+ assert.throws(()=>readCodexHistory(f.currentFile,codexFiles(f.home)));
 });

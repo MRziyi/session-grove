@@ -3,7 +3,7 @@ import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { assert, atomic, inside, safePath, hash } from './util.js';
 import { isTrashed, cleanupLocal } from './trash.js';
-import { codexFiles } from './codex-history.js';
+import { codexFiles,codexHeader } from './codex-history.js';
 // Explicit user action only. Native files are never touched by background cloud GC.
 export function removeTrashNativeCopies(store, native, branchIds, options = {}) {
     const selected = new Set(branchIds),
@@ -40,17 +40,8 @@ export function removeTrashNativeCopies(store, native, branchIds, options = {}) 
             let referenced = false;
             for (const file of codexFiles(native.roots.codex)) {
                 if (file === i.file) continue;
-                const fd = fs.openSync(file, 'r');
-                const buffer = Buffer.alloc(262144);
-                let size;
                 try {
-                    size = fs.readSync(fd, buffer, 0, buffer.length, 0);
-                } finally {
-                    fs.closeSync(fd);
-                }
-                const line = buffer.subarray(0, size).toString().split('\n')[0];
-                try {
-                    const meta = JSON.parse(line)?.payload;
+                    const meta = codexHeader(file)?.payload;
                     if (
                         meta?.history_base?.thread_id === i.nativeId ||
                         (meta?.history_base?.thread_id &&

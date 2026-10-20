@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.1.9
+
+- Read Codex history prefixes from compressed `.jsonl.zst` segments without changing native files; validate offsets against decompressed bytes and preserve version aliases.
+- Keep native prefix deletion protection effective when dependent sessions are compressed.
+- Center compaction controls within their available connection lanes, retaining spacing around nodes, branch junctions and endpoint titles.
+- Keep compaction connections compact when endpoint titles in other lanes do not need extra vertical space.
+
 ## 1.1.8
 
 - Select messages by clicking their cards, with whole-turn selection by default and configurable individual or start/end modes. Fill skipped messages automatically, trim trailing fragments when deselecting an interior message, and clear selection from a count tag in the transcript heading.
