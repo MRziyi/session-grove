@@ -1,3 +1,4 @@
+import { projectView } from './project-view.js';
 import {createHash} from 'node:crypto';
 import {bodyRefs,retainedGraph} from './retention.js';
 import {applyTrashState,deletedIds,isTrashed} from './trash.js';
@@ -360,7 +361,10 @@ export class Cloud {
         for (const i of data.items) { if (!i.projectId && !i.archived) inboxIds.add(i.id); else inboxIds.delete(i.id); for (const id of i.sessionIds || []) if (id !== i.id) inboxIds.delete(id); }
         projects.set(INBOX_ID, { ...projects.get(INBOX_ID), ...inboxProject(), count: inboxIds.size });
         const show = preferences(this.store).showScheduledSessions;
-        return { ...data, projects: [...projects.values()].filter(p=>show||!p.background&&p.id!==BACKGROUND_PROJECT), items: [...items.values()].filter(i=>show||i.projectId!==BACKGROUND_PROJECT), cloudProjects: summaries };
+        const result = { ...data, projects: [...projects.values()].filter(p=>show||!p.background&&p.id!==BACKGROUND_PROJECT), items: [...items.values()].filter(i=>show||i.projectId!==BACKGROUND_PROJECT), cloudProjects: summaries };
+        const incomplete = new Set(this.projectRefs().filter(p=>!this.cache().indexes[p.index]).map(p=>p.id));
+        const view=projectView({...result,branches:this.store.all('branch')},incomplete);
+        return {...result,projectDirectory:view.directory,projectAvailability:view.availability,projectItems:view.items};
     }
     listing(scope, query) {
         const dirty = new Set(this.dirtyIds());
@@ -370,7 +374,7 @@ export class Cloud {
         }
         const data = this.decorate({ ...this.store.collections(), projects: this.store.all('project') }), q = String(query || '').toLocaleLowerCase();
         const branches = new Map(this.store.all('branch').map(b => [b.id, b]));
-        const items = data.items.flatMap(i => {
+        const items = (scope==='archived'?data.items:data.projectItems).flatMap(i => {
             const project = data.projects.find(p => p.id === i.projectId);
             const sessions = i.sessions.filter(s => scope === 'archived' ? s.archived || project?.archived : (scope === 'projects' || cloudProjectId(i.projectId) === scope) && !s.archived && !project?.archived);
             if (!sessions.length) return [];

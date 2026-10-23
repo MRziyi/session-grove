@@ -1,3 +1,4 @@
+import {zstdCompressSync} from 'node:zlib';
 import {setImmediate as yieldTask} from 'node:timers/promises';
 import {readyToDeactivate} from './native-readiness.js';
 import {isTrashed,nativeSuppressed} from './trash.js';
@@ -440,7 +441,7 @@ export class Native {
                     const dest = safePath(root, op.file);
                     assert(!fs.existsSync(dest) || dest === i.file, '目标记录已存在，拒绝覆盖');
                     backup(dest);
-                    writes.set(dest, output);
+                    writes.set(dest, dest.endsWith('.jsonl.zst') ? zstdCompressSync(Buffer.from(output)) : output);
                     if (b.agent === 'claude' && !nativeClaudeFork) {
                         const auxiliary = lineage.find(r => r.source.auxiliary)?.source.auxiliary || [];
                         for (const [file, content] of auxiliaryWrites(root, path.join(path.dirname(dest), i.nativeId), auxiliary)) {

@@ -67,3 +67,11 @@ test('compressed native sessions are discovered, recovered from missing and kept
  found=native.discover();assert.equal(found.sessions.length,1);assert.equal(found.sessions[0].managed,true);
  native.collect();assert.equal(f.store.instances()[0].missing,false);assert.equal(f.store.raw(f.store.get('branch',b.id).head),raw);assert.deepEqual(fs.readFileSync(file+'.zst'),bytes);
 });
+
+test('rewriting an activated compressed session preserves the compression format',async t=>{
+ const {zstdCompressSync,zstdDecompressSync}=await import('node:zlib');const f=fixture(t),native=new Native(f.store,{roots:f.roots,guard:()=>{}});
+ const file=path.join(f.roots.codex,'sessions','compressed-write.jsonl.zst'),raw=codexSample(f.root,[['Hello','Ready']]);fs.writeFileSync(file,zstdCompressSync(Buffer.from(raw)));
+ const found=native.discover(),b=native.import(found.sessions[0].key,null,'Compressed',{observe:true});
+ f.store.ingest(b.id,raw+codexTurn('Next','Done').map(r=>JSON.stringify(r)+'\n').join(''),b.head,{});
+ native.apply([b.id]);assert.ok(zstdDecompressSync(fs.readFileSync(file)).toString().includes('Next'));assert.equal(native.discover().errors.length,0);
+});

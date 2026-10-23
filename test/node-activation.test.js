@@ -237,3 +237,18 @@ test('settings-only capture keeps a mid-turn continuation reactivatable in anoth
  assert.ok(store.instances().some(i=>i.branchId===fork.id&&i.cwd===fs.realpathSync(destination)&&i.applied));
  assert.equal(store.raw(source.head),raw);
 });
+
+test('compressed native archive verifies decoded history while retaining original bytes',async t=>{
+ const {app,root}=await setup(t),store=app.store;
+ const {archiveNative}=await import('../src/native-archive.js'),{DatabaseSync}=await import('node:sqlite');
+ const raw=codexSample(root,[['Question','Boundary answer']]).trim().split('\n').slice(0,-1).join('\n')+'\n';
+ const source=store.branch(null,'Internal boundary','codex',raw),child=store.fork(source.id,{name:'Unused',end:store.parsed(source.head,'codex').records.length,nodeBoundary:true});store.put('branch',{...child,activationNodeName:'Boundary'});
+ app.native.setActive(child.id,root,true,{nodeName:'Boundary'});app.native.apply([child.id]);const instance=store.instances().find(i=>i.branchId===child.id);
+ fs.appendFileSync(instance.file,JSON.stringify({type:'event_msg',payload:{type:'thread_settings_applied'}})+'\n');app.native.collect();
+ assert.ok(store.instances().find(i=>i.id===instance.id).pending);assert.equal(store.treeGraph(source.id).nodes.find(n=>n.id==='empty-'+child.id).count,0);
+ const db=new DatabaseSync(path.join(app.native.roots.codex,'state_5.sqlite'));db.exec('CREATE TABLE IF NOT EXISTS threads(id TEXT PRIMARY KEY,archived INTEGER,rollout_path TEXT)');db.prepare('INSERT OR REPLACE INTO threads(id,archived,rollout_path) VALUES(?,0,?)').run(instance.nativeId,instance.file);db.close();
+ const {zstdCompressSync}=await import('node:zlib');const compressed=zstdCompressSync(fs.readFileSync(instance.file));fs.writeFileSync(instance.file+'.zst',compressed);fs.unlinkSync(instance.file);
+ await archiveNative(store,app.native,[child.id],{archiveBranches:false,executable:'fixture',clientFactory:()=>({init:async()=>{},close:async()=>{},request:async(method)=>{assert.equal(method,'thread/archive');const d=new DatabaseSync(path.join(app.native.roots.codex,'state_5.sqlite'));d.prepare('UPDATE threads SET archived=1 WHERE id=?').run(instance.nativeId);d.close();}})});
+ assert.deepEqual(fs.readFileSync(instance.file+'.zst'),compressed);
+ assert.equal(store.instances().find(i=>i.id===instance.id).applied,false);assert.ok(!store.treeGraph(source.id).nodes.some(n=>n.id==='empty-'+child.id));assert.equal((store.local('trashEntries')||[]).length,0);
+});

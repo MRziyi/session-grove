@@ -156,14 +156,13 @@ function renderNavigation() {
     const d = state.data, directoryScroll = $('.project-directory-scroll')?.scrollTop || 0;
     const selectedScope = state.scope === PROJECTS ? state.projectFocus : state.scope;
     const entry = (scope, name, count, css = '') => `<button class="nav-entry ${css} ${selectedScope === scope ? 'selected' : ''}" data-scope="${esc(scope)}" ${selectedScope === scope ? 'aria-current="page"' : ''}><span class="nav-name">${state.data.projects.some(p=>p.id===scope)?projectName(scope,name):esc(name)}</span><span class="count">${count}</span></button>`;
-    const directoryGroups=projectGroups(d.items.filter(i=>!i.archived).map(i=>({...i,updatedAt:i.sessions.filter(s=>!s.archived).map(s=>s.updatedAt).sort().at(-1)||i.updatedAt})), d.projects);
+    const directoryGroups=projectGroups(d.projectItems, d.projects);
     const projectTimes=new Map(directoryGroups.map(g=>[g.id,g.updatedAt])),olderIds=new Set(directoryGroups.filter(g=>isOlder(g.items)).map(g=>g.id));
-    const projectCounts = new Map(directoryGroups.map(g=>[g.id,g.items.length]));
-    const projects = d.projects.filter(p => !p.archived && projectCounts.get(p.id)>0);
+    const projects = d.projectDirectory;
     const archivedProjects = d.projects.filter(p => p.archived && (d.items.some(i => i.projectId === p.id) || p.count>0));
     const archivedSessions = d.items.filter(i => !archivedProjects.some(p => p.id === i.projectId)).reduce((n, i) => n + i.sessions.filter(s => s.archived).length, 0);
     const clientArchiveCount=new Set([...(d.trashNative||[]).filter(i=>i.clientArchived&&(!i.background||d.preferences?.showScheduledSessions)).map(i=>i.branchId),...d.items.flatMap(i=>i.sessions.filter(s=>s.archived||archivedProjects.some(p=>p.id===i.projectId)).map(s=>s.id))]).size;
-    const directory = rows => rows.sort((a,b) => (projectTimes.get(b.id)||'').localeCompare(projectTimes.get(a.id)||'') || a.name.localeCompare(b.name)).map(p => entry(p.id, p.builtin ? t('Ungrouped') : p.name==='Scheduled & background'?t(p.name):p.name, projectCounts.get(p.id) || 0)).join('');
+    const directory = rows => rows.sort((a,b) => (projectTimes.get(b.id)||'').localeCompare(projectTimes.get(a.id)||'') || a.name.localeCompare(b.name)).map(p => entry(p.id, p.builtin ? t('Ungrouped') : p.name==='Scheduled & background'?t(p.name):p.name, p.itemCount)).join('');
     const recent = projects.filter(p=>!olderIds.has(p.id)), older = projects.filter(p=>olderIds.has(p.id));
     $('#navigation').innerHTML = `<section class="nav-group"><h2 class="nav-label">${t('Current Active')}</h2>${entry('active:codex', 'Codex', d.activeCounts.codex, 'codex')}${entry('active:claude', 'Claude', d.activeCounts.claude, 'claude')}</section><section class="nav-group project-directory"><h2 class="nav-label">${t('Projects')}</h2><div class="project-directory-scroll">${directory(recent)}${older.length?olderToggle(older.length)+(state.olderProjects?directory(older):''):''}</div></section><section class="nav-group"><h2 class="nav-label">${t('Trash')}</h2>${clientArchiveCount?entry('archived',t('Client archive'),clientArchiveCount):''}${entry('trash',t('Trash'),(d.trashEntries||[]).filter(e=>!e.restoredAt&&!e.expired).length)}</section>`;
     $('.project-directory-scroll').scrollTop = directoryScroll;
@@ -425,6 +424,7 @@ function renderList() {
     $('#session-list').innerHTML = allGroups.filter(g=>!olderIds.has(g.id)).map(groupHtml).join('') + (older.length ? `<section class="older-projects">${olderToggle(older.length)}${state.olderProjects?older.map(groupHtml).join(''):''}</section>` : '') || emptySessionGuide();
     bindSessionGuide();
     $('#select-all').hidden=!state.list.items.length;
+    if(state.scope===PROJECTS&&state.data.projectAvailability.some(p=>p.state==='unloaded'))$('#session-list').insertAdjacentHTML('afterbegin',`<p class="empty">${t('Some project indexes are unavailable locally. Use Sync to refresh the directory.')}</p>`);
     bindOlderProjects();
     $$('[data-group-select]').forEach(el=>{const items=allGroups.find(g=>g.id===el.dataset.groupSelect)?.items||[],count=items.filter(i=>state.selected.has(i.id)).length;el.checked=!!items.length&&count===items.length;el.indeterminate=count>0&&count<items.length;el.onchange=()=>{for(const i of items)el.checked?state.selected.add(i.id):state.selected.delete(i.id);renderList();};});
     $$('[data-open]').forEach(el=>el.onclick=()=>openTree(el.dataset.open));

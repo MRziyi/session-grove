@@ -420,3 +420,11 @@ test('Push stays in Pull through shared-history preparation and publishes cleanu
  auto.cloud.publish=()=>{throw Error('A second publication must not occur');};auto.startTransfer('push');await auto.syncJob;
  assert.deepEqual(directions,['pull']);assert.equal(auto.operation.summary.published,2);assert.equal(auto.operation.state,'success');
 });
+
+test('backend project directory and content listing agree through archive and restore',async t=>{
+ const e=await setup(t),a=e.device('directory');const p=a.store.project('Project'),empty=a.store.project('Empty');const b=branch(a.store,p.id,'Session');
+ const check=()=>{const data=a.cloud.decorate(a.store.snapshot());for(const p of data.projectDirectory){const list=a.cloud.listing(p.id);assert.equal(p.itemCount,list.itemCount);assert.equal(p.sessionCount,list.sessionCount);}return data;};
+ assert.equal(check().projectDirectory.some(p=>p.id===empty.id),false);assert.equal(check().projectDirectory.find(v=>v.id===p.id).itemCount,1);
+ a.store.edit(b.id,{archived:true});assert.equal(check().projectDirectory.some(v=>v.id===p.id),false);assert.equal(check().projectAvailability.find(v=>v.id===p.id).state,'filtered');
+ a.store.edit(b.id,{archived:false});assert.equal(check().projectDirectory.find(v=>v.id===p.id).itemCount,1);
+});

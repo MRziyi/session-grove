@@ -1,3 +1,4 @@
+import {readCodexSegment} from './codex-history.js';
 import {readyToDeactivate} from './native-readiness.js';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -23,7 +24,7 @@ export async function archiveNative(store, native, branchIds, { executable, befo
     const collected=native.collect(branchIds);assert(!collected.errors.some(e=>store.instances().some(i=>i.id===e.instanceId&&selected.has(i.branchId))),'A selected native session could not be captured.');
     const instances=store.instances().filter(i=>selected.has(i.branchId)&&i.applied&&!i.missing);
     const claude=branches.filter(b=>b.agent==='claude');if(instances.some(i=>i.agent==='claude'))native.guard(['claude']);
-    for(const i of instances){assert(readyToDeactivate(store,i),'This session still has an unfinished turn or tool call. Finish or stop it in the client before deactivating.',409);assert(fs.existsSync(i.file)&&hash(fs.readFileSync(i.file))===i.observedHash,'Selected native history changed. Refresh before archiving.',409);}
+    for(const i of instances){assert(readyToDeactivate(store,i),'This session still has an unfinished turn or tool call. Finish or stop it in the client before deactivating.',409);assert(fs.existsSync(i.file)&&hash(native.read(i.file))===i.observedHash,'Selected native history changed. Refresh before archiving.',409);}
     await beforeCommit?.();
     const journal={id:id(),kind:'native-api-archive',at:now(),status:'prepared',branchIds,completed:[]};
     const file=path.join(store.root,'archive-journals',journal.id+'.json');atomic(file,JSON.stringify(journal));
@@ -39,7 +40,7 @@ export async function archiveNative(store, native, branchIds, { executable, befo
             assert(row,'Native Codex thread is missing.');
             if(!row.archived){await client.request('thread/archive',{threadId:i.nativeId});journal.completed.push(i.nativeId);atomic(file,JSON.stringify(journal));}
             db=index();try{row=db.prepare('SELECT archived,rollout_path FROM threads WHERE id=?').get(i.nativeId);}finally{db.close();}
-            assert(row.archived,'Codex did not archive the selected thread.');assert(hash(fs.readFileSync(row.rollout_path))===i.observedHash,'Native archive changed transcript bytes.');updates.set(i.id,row.rollout_path);completed++;
+            assert(row.archived,'Codex did not archive the selected thread.');assert(hash(readCodexSegment(row.rollout_path))===i.observedHash,'Native archive changed transcript bytes.');updates.set(i.id,fs.existsSync(row.rollout_path)?row.rollout_path:row.rollout_path+'.zst');completed++;
         }
         await onProgress({phase:'Saving client state',completed,total:instances.length});
         for(const b of claude)native.setActive(b.id,null,false);if(claude.length)await native.applyAsync(claude.map(b=>b.id),{onProgress});

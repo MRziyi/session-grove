@@ -1,5 +1,6 @@
 let language = localStorage.getItem('grove-language') === 'zh' ? 'zh' : 'en';
 const dictionary = {
+"Some project indexes are unavailable locally. Use Sync to refresh the directory.":"部分项目目录尚未在本机载入，请使用 Sync 更新目录。",
 "{count} chats selected":"已选 {count} 条消息",
 "Clear {count} selected chats":"取消选择 {count} 条消息",
 
