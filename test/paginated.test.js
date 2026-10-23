@@ -90,7 +90,7 @@ test('compressed parent and version segments resolve the exact original byte pre
  const files=codexFiles(f.home),before=files.map(file=>hash(fs.readFileSync(file)));
  assert.equal(readCodexHistory(f.currentFile,files),expected);assert.deepEqual(files.map(file=>hash(fs.readFileSync(file))),before,'reading never rewrites native compressed bytes');
  assert.equal(codexHeader(f.parentFile+'.zst').payload.id,f.parentId);
- const native=new Native(f.store,{roots:{codex:f.home,claude:path.join(f.root,'claude')},guard:()=>{}});assert.equal(native.refreshLocal().errors.length,0);assert.equal(f.store.listing('active:codex').sessionCount,1);
+ const native=new Native(f.store,{roots:{codex:f.home,claude:path.join(f.root,'claude')},guard:()=>{}});assert.equal(native.refreshLocal().errors.length,0);assert.equal(f.store.listing('active:codex').sessionCount,2);
 });
 
 test('compressed version aliases retain their identity when referenced by a later fork',t=>{

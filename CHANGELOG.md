@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.1.10
+
+- Discover compressed Codex rollouts and match them to native index paths; recover cached sessions incorrectly marked missing without rewriting compressed files.
+- Preserve compressed bytes when parking native records.
+- Hide empty projects and derive navigation counts from the same visible items as the content list.
+- Validation: 345 tests passed, 2 skipped; compressed discovery and missing-state recovery covered.
+
+
 ## 1.1.9
 
 - Read Codex history prefixes from compressed `.jsonl.zst` segments without changing native files; validate offsets against decompressed bytes and preserve version aliases.

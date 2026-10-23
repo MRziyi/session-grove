@@ -4,7 +4,7 @@ import {isTrashed,nativeSuppressed} from './trash.js';
 import { claudeTitle } from './claude-title.js';
 import { groveTitle } from './node-activation.js';
 import { preferences } from './preferences.js';
-import { readCodexHistory, codexFiles } from './codex-history.js';
+import { readCodexHistory, readCodexSegment, codexFiles } from './codex-history.js';
 import fs from 'node:fs';
 import { policyHash } from './context-policy.js';
 import { metadata } from './organization.js';
@@ -49,6 +49,7 @@ export class Native {
         if (compacted) store.local('instances', instances);
     }
     read(file) {
+        if(file.endsWith('.jsonl.zst'))return readCodexSegment(file).toString('utf8');
         assert(fs.statSync(file).size <= 100 * 1024 * 1024, '单条会话超过 100MB，暂不能收纳');
         return fs.readFileSync(file, 'utf8');
     }
@@ -75,7 +76,7 @@ export class Native {
                             if (row.name || row.title) titles.set(row.id, row.name || row.title);
                             provenance.set(row.id, { source: row.source, threadSource: row.thread_source });
                             if (row.archived) archivedIds.add(row.id);
-                            if (row.rollout_path && path.isAbsolute(row.rollout_path)) { canonicalPaths.set(row.id, path.resolve(row.rollout_path)); indexedFiles.set(path.resolve(row.rollout_path), row); }
+                            if (row.rollout_path && path.isAbsolute(row.rollout_path)) { canonicalPaths.set(row.id, path.resolve(row.rollout_path).replace(/\.zst$/,'')); indexedFiles.set(path.resolve(row.rollout_path).replace(/\.zst$/,''), row); }
                         }
                     }
                 } catch { errors.push({ message: 'Could not read the native Codex index.' }); }
@@ -97,17 +98,18 @@ export class Native {
             }
             const dirs = agent === 'codex' ? ['sessions', 'archived_sessions'] : ['projects'];
             for (const dir of dirs)
-                for (const file of walk(path.join(root, dir))) {
+                for (const file of walk(path.join(root, dir),20000,name=>name.endsWith('.jsonl') || agent==='codex'&&name.endsWith('.jsonl.zst'))) {
                     if (agent === 'claude' && (file.split(path.sep).includes('subagents') || path.basename(file).startsWith('agent-')))
                         continue;
                     try {
-                        const indexed = indexedFiles.get(path.resolve(file));
+                        if(agent==='codex'&&file.endsWith('.jsonl.zst')&&fs.existsSync(file.slice(0,-4)))continue;
+                        const indexed = indexedFiles.get(path.resolve(file).replace(/\.zst$/,''));
                         const fileId=path.basename(file).match(/[a-f0-9]{8}-(?:[a-f0-9]{4}-){3}[a-f0-9]{12}/)?.[0];
                         if(ignoredFiles.has(file)||nativeSuppressed(this.store,agent,indexed?.id||fileId))continue;
                         const internal = indexed && sessionExclusion({ showScheduled, agent, source: indexed.source, threadSource: indexed.thread_source });
                         if (internal) { this.observations.set(file, { nativeId: indexed.id, excluded: internal }); continue; }
                         const namedId = path.basename(file).match(/[a-f0-9]{8}-(?:[a-f0-9]{4}-){3}[a-f0-9]{12}/)?.[0];
-                        if (namedId && canonicalPaths.has(namedId) && canonicalPaths.get(namedId) !== path.resolve(file)) continue;
+                        if (namedId && canonicalPaths.has(namedId) && canonicalPaths.get(namedId) !== path.resolve(file).replace(/\.zst$/,'')) continue;
                         const stat = fs.statSync(file), stamp = `${stat.ino}:${stat.size}:${stat.mtimeMs}:${stat.ctimeMs}`;
                         const known = byFile.get(agent+':'+file) || (indexed?.id && byNativeId.get(agent+':'+indexed.id));
                         const saved = known?.summaryVersion === 5 && known.observedStamp === stamp && this.store.summary(known.baseRevision,agent);
@@ -116,7 +118,7 @@ export class Native {
                         if (p.errors) { errors.push({ file:path.basename(file), message:'Native record is still being written.' }); continue; }
                         if (!p.nativeId || nativeSuppressed(this.store,agent,p.nativeId))
                             continue;
-                        if (canonicalPaths.has(p.nativeId) && canonicalPaths.get(p.nativeId) !== path.resolve(file)) continue;
+                        if (canonicalPaths.has(p.nativeId) && canonicalPaths.get(p.nativeId) !== path.resolve(file).replace(/\.zst$/,'')) continue;
                         const info = provenance.get(p.nativeId) || {};
                         const excluded = sessionExclusion({ showScheduled, agent, source: info.source, threadSource: info.threadSource }) || sessionExclusion({ showScheduled, agent, source: p.source, threadSource:p.threadSource, sidechain: p.sidechain, originKind: p.originKind, sessionKind: p.sessionKind, initialization:p.initialization, chats: p.count });
                         const nativeTitle = titles.get(p.nativeId) || p.title;
@@ -263,6 +265,7 @@ export class Native {
         const results = [], errors = [];
         for (const i of instances) {
             if(branchIds&&!branchIds.includes(i.branchId))continue;
+            if(i.agent==='codex'&&i.file&&!fs.existsSync(i.file)&&fs.existsSync(i.file+'.zst'))i.file+='.zst';
             if (isTrashed(this.store,i.branchId) || i.excluded && this.store.get('branch', i.branchId).excluded !== 'empty') continue;
             if (!i.file || !fs.existsSync(i.file)) {
                 if (i.applied)
@@ -470,7 +473,7 @@ export class Native {
                         const parked = paginated ? safePath(root, path.join(root, 'archived_sessions', path.basename(i.file))) : path.join(this.store.root, 'parked', i.id, path.basename(i.file));
                         assert(!fs.existsSync(parked) || parked === i.file, 'Archive target already exists.');
                         backup(parked);
-                        writes.set(parked, this.read(i.file));
+                        writes.set(parked, fs.readFileSync(i.file));
                         if (i.file !== parked) writes.set(i.file, null);
                         i.file = parked;
                     }

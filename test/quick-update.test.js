@@ -57,3 +57,13 @@ test('record preview bounds rendering and distinguishes unreadable reasoning wit
  const record={type:'response_item',payload:{type:'reasoning',summary:[],encrypted_content:'x'.repeat(2000000)}};const preview=recordPreview(record);assert.equal(preview.opaque,true);assert.ok(preview.text.length<500);assert.equal(record.payload.encrypted_content.length,2000000);
  const large={payload:{output:'y'.repeat(30000)}};const a=recordPreview(large),b=recordPreview(large,a.next);assert.equal(a.text.length,12000);assert.equal(b.next,24000);
 });
+
+test('compressed native sessions are discovered, recovered from missing and kept byte-exact',async t=>{
+ const {zstdCompressSync}=await import('node:zlib');const f=fixture(t),native=new Native(f.store,{roots:f.roots,guard:()=>{}});
+ const file=path.join(f.roots.codex,'sessions','compressed.jsonl'),raw=codexSample(f.root,[['Hello','Ready']]);fs.writeFileSync(file,raw);
+ let found=native.discover();const b=native.import(found.sessions[0].key,null,'Compressed',{observe:true});
+ const instances=f.store.instances();instances[0].missing=true;f.store.local('instances',instances);
+ const bytes=zstdCompressSync(Buffer.from(raw));fs.writeFileSync(file+'.zst',bytes);fs.unlinkSync(file);
+ found=native.discover();assert.equal(found.sessions.length,1);assert.equal(found.sessions[0].managed,true);
+ native.collect();assert.equal(f.store.instances()[0].missing,false);assert.equal(f.store.raw(f.store.get('branch',b.id).head),raw);assert.deepEqual(fs.readFileSync(file+'.zst'),bytes);
+});
