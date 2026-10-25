@@ -14,7 +14,8 @@ For research, writing and software projects that outgrow a flat chat list.
 
 A project can span many conversations: an initial brief, competing approaches, a draft and several revisions. Grove brings them together so you can find the context behind an idea without piecing it together from a list of chat titles.
 
-- **Organize by project.** Keep Claude and Codex conversations in one library, with search and editable titles.
+- **Organize by project.** Keep Claude and Codex conversations in one library, with search and editable titles. Collapse project groups and drag sessions onto open or collapsed groups.
+- **Choose what counts as recent.** Sort by conversation activity, include manual edits (the default), or include automatic organization in Settings.
 - **Explore conversation trees.** See where paths share history and where they diverge. Select a node to read its conversation.
 - **Name meaningful stretches of work.** Turn a long transcript into recognizable sections such as “Research questions”, “Compare approaches” or “First prototype”.
 
