@@ -1,3 +1,5 @@
+import {pinnedAncestors} from './graph-ancestors.js';
+import {searchTree} from './tree-search.js';
 import {selectChats} from './chat-selection.js';
 import {installInlineNames} from './inline-name.js';
 import { installSessionDrag } from './session-drag.js';
@@ -41,6 +43,7 @@ const palette = {
 };
 const style = n => { const [tone, tint] = palette[n.color]; return `--tone:${tone};--tint:${tint}`; };
 const state = { data: null, token: '', roots: {}, scope: 'active:codex', list: { items: [] }, query: '', selected: new Set(), tree: null, branchId: null, nodeId: null, compactionId: null, chats: new Set(), rangeStart: null, rangeEnd: null, expandedGroups: new Set(), expandedProjects: new Set(), collapsedProjects: new Set(), projectFocus: null, expanded: new Set() };
+let detailSearchTimer,detailSearchResults=[];
 let clockTimer = null, modalVersion = 0;
 const operations = {}, operationTimers = {}, seenOperations={};
 let activityGroups=[];
@@ -141,6 +144,7 @@ function translateBanner() {
     }
     $('#language-toggle').textContent=locale()==='zh'?'中':'En';$('#language-toggle').title=locale()==='zh'?'English':'中文';
     $('#about').textContent = t('About'); $('#information').textContent='ⓘ';$('#information').setAttribute('aria-label',t('Information'));$('#information').title=t('Information');
+    $('#detail-search-toggle').innerHTML=icon('search');$('#detail-search-icon').innerHTML=icon('search');$('#detail-search-toggle').setAttribute('aria-label',t('Search this session'));$('#detail-query').placeholder=t('Search this session…');$('#detail-query').setAttribute('aria-label',t('Search this session'));$('#prefix-active').textContent='[+]';$('#prefix-active').setAttribute('aria-label',t('Prefix active session titles'));
     $('#search-icon').innerHTML = icon('search'); $('#search').placeholder = t('Search title or content…'); $('#search').setAttribute('aria-label', t('Search title or content…'));
     $('#back').innerHTML = icon('back'); $('#back').title = t('Back to list'); $('#back').setAttribute('aria-label', t('Back to list'));
     $('#source').innerHTML = icon('source')+'<span>'+t('Source')+'</span>'; $('#source').title = t('Source & revisions'); $('#source').setAttribute('aria-label', t('Source & revisions'));
@@ -213,7 +217,7 @@ function renderCloudStatus(){
     const updating=operations.update?.state==='running'||state.uiBusy==='update';$('#collect').dataset.operation=updating?'running':'';$('#collect').disabled=offline||working||updating;
     $('#collect .button-label').textContent=t(updating?'Updating…':'Update');
     $$('.actions button,button[data-compaction],[data-trash-restore],[data-trash-native]').forEach(el=>el.disabled=actionDisabled(el));
-    renderTransfer();renderCountdowns();renderTrashProgress();renderIntelligence();
+    renderTransfer();renderCountdowns();renderTrashProgress();renderIntelligence();if(state.tree)$('#prefix-active').disabled=!state.tree.paths.some(p=>p.active)||working||opening;
     for(const el of $$('[data-guide-update]'))el.disabled=offline||working||updating;
     if(!syncReady){hideSyncPanel($('#pending-uploads'));$('#push-zone').tabIndex=-1;$('#cloud-status').textContent=t(offline?'Service disconnected':'Sync not connected');}else $('#push-zone').tabIndex=0;
     const ticking=!document.hidden&&!offline&&(d.update?.nextRunAt||d.cloud?.nextRunAt||busy);
@@ -269,7 +273,7 @@ function renderTrashProgress() {
     if(box.showPopover&&!box.matches(':popover-open'))box.showPopover();
     const p=op.progress||{},total=p.total,count=p.completed||0;
     const message=op.state==='error'?(op.error||p.phase||'Operation failed'):p.phase||(op.state==='success'?'Complete':'Checking selection');
-    box.innerHTML=`<strong class="task-title">${t(({resolve:'Resolve conflicts',open:'Open session',recovery:'Move to recovery',restore:'Restore to Projects',delete:'Delete recovery copies',activate:'Activate',deactivate:'Deactivate',archive:'Client archive',convert:'Activate as',discard:'Discard'})[op.action]||'Move to Trash')}</strong>${op.state==='error'?`<button type="button" data-dismiss-task aria-label="${t('Close')}">×</button>`:''}<div class="task-message" ${op.state==='error'?'role="alert"':''}>${esc(t(message))}</div>${p.detail?`<small class="task-detail">${esc(p.detail)}</small>`:''}${op.state==='running'?`<progress ${total>0?`max="${total}" value="${count}"`:''}></progress>${total>0?`<small>${count} / ${total}</small>`:''}`:''}`;
+    box.innerHTML=`<strong class="task-title">${t(({resolve:'Resolve conflicts',open:'Open session',recovery:'Move to recovery',restore:'Restore to Projects',delete:'Delete recovery copies',activate:'Activate',deactivate:'Deactivate',archive:'Client archive',convert:'Activate as',discard:'Discard',rename:'Rename transcription',prefix:'Prefix active session titles'})[op.action]||'Move to Trash')}</strong>${op.state==='error'?`<button type="button" data-dismiss-task aria-label="${t('Close')}">×</button>`:''}<div class="task-message" ${op.state==='error'?'role="alert"':''}>${esc(t(message))}</div>${p.detail?`<small class="task-detail">${esc(p.detail)}</small>`:''}${op.state==='running'?`<progress ${total>0?`max="${total}" value="${count}"`:''}></progress>${total>0?`<small>${count} / ${total}</small>`:''}`:''}`;
     const dismiss=box.querySelector('[data-dismiss-task]');if(dismiss)dismiss.onclick=()=>{state.dismissedTask=op.id;renderTrashProgress();};
 }
 async function trashRequest(path,body,action) {
@@ -464,7 +468,7 @@ async function openTree(id) {
         if (!tree.paths.length) {state.tree=null;cancelOpening();render();return;}
         await progress('Drawing conversation tree');
         if(ticket!==requestId||controller.signal.aborted)return;
-        state.tree = tree;state.projectFocus=tree.projectId || INBOX;if(listView&&!listView.entryProject)listView.entryProject=state.projectFocus;
+        closeDetailSearch(true);state.tree = tree;state.projectFocus=tree.projectId || INBOX;if(listView&&!listView.entryProject)listView.entryProject=state.projectFocus;
         state.branchId = (state.query ? tree.paths.find(p => item?.matchedSessionIds?.includes(p.branchId)) : null)?.branchId || tree.paths.find(p=>p.branchId===tree.id)?.branchId || [...tree.paths].sort((a,b)=>b.nodeIds.length-a.nodeIds.length)[0].branchId;
         for (const list of [state.list.items,state.data.items]) { const cached=list.find(i=>i.id===id); if(cached)cached.cloudState='cached'; }
         state.nodeId = null; state.compactionId = null; clearRange(); state.expanded.clear(); camera.x = 0; camera.y = 0; camera.zoom = 1; camera.newView = true; render();animateView($('#detail-page'));
@@ -483,7 +487,7 @@ function render({keepDetail=false} = {}) {
     else {
         // Drop the last transcript's object graph as well as its DOM. These caches
         // and delegated handlers otherwise retain message bodies on the list page.
-        drawnTree=null;currentGraphLayout=null;labeledTree=null;nodeLabels=null;activityGroups=[];
+        $('#graph-ancestors').hidden=true;closeDetailSearch(true);drawnTree=null;currentGraphLayout=null;labeledTree=null;nodeLabels=null;activityGroups=[];
         $('#branch-picker').replaceChildren();$('#detail-actions').replaceChildren();
         $('#transcripts').onclick=null;$('#transcripts').replaceChildren();$('#graph').replaceChildren();$('#ribbons').replaceChildren();
     }
@@ -492,10 +496,11 @@ function renderDetail() {
     const tree = state.tree, p = route(); if (!p) { state.tree = null; render(); return; }
     $('#session-title').innerHTML = editableName('session',tree.id,tree.name);
     const tokens = p.nodeIds.reduce((sum, id) => sum + (tree.nodes.find(n => n.id === id)?.tokens?.recordedEstimate || 0), 0);
-    $('#session-meta').textContent = `${p.agent === 'codex' ? 'Codex' : 'Claude'} · ≈ ${compactNumber(tokens)} tokens${p.context?.compactions.some(e=>e.controlPrimary!==false) ? ' · ' + t('{count} compactions', { count: p.context.compactions.filter(e=>e.controlPrimary!==false).length }) : ''}`;
-    $('#detail-count').textContent = `${t('{count} branches', { count: tree.paths.length })} · ${t('{count} chats', { count: tree.chatCount })} · ${t('{count} pending', { count: tree.pendingCount })}`;
+    $('#detail-count').textContent = `${p.agent === 'codex' ? 'Codex' : 'Claude'} · ≈ ${compactNumber(tokens)} tokens${p.context?.compactions.some(e=>e.controlPrimary!==false) ? ' · ' + t('{count} compactions', { count: p.context.compactions.filter(e=>e.controlPrimary!==false).length }) : ''}`;
+    $('#session-meta').textContent = `${t('{count} branches', { count: tree.paths.length })} · ${t('{count} chats', { count: tree.chatCount })} · ${t('{count} pending', { count: tree.pendingCount })}`;
     $('#branch-picker').innerHTML = tree.paths.map(v => `<option value="${esc(v.branchId)}" ${v.branchId === p.branchId ? 'selected' : ''}>${esc(v.transcriptionTitle || v.originalTitle || v.name)}</option>`).join('');
     enhanceSelect($('#branch-picker'));
+    $('#prefix-active').disabled=!tree.paths.some(p=>p.active)||working||opening;
     renderDetailActions(); renderTranscript(); renderGraph(); scheduleRibbons();
 }
 
@@ -696,7 +701,7 @@ function selectNode(id, scrollTranscript = true) {
     scheduleRibbons();
 }
 let ribbonFrame = 0;
-function scheduleRibbons() { if (!ribbonFrame) ribbonFrame = requestAnimationFrame(() => { ribbonFrame = 0; drawRibbons(); }); }
+function scheduleRibbons() { if (!ribbonFrame) ribbonFrame = requestAnimationFrame(() => { ribbonFrame = 0; drawRibbons();renderPinnedAncestors(); }); }
 function drawRibbons() {
     if (!state.tree || !route() || $('#ribbon-lane').offsetWidth === 0) return;
     const lane = $('#editor').getBoundingClientRect(), view = $('#transcripts').getBoundingClientRect(), graphView = $('#graph-scroll').getBoundingClientRect();
@@ -711,6 +716,19 @@ function drawRibbons() {
         const n = state.tree.nodes.find(n => n.id === id);
         return `<path data-ribbon="${esc(id)}" d="M${left} ${top} C${mid} ${top},${mid} ${nt},${right} ${nt} L${right} ${nb} C${mid} ${nb},${mid} ${bottom},${left} ${bottom} Z" fill="${mutedNode(n, route()) ? '#aeb8c1' : palette[n.color][0]}" opacity=".19"/>`;
     }).join('');
+}
+function renderPinnedAncestors(){
+    const box=$('#graph-ancestors'),view=$('#graph-scroll');if(!state.tree||!currentGraphLayout){box.hidden=true;return;}
+    const pin=pinnedAncestors(state.tree,currentGraphLayout,{...camera,x:camera.x-view.scrollLeft,y:camera.y-view.scrollTop},view.clientWidth,view.clientHeight,state.branchId,state.nodeId);
+    box.hidden=!pin;if(!pin){delete box.dataset.branchId;return;}box.dataset.branchId=pin.branchId;
+    const markup=pin.items.map(item=>`<button type="button" class="pinned-ancestor" data-pinned-node="${esc(item.id)}" style="left:${item.x}px;top:${item.y}px;width:${item.width}px;height:${item.height}px;${item.node?style(item.node):''}" aria-label="${esc(item.node?nodeName(item.node):t('{count} ancestors',{count:item.members.length}))}">${esc(item.node?nodeName(item.node):t('{count} ancestors',{count:item.members.length}))}</button>`).join('');
+    const cards=box.querySelector('.ancestor-cards');if(cards.innerHTML!==markup)cards.innerHTML=markup;
+    const lines=[];for(let i=1;i<pin.items.length;i++){const a=pin.items[i-1],b=pin.items[i];lines.push(`M${a.x+a.width/2},${a.y+a.height} L${b.x+b.width/2},${b.y}`);}
+    const last=pin.items.at(-1),a={x:pin.side==='left'?last.x+last.width:last.x,y:last.y+last.height/2},b={x:pin.side==='left'?pin.connection.x:pin.connection.x+pin.connection.width,y:pin.connection.y+pin.connection.height/2},mid=(a.x+b.x)/2;
+    lines.push(`M${a.x},${a.y} C${mid},${a.y} ${mid},${b.y} ${b.x},${b.y}`);
+    const svg=box.querySelector('svg');svg.setAttribute('width',view.clientWidth);svg.setAttribute('height',view.clientHeight);svg.innerHTML=lines.map(d=>`<path d="${d}"/>`).join('');
+    const jump=id=>{if(state.branchId!==pin.branchId){state.branchId=pin.branchId;renderDetail();}selectNode(id,false);};
+    for(const button of cards.querySelectorAll('[data-pinned-node]'))button.onclick=()=>{const item=pin.items.find(item=>item.id===button.dataset.pinnedNode);if(item.node)jump(item.id);else{modal('Ancestors',item.members.map(id=>{const n=state.tree.nodes.find(n=>n.id===id);return `<button type="button" class="ancestor-option" data-ancestor="${esc(id)}">${esc(nodeName(n))}</button>`;}).join(''),null);for(const el of $$('[data-ancestor]'))el.onclick=()=>{$('#dialog').close();jump(el.dataset.ancestor);};}};
 }
 function applyCamera() {
     if (!state.tree) return;
@@ -771,6 +789,7 @@ async function refresh({ checkCloud = false } = {}) {
     }
     const [data, list, tree] = await Promise.all([api('/state'), api('/list?scope=' + encodeURIComponent(state.scope) + '&q=' + encodeURIComponent(state.query) + (checkCloud ? '&check=1' : '')), state.tree ? api('/trees/' + encodeURIComponent(state.tree.id) + '?view=' + (state.scope === 'archived' ? 'archived' : 'in-use')) : null]);
     if (id !== requestId || scope !== state.scope || document.body.classList.contains('session-dragging')) return;
+    const previousPath=route();
     const keepDetail=sameDetail(state.tree,tree),reading=state.tree&&!keepDetail?readingPosition():null,oldNode=selectedNode();
     state.data = data; state.list = list;
     state.selected = new Set([...state.selected].filter(id => list.items.some(i => i.id === id)||scope==='archived'&&(data.trashNative||[]).some(i=>'client:'+i.id===id)));
@@ -778,7 +797,12 @@ async function refresh({ checkCloud = false } = {}) {
     if (tree) {
         if(keepDetail)for(const path of state.tree.paths)path.metaVersion=tree.paths.find(p=>p.branchId===path.branchId)?.metaVersion;
         state.tree = tree.paths.length ? (keepDetail?Object.assign(state.tree,{sessionNameVersion:tree.sessionNameVersion}):tree) : null;
-        if (!state.tree) { clearRange(); render(); return; } if (!route()) state.branchId = tree.paths[0]?.branchId;
+        if (!state.tree) { clearRange(); render(); return; }
+        if(!route()){
+            const oldChats=new Set(previousPath?.messages.map(m=>m.id)||[]);
+            state.branchId=[...tree.paths].sort((a,b)=>b.messages.filter(m=>oldChats.has(m.id)).length-a.messages.filter(m=>oldChats.has(m.id)).length)[0]?.branchId;
+            camera.newView=true;
+        }
         if (state.nodeId&&!tree.nodes.some(n => n.id === state.nodeId)) state.nodeId = tree.nodes.find(n=>n.branchIds.includes(state.branchId)&&n.chatIds.some(id=>oldNode?.chatIds.includes(id)))?.id || oldNode?.parentIds.find(id=>tree.nodes.some(n=>n.id===id&&n.branchIds.includes(state.branchId))) || null;
         state.chats = new Set([...state.chats].filter(id => route()?.messages.some(m => m.id === id)));
     }
@@ -804,9 +828,9 @@ function clearRange() { state.chats.clear(); state.rangeStart = null; state.rang
 
 function trashDialog(target,count=1){
     const days=state.data.preferences?.trashRetentionDays||30;
-    modal('Move to Trash',`<p>${t('Discard {count} complete paths or trees?',{count})}</p><p class="dialog-copy">${t('Recoverable on this device for {days} days.',{days})}</p>`,async()=>{const result=await trashRequest('/trash',target,'trash');state.trashFeedback=(result.blocked||[]).map(e=>t(e.reason)).join('\n');state.tree=null;state.selected.clear();clearRange();},'Move to Trash');
+    modal('Move to Trash',`<p>${t('Discard {count} complete paths or trees?',{count})}</p><p class="dialog-copy">${t('Recoverable on this device for {days} days.',{days})}</p>`,async()=>{const result=await trashRequest('/trash',target,'trash');state.trashFeedback=(result.blocked||[]).map(e=>t(e.reason)).join('\n');if(!target.branchIds)state.tree=null;state.selected.clear();clearRange();},'Move to Trash');
 }
-function archivePath(){const p=route(),node=selectedNode();if(!node?.endBranchIds.includes(p.branchId))return;trashDialog({branchIds:[p.branchId],nodeId:node.id,version:state.tree.version});}
+function archivePath(){const p=route(),node=selectedNode();if(!node?.endBranchIds.includes(p.branchId))return;trashDialog({branchIds:[p.branchId],nodeId:node.id,version:state.tree.version,view:state.scope==='archived'?'archived':'in-use'});}
 function recoveryCategories(rows){
     return projectGroups(rows.flatMap(r=>(r.projectIds?.length?r.projectIds:[INBOX]).map(projectId=>({...r,projectId,updatedAt:r.at||''}))),state.data.projects);
 }
@@ -1068,7 +1092,7 @@ async function settings(options = {}) {
     } catch(e) { toast(e.message); }
 }
 function information() {
-    modal('Information', `<details open><summary>${t('Using Grove')}</summary><ul class="action-guide"><li>${t('Update reads your local sessions. Pull gets changes from your other devices. Push sends your changes after pulling.')}</li><li>${t('Activate opens the selected node and its preceding context in your tool. Deactivate is available at the active endpoint.')}</li><li>${t('A Session is a whole tree; a transcription is one client path; a node is a stretch of conversation. Pending means it has no node label yet.')}</li><li>${t('Renaming changes the Grove label. Your conversation keeps the same identity.')}</li></ul></details><details><summary>${t('Sync and recovery')}</summary><p>${t('Sessions are stored as readable files in your Git repository. Earlier versions remain in Git history.')}</p><p>${t('Changes made during upload remain queued for the next upload.')}</p><p>${t('Trash keeps a recovery copy on this device until its displayed expiry date.')}</p><p>${t('Discard reverts names, project assignments and node organization. Conversation history and active sessions are kept.')}</p></details><details><summary>${t('Smart organization')}</summary><p>${t('Smart organization names each session once, including existing sessions and forks. Manual names are preserved. Automatic node names are checked again when their range changes.')}</p><p>${t('Classification uses the first human request, project names and a short workspace hint. Node naming uses the first human request and last assistant reply in that node.')}</p><p>${t('Your API key and switches stay on this device. User messages are kept complete; long assistant replies are shortened in the middle.')}</p></details><details><summary>${t('Tokens and tools')}</summary><p>${t('Token counts estimate the selected conversation and recorded tool context. Model capacity and compaction thresholds come from available model settings.')}</p>${['lean','full','messages'].map(m=>`<p><strong>${t(modeName(m))}</strong> — ${contextCopy(m)}</p>`).join('')}<p>${t('Switching tools creates a new session. Thinking and attachments remain in the original.')}</p></details>${(state.data.plan?.pendingRecovery||[]).map(id=>`<button type="button" data-recover="${esc(id)}">${t('Recover interrupted operation')}</button>`).join('')}${state.data.conflicts.length?`<button type="button" id="review-sync-conflicts">${t('Review sync conflicts')}</button>`:''}`,null);
+    modal('Information', `<details open><summary>${t('Using Grove')}</summary><ul class="action-guide"><li>${t('Update reads your local sessions. Pull gets changes from your other devices. Push sends your changes after pulling.')}</li><li>${t('Activate opens the selected node and its preceding context in your tool. Deactivate is available at the active endpoint.')}</li><li>${t('A Session is a whole tree; a transcription is one client path; a node is a stretch of conversation. Pending means it has no node label yet.')}</li><li>${t('Renaming changes the Grove label. Your conversation keeps the same identity.')}</li><li>${t('Search in the detail header covers the whole Session tree. Choose a result to open its transcription and matching message.')}</li><li>${t('The prefix action previews names for active client sessions. It replaces its previous prefix and synchronizes client titles; Session and node labels stay independent.')}</li><li>${t('Offscreen ancestors stay connected at the graph edge. Select an ancestor card to return to it; a grouped card opens the hidden chain.')}</li></ul></details><details><summary>${t('Sync and recovery')}</summary><p>${t('Sessions are stored as readable files in your Git repository. Earlier versions remain in Git history.')}</p><p>${t('Changes made during upload remain queued for the next upload.')}</p><p>${t('Trash keeps a recovery copy on this device until its displayed expiry date.')}</p><p>${t('Discard reverts names, project assignments and node organization. Conversation history and active sessions are kept.')}</p></details><details><summary>${t('Smart organization')}</summary><p>${t('Smart organization names each session once, including existing sessions and forks. Manual names are preserved. Automatic node names are checked again when their range changes.')}</p><p>${t('Classification uses the first human request, project names and a short workspace hint. Node naming uses the first human request and last assistant reply in that node.')}</p><p>${t('Your API key and switches stay on this device. User messages are kept complete; long assistant replies are shortened in the middle.')}</p></details><details><summary>${t('Tokens and tools')}</summary><p>${t('Token counts estimate the selected conversation and recorded tool context. Model capacity and compaction thresholds come from available model settings.')}</p>${['lean','full','messages'].map(m=>`<p><strong>${t(modeName(m))}</strong> — ${contextCopy(m)}</p>`).join('')}<p>${t('Switching tools creates a new session. Thinking and attachments remain in the original.')}</p></details>${(state.data.plan?.pendingRecovery||[]).map(id=>`<button type="button" data-recover="${esc(id)}">${t('Recover interrupted operation')}</button>`).join('')}${state.data.conflicts.length?`<button type="button" id="review-sync-conflicts">${t('Review sync conflicts')}</button>`:''}`,null);
     const operation=state.data.cloud.operation;
     if (operation) $('#dialog-content').insertAdjacentHTML('beforeend', `<details id="transfer-diagnostics"><summary>${t('Last transfer')}</summary><dl><dt>${t('Elapsed')}</dt><dd>${Math.round(((operation.finishedAt||Date.now())-operation.startedAt)/1000)} s</dd>${operation.summary?`<dt>${t('Sessions checked')}</dt><dd>${operation.summary.checked||0}</dd><dt>${t('Items pushed')}</dt><dd>${operation.summary.published||0}</dd>`:''}</dl></details>`);
     if($('#review-sync-conflicts'))$('#review-sync-conflicts').onclick=()=>{$('#dialog').close();showPendingUploads(true);};
@@ -1111,6 +1135,40 @@ divider.onpointerup=divider.onpointercancel=()=>{delete divider.dataset.dragging
 divider.onkeydown=e=>{if(!['ArrowLeft','ArrowRight'].includes(e.key))return;e.preventDefault();localStorage.setItem('grove-pane-ratio',String((Number(localStorage.getItem('grove-pane-ratio'))||.5)+(e.key==='ArrowRight'?.05:-.05)));applyPanePreferences();};
 applyPanePreferences();
 $('#collect').onclick = updateSessions;
+function closeDetailSearch(clear=false){
+    clearTimeout(detailSearchTimer);const results=$('#detail-search-results');results.hidden=true;results.hidePopover?.();
+    if(clear){$('#detail-query').value='';$('#detail-search').classList.remove('open');$('#detail-search .search').hidden=true;$('#detail-search-toggle').hidden=false;$('#detail-search-toggle').setAttribute('aria-expanded','false');detailSearchResults=[];clearSearchMarks();}
+}
+function clearSearchMarks(){for(const el of $$('.chat.search-match'))el.classList.remove('search-match');for(const el of $$('mark[data-search]'))el.replaceWith(document.createTextNode(el.textContent));}
+function positionDetailSearch(){
+    const box=$('#detail-search-results');if(box.hidden)return;const r=$('#detail-search').getBoundingClientRect(),width=Math.min(420,innerWidth-24);
+    box.style.width=width+'px';box.style.left=Math.max(12,Math.min(innerWidth-width-12,r.right-width))+'px';box.style.top=(r.bottom+5)+'px';
+}
+function showDetailSearch(){
+    if(!state.tree)return;const query=$('#detail-query').value,{total,results}=searchTree(state.tree,query,state.branchId);detailSearchResults=results;
+    const box=$('#detail-search-results');if(!query.trim()){closeDetailSearch();clearSearchMarks();return;}
+    box.innerHTML=`<div class="search-count">${t('{count} results',{count:total})}</div>`+results.map((hit,index)=>{const p=state.tree.paths.find(p=>p.branchId===hit.branchId);return `<button type="button" data-search-result="${index}"><small>${esc(p?.transcriptionTitle||p?.originalTitle||p?.name)}</small>${esc(hit.snippet)}</button>`;}).join('');
+    box.hidden=false;if(box.showPopover&&!box.matches(':popover-open'))box.showPopover();positionDetailSearch();
+    for(const button of box.querySelectorAll('[data-search-result]'))button.onclick=()=>openSearchResult(detailSearchResults[Number(button.dataset.searchResult)]);
+}
+function openSearchResult(hit){
+    if(!hit||!state.tree)return;
+    const path=state.tree.paths.find(p=>p.branchId===hit.branchId);
+    if(!path||(hit.messageId&&!path.messages.some(m=>m.id===hit.messageId))||(hit.nodeId&&!path.nodeIds.includes(hit.nodeId))){showDetailSearch();return;}
+    closeDetailSearch();clearSearchMarks();clearRange();state.branchId=hit.branchId;state.nodeId=hit.nodeId||null;state.compactionId=null;
+    if(hit.messageId)state.expanded.add(hit.messageId);renderDetail();if(hit.nodeId)revealNode(hit.nodeId);
+    const card=hit.messageId&&$(`[data-message="${hit.messageId}"]`);if(!card){if(hit.nodeId)selectNode(hit.nodeId);return;}
+    card.classList.add('search-match');const query=$('#detail-query').value.trim().toLocaleLowerCase(),content=card.querySelector('.markdown');
+    if(query&&content){const walker=document.createTreeWalker(content,NodeFilter.SHOW_TEXT),texts=[];for(let n=walker.nextNode();n;n=walker.nextNode())texts.push(n);for(const node of texts){const at=node.textContent.toLocaleLowerCase().indexOf(query);if(at<0)continue;const range=document.createRange();range.setStart(node,at);range.setEnd(node,Math.min(node.textContent.length,at+query.length));const mark=document.createElement('mark');mark.dataset.search='';range.surroundContents(mark);}}
+    const align=()=>{const pane=$('#transcripts'),target=card.querySelector('mark[data-search]')||card;pane.scrollTo({top:pane.scrollTop+target.getBoundingClientRect().top-pane.getBoundingClientRect().top-12,behavior:'instant'});scheduleRibbons();};
+    align();requestAnimationFrame(()=>requestAnimationFrame(align));
+}
+$('#detail-search-toggle').onclick=()=>{const root=$('#detail-search');root.classList.add('open');$('#detail-search .search').hidden=false;$('#detail-search-toggle').hidden=true;$('#detail-search-toggle').setAttribute('aria-expanded','true');$('#detail-query').focus();if($('#detail-query').value)showDetailSearch();};
+$('#detail-query').oninput=()=>{clearTimeout(detailSearchTimer);detailSearchTimer=setTimeout(showDetailSearch,150);};
+$('#detail-query').onkeydown=e=>{if(e.key==='Escape'){closeDetailSearch(true);$('#detail-search-toggle').focus();}else if(e.key==='Enter'){e.preventDefault();showDetailSearch();if(detailSearchResults[0])openSearchResult(detailSearchResults[0]);}else if(e.key==='ArrowDown'){e.preventDefault();$('#detail-search-results [data-search-result]')?.focus();}};
+document.addEventListener('pointerdown',e=>{if(!e.target.closest('#detail-search,#detail-search-results')){closeDetailSearch();if(!$('#detail-query').value)closeDetailSearch(true);}});
+window.addEventListener('resize',positionDetailSearch);
+document.addEventListener('keydown',e=>{if(e.key==='Escape'&&!$('#detail-search-results').hidden){closeDetailSearch(true);$('#detail-search-toggle').focus();}});
 $('#search').oninput = e => { state.query = e.target.value; state.selected.clear(); clearTimeout(searchTimer); searchTimer = setTimeout(() => refresh().catch(e => toast(e.message)), 180); };
 $('#back').onclick = () => { ++requestId;cancelOpening();const target=state.tree?.projectId || INBOX;state.tree=null;clearRange();if(state.scope===PROJECTS)state.projectFocus=target;render();if(state.scope===PROJECTS&&listView?.entryProject!==target)focusProject(target);else if(listView)$('#session-list').scrollTo({top:listView.scroll,behavior:'instant'});listView=null;animateView($('#list-page')); };
 $('#source').onclick = showSource;
@@ -1134,6 +1192,22 @@ $('#graph-scroll').addEventListener('wheel', e => {
 }, { passive: false });
 // Window focus never performs remote I/O; Sync explicitly refreshes the cloud directory.
 window.addEventListener('resize', () => scheduleRibbons());
+async function prefixActiveTitles(){
+    if(!state.tree)return;const treeId=state.tree.id;
+    try{
+        let plan=await api('/trees/'+treeId+'/title-prefix');
+        modal('Prefix active session titles',field('Prefix','prefix')+'<div id="prefix-preview"></div>',async form=>{
+            const input=$('[name=prefix]');input.disabled=true;
+            try{await trashRequest('/trees/'+treeId+'/title-prefix',{prefix:form.get('prefix'),version:plan.version},'prefix');}
+            catch(error){plan=await api('/trees/'+treeId+'/title-prefix');preview();throw error;}finally{input.disabled=false;}
+        },'Apply');
+        const preview=()=>{const input=$('[name=prefix]'),prefix=input.value.trim().replace(/^\[([^\[\]]+)\]$/,'$1').trim(),valid=prefix.length>0&&prefix.length<=40&&!/[\[\]\x00-\x1f\x7f]/.test(prefix)&&plan.available&&plan.rows.every(row=>prefix.length+row.baseName.length+3<=200);$('#dialog-submit').disabled=working||!valid;
+            $('#prefix-preview').innerHTML=(plan.rows.length?`<ul class="prefix-preview-list">${plan.rows.map(row=>`<li><small>${esc(row.name)}</small><span>${esc(prefix?'['+prefix+'] '+row.baseName:row.baseName)}</span>${row.available?'':`<strong>${t('Client unavailable')}</strong>`}</li>`).join('')}</ul>`:`<p>${t('There are no active sessions in this tree.')}</p>`);
+        };
+        $('[name=prefix]').maxLength=42;$('[name=prefix]').oninput=preview;preview();$('[name=prefix]').focus();
+    }catch(error){toast(error.message);}
+}
+$('#prefix-active').onclick=prefixActiveTitles;
 async function renameTranscription(path,name){
     const operation={id:'rename-'+Date.now(),action:'rename',startedAt:Date.now()};
     showOperation('rename',{...operation,state:'running',progress:{phase:'Updating client title'}});

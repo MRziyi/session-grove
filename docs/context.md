@@ -2,6 +2,12 @@
 
 Grove stores recorded history and organization separately. A node is a labeled range on a path, not a replacement for the original messages. Conversation branching does not isolate workspace files, editor tabs or other context supplied by a client; use separate working folders when file isolation is required.
 
+## Titles and navigation
+
+Logical Session names, node labels and native transcription titles are independent. The detail header's prefix action targets active client copies in the tree, previews `[prefix] original title`, and replaces a prefix previously managed by that action. Codex uses its existing name/refresh channel; Claude uses the pinned SDK's title metadata API. A batch reads and verifies client titles before saving Grove metadata, and attempts conditional rollback on failure without overwriting intervening client edits.
+
+Detail search spans the loaded Session tree, deduplicates shared messages, identifies each result's transcription path and opens the matching message. It does not send a naming request. Offscreen ancestor cards follow the branch being previewed; omitted ancestors remain accessible through the aggregate card while sibling branches are cropped normally.
+
 ## Activation and conversion
 
 Activation previews and materializes the same path prefix through the selected node. A following compaction belongs to the next context window and is excluded. Boundaries with unresolved tool calls, unsupported history or unavailable attachments fail explicitly. Fresh continuations have independent native identities and do not overwrite the source conversation.

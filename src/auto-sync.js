@@ -23,10 +23,13 @@ export class AutoSync {
         clearTimeout(this.interval); this.interval = null; this.nextFallbackAt = null;
         this.reconcileTimer();
     }
-    reconcileTimer(dirty = this.cloud.dirtyIds().length > 0) {
-        const p = preferences(this.store);
-        const enabled = (dirty||this.trashPending()) && !this.running && !this.closed && !this.needsReview && p.autoUploadEnabled && this.store.local('syncStarted') !== false && this.unlocked && !!this.readConfig()?.url;
-        if (!enabled) { clearTimeout(this.interval); this.interval=null; this.nextFallbackAt=null; return; }
+    reconcileTimer(dirty) {
+        const p=preferences(this.store);
+        // Disabled/busy timers do not need an all-library sync fingerprint pass.
+        const available=!this.running&&!this.closed&&!this.needsReview&&p.autoUploadEnabled&&this.store.local('syncStarted')!==false&&this.unlocked&&!!this.readConfig()?.url;
+        if(!available){clearTimeout(this.interval);this.interval=null;this.nextFallbackAt=null;return;}
+        const pending=(dirty??(this.cloud.dirtyIds().length>0))||this.trashPending();
+        if(!pending){clearTimeout(this.interval);this.interval=null;this.nextFallbackAt=null;return;}
         if (this.interval) return;
         this.nextFallbackAt = Date.now() + p.autoUploadMinutes * 60000;
         this.interval=setTimeout(()=>{this.interval=null;this.nextFallbackAt=null;this.fallback().catch(()=>{}).finally(()=>this.reconcileTimer());},p.autoUploadMinutes*60000);

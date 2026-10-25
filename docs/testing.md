@@ -24,11 +24,12 @@ The Git and browser partitions are complete and nonoverlapping; `test/ci-plan.te
 | History/identity | Native and Grove forks; shared, intermediate and endpoint prefixes; missing/corrupt/unsupported references; compressed segments and aliases; exact source preservation. |
 | Activation | Root/middle/endpoint continuation; compaction before/after cutoff; unresolved tools; additive activation; deactivate/reactivate; active-file and collision protections; client links. |
 | Organization | Manual/automatic names; no-op edits; partial/shared nodes; split boundaries; project moves/folding; date modes; inline editor save/cancel/stale rejection. |
+| Active title prefixes | Multiple paths/agents; client name synchronization; prefix replacement and idempotence; unavailable clients; stale preview; concurrent manual names; lost write responses; partial rollback; conversation and logical-name preservation. |
 | Smart Organization | Evidence isolation; request limits; opt-in defaults; manual ownership; imported completion; sync races; cached retries; Discard pause across restart/new messages and explicit resume. |
 | Discard | Synced and never-synced organization edits; single/batch trees; stale selection and concurrent metadata; new messages/forks; unrelated project edits; no native writes or deactivation; retained client titles; incompatible project baselines. |
-| Trash/recovery | Path/tree removal; shared ancestry; compressed source/index paths; backup verification; partial failures; expiry; repeat restore; no accidental activation. |
+| Trash/recovery | Path/tree removal; shared ancestry; compressed source/index paths; backup verification; partial failures; expiry; repeat restore; no accidental activation; remain in a surviving tree; stale background reclamation plans. |
 | Git | Initial/no-op Pull/Push; multiple devices; Unicode and byte fidelity; edits during transfer; offline verified baselines; cancellation/errors; archive/deletion propagation; conflicts. |
-| UI/service | First use; optional sync; narrow/desktop layout; selection controls; drag targets; actual progress; failure dismissal; initialization/reconnect; terminal-independent service; startup setting rollback. |
+| UI/service | First use; optional sync; narrow/desktop layout; whole-tree search and result navigation; right-side message selection; pinned ancestor chain and aggregate navigation; drag targets; actual progress; failure dismissal; initialization/reconnect; terminal-independent service; startup setting rollback. |
 
 ## Real-library checks
 
@@ -39,6 +40,8 @@ Cover representative standalone sessions, branching trees, both available agents
 ## Performance
 
 Use `npm run bench:store`, `npm run bench:local`, `npm run bench:ui` and `npm run bench:git`. Record cold/warm timings, corpus size, CPU/heap, filesystem/subprocess cost and event-loop responsiveness. CPU and I/O are resource proxies, not direct energy measurements. Optimize measured hotspots while retaining real progress for unavoidable work.
+
+For Trash, compare the same consistent library backup and path selection before and after a change. Include the following state refresh and measure event-loop heartbeat gaps separately from end-to-end latency. Tests that omit native copies do not measure native archive/removal costs. Check cached sync digests against fresh calculations across edits, forks, shared revisions, retention changes, rollback and reclamation.
 
 ## Release checks
 

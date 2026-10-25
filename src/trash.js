@@ -3,8 +3,9 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { gzipSync, gunzipSync, gunzip, gzip } from 'node:zlib';
 import { assert, atomic, id, now, hash } from './util.js';
-import { retainedGraph, bodyRefs, withForkMetadata } from './retention.js';
+import { retainedGraph, bodyRefs, addBodyRefs, withForkMetadata } from './retention.js';
 import { promisify } from 'node:util';
+import {Worker} from 'node:worker_threads';
 import { setImmediate as yieldTask } from 'node:timers/promises';
 import { preferences } from './preferences.js';
 export const trashState = (store) => store.local('trashState') || { schema: 1, events: [] };
@@ -210,7 +211,7 @@ function* trashSteps(store, branchIds, treeIds = [], { rescueFor = null, transie
         store.local('trashEntries', [...(store.local('trashEntries') || []), entry]);
         if (!rescueFor)
             store.local('trashPending', [...(store.local('trashPending') || []), event]);
-        store.invalidate();
+        store.invalidate({kind:'trash',branchIds:[...event.branchIds,...(event.treeIds||[])]});
     });
     return entry;
 }
@@ -295,7 +296,7 @@ export function applyTrashState(store, state) {
                 : e,
         ),
     );
-    store.invalidate();
+    store.invalidate({kind:'trash',branchIds:state.events.flatMap(e=>[...e.branchIds,...(e.treeIds||[])])});
 }
 function pruneCompletedJournals(store) {
     const directory = path.join(store.root, 'operations');
@@ -309,11 +310,10 @@ function pruneCompletedJournals(store) {
         atomic(file, JSON.stringify({ ...metadata, files, backupsPruned: true }));
     }
 }
-export function cleanupLocal(store) {
-    if (store.transferReaders) { store.cleanupDeferred = true; return { records: 0, deferred: true }; }
-    store.cleanupDeferred = false;
+// Preparation is read-only and can run against a consistent SQLite snapshot.
+export function prepareCleanupPlan(store) {
     const removed = deletedIds(store);
-    if (!removed.size) return { records: 0 };
+    if (!removed.size) return null;
     const graph = {
         schema: 3,
         projects: store.all('project'),
@@ -326,61 +326,57 @@ export function cleanupLocal(store) {
             withForkMetadata(graph, (h) => store.objectStatement.get(h)?.body, claudeFork, removed),
             removed,
         ),
-        refs = new Set(bodyRefs(kept));
+        refs = addBodyRefs(kept);
     // Live trees keep their last acknowledged bodies available for local Discard.
     // Removed trees recover from Trash instead, so their body reclamation still works.
-    for(const row of store.db.prepare("SELECT key,body FROM local WHERE key LIKE 'git-undo:%'").all()){
+    for(const row of store.db.prepare("SELECT key,body FROM local WHERE key LIKE 'git-undo:%'").iterate()){
         const rootId=row.key.split(':').at(-1);
         if(removed.has(rootId)||!store.find('branch',rootId))continue;
-        const baseline=JSON.parse(row.body);if(baseline?.graph)for(const ref of bodyRefs(baseline.graph))refs.add(ref);
+        const baseline=JSON.parse(row.body);if(baseline?.graph)addBodyRefs(baseline.graph,refs);
     }
-    store.transaction(() => {
-        for (const r of kept.revisions)
-            if (!store.getStatement.get('revision', r.id)) store.put('revision', r);
-        for (const b of kept.branches) if (b.trashDependency) store.put('branch', b);
-        const dependencies = new Set(kept.branches.map((b) => b.id));
-        for (const id of removed)
-            if (!dependencies.has(id) && store.getStatement.get('branch', id)) {
-                const b = store.get('branch', id);
-                store.put('branch', { ...b, trashed: true, nodeHead: null, layoutHead: null });
-            }
-        const result = store.db
-            .prepare('DELETE FROM objects WHERE hash NOT IN (SELECT value FROM json_each(?))')
-            .run(JSON.stringify([...refs]));
-        store.invalidate();
-        store.parseCache.clear();
-        store.parseBytes = 0;
-        store.recordCache.clear();
-        store.recordBytes = 0;
-        // Summaries of fully retained immutable revisions are still valid. Clearing
-        // the whole library makes the next state/sync read reparse every session.
-        // Prefix-only ancestors must lose their full-history summaries.
-        const completeRevisions=new Set(kept.revisions.filter(r=>kept.retention.ranges[r.id]===r.refs.length).map(r=>r.id));
-        for(const key of store.summaryCache.keys())if(!completeRevisions.has(key.slice(key.indexOf(':')+1)))store.summaryCache.delete(key);
-        store.db.prepare('DELETE FROM summaries WHERE id NOT IN (SELECT value FROM json_each(?))').run(JSON.stringify([...completeRevisions]));
-        store.local(
-            'instances',
-            store.instances().map((i) => (removed.has(i.branchId) ? { ...i, baseline: null } : i)),
-        );
-        const retainedRevisions = kept.revisions.map((r) => r.id),
-            retainedNodes = kept.nodes.map((n) => n.id),
-            retainedLayouts = kept.layouts.map((l) => l.id);
-        for (const [kind, ids] of [
-            ['revision', retainedRevisions],
-            ['node', retainedNodes],
-            ['layout', retainedLayouts],
-        ])
-            store.db
-                .prepare(
-                    'DELETE FROM entities WHERE kind=? AND id NOT IN (SELECT value FROM json_each(?))',
-                )
-                .run(kind, JSON.stringify(ids));
-        store.local('lastTrashCleanup', { at: now(), records: result.changes });
+    const exists=store.db.prepare('SELECT 1 FROM entities WHERE kind=? AND id=?');
+    const dependencies=new Set(kept.branches.map(b=>b.id));
+    return {
+        removed:[...removed],
+        revisions:kept.revisions.filter(r=>!exists.get('revision',r.id)),
+        branches:[...kept.branches.filter(b=>b.trashDependency),...[...removed].filter(id=>!dependencies.has(id)&&exists.get('branch',id)).map(id=>({...store.get('branch',id),trashed:true,nodeHead:null,layoutHead:null}))],
+        unused:store.db.prepare('SELECT hash FROM objects WHERE hash NOT IN (SELECT value FROM json_each(?))').all(JSON.stringify([...refs])).map(row=>row.hash),
+        completeRevisions:kept.revisions.filter(r=>kept.retention.ranges[r.id]===r.refs.length).map(r=>r.id),
+        retained:{revision:kept.revisions.map(r=>r.id),node:kept.nodes.map(n=>n.id),layout:kept.layouts.map(l=>l.id)}
+    };
+}
+function applyCleanupPlan(store,plan){
+    if(!plan)return {records:0};
+    let count=0;
+    store.transaction(()=>{
+        for(const revision of plan.revisions)store.put('revision',revision);
+        for(const branch of plan.branches)store.put('branch',branch);
+        for(let offset=0;offset<plan.unused.length;offset+=512)count+=store.db.prepare('DELETE FROM objects WHERE hash IN (SELECT value FROM json_each(?))').run(JSON.stringify(plan.unused.slice(offset,offset+512))).changes;
+        store.invalidate({kind:'cleanup'});store.parseCache.clear();store.parseBytes=0;store.recordCache.clear();store.recordBytes=0;
+        const complete=new Set(plan.completeRevisions);
+        for(const key of store.summaryCache.keys())if(!complete.has(key.slice(key.indexOf(':')+1)))store.summaryCache.delete(key);
+        store.db.prepare('DELETE FROM summaries WHERE id NOT IN (SELECT value FROM json_each(?))').run(JSON.stringify(plan.completeRevisions));
+        const removed=new Set(plan.removed);store.local('instances',store.instances().map(i=>removed.has(i.branchId)?{...i,baseline:null}:i));
+        for(const [kind,ids]of Object.entries(plan.retained))store.db.prepare('DELETE FROM entities WHERE kind=? AND id NOT IN (SELECT value FROM json_each(?))').run(kind,JSON.stringify(ids));
+        store.local('lastTrashCleanup',{at:now(),records:count});
     });
-    pruneCompletedJournals(store);
-    if (store.local('lastTrashCleanup').records)
-        store.db.exec('PRAGMA wal_checkpoint(PASSIVE)');
-    return store.local('lastTrashCleanup');
+    pruneCompletedJournals(store);if(count)store.db.exec('PRAGMA wal_checkpoint(PASSIVE)');return store.local('lastTrashCleanup');
+}
+export function cleanupLocal(store){
+    if(store.transferReaders){store.cleanupDeferred=true;return {records:0,deferred:true};}
+    store.cleanupDeferred=false;return applyCleanupPlan(store,prepareCleanupPlan(store));
+}
+export async function cleanupLocalAsync(store,{onProgress=async()=>{}}={}){
+    if(store.transferReaders){store.cleanupDeferred=true;return {records:0,deferred:true};}
+    await onProgress({phase:'Checking retained history',completed:0,total:null});
+    const version=store.version,cloudVersion=store.cloudVersion,changes=store.db.prepare('SELECT total_changes() n').get().n;
+    const worker=new Worker(new URL('./cleanup-worker.js',import.meta.url),{workerData:{root:store.root},execArgv:[]});
+    try{
+        const plan=await new Promise((resolve,reject)=>{let done=false;worker.on('message',value=>{done=true;value.error?reject(Error(value.error)):resolve(value.plan);});worker.on('error',reject);worker.on('exit',code=>{if(!done)reject(Error('Local cleanup worker stopped ('+code+').'));});});
+        await onProgress({phase:'Removing unused local records',completed:0,total:null});
+        if(store.version!==version||store.cloudVersion!==cloudVersion||store.transferReaders||store.db.prepare('SELECT total_changes() n').get().n!==changes){store.cleanupDeferred=true;await onProgress({phase:'Storage cleanup deferred',completed:0,total:null});return {records:0,deferred:true};}
+        store.cleanupDeferred=false;return applyCleanupPlan(store,plan);
+    }finally{await worker.terminate();}
 }
 export function expireTrash(store, at = Date.now()) {
     let changed = false;

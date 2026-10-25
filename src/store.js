@@ -35,7 +35,7 @@ export class Store {
       CREATE TABLE IF NOT EXISTS local (key TEXT PRIMARY KEY, body TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS instance_baselines (hash TEXT PRIMARY KEY, body TEXT NOT NULL);`);
         fs.chmodSync(path.join(root, 'grove.sqlite'), 0o600);
-        this.version = 0; this.cloudVersion = 0; this.cloudCache = new Map(); this.memoCache = new Map(); this.parseCache = new Map(); this.parseBytes = 0; this.summaryCache = new Map(); this.recordCache = new Map(); this.recordBytes = 0;
+        this.syncFingerprintDeps = new Map(); this.version = 0; this.cloudVersion = 0; this.cloudCache = new Map(); this.memoCache = new Map(); this.parseCache = new Map(); this.parseBytes = 0; this.summaryCache = new Map(); this.recordCache = new Map(); this.recordBytes = 0;
         this.getStatement = this.db.prepare('SELECT body FROM entities WHERE kind=? AND id=?');
         this.entityById = this.db.prepare('SELECT body FROM entities WHERE id=?');
         this.objectStatement = this.db.prepare('SELECT body FROM objects WHERE hash=?');
@@ -48,7 +48,29 @@ export class Store {
         this.summaryWrite = this.db.prepare('INSERT OR REPLACE INTO summaries VALUES (?,?,5,?)');
         initializeOrganization(this);
     }
-    invalidate() { this.version++; this.memoCache.clear(); this.graphCache=null; }
+    invalidate(change = null) {
+        const fingerprints=new Map();
+        if(change&&this.syncFingerprintDeps.size&&['branch','project','trash','cleanup'].includes(change.kind)){
+            const events=[...(this.local('trashState')?.events||[]),...(this.local('trashPending')||[])];
+            let retention=events.some(e=>e.branchIds?.length||e.treeIds?.length);
+            if(!retention&&this.localArchivesOnly){
+                const branches=this.all('branch'),byId=new Map(branches.map(b=>[b.id,b])),archived=new Set(this.all('project').filter(p=>p.archived).map(p=>p.id));
+                for(const b of branches){
+                    if(b.synthetic||b.trashed||b.archived||b.excluded||b.background||b.scheduled||archived.has(b.projectId))continue;
+                    let parent=byId.get(b.parentId);const seen=new Set();while(parent&&!seen.has(parent.id)){seen.add(parent.id);if(parent.archived||archived.has(parent.projectId)){retention=true;break;}parent=byId.get(parent.parentId);}if(retention)break;
+                }
+            }
+            if([...this.syncFingerprintDeps.values()].some(deps=>deps.retention!==retention))this.syncFingerprintDeps.clear();
+        }
+        if(change){
+            const related=change.branchIds||[change.value?.parentId,change.value?.branchId,change.value?.rootId].filter(Boolean),affected=new Set(),revisions=new Set();
+            for(const [id,deps]of this.syncFingerprintDeps)if(deps.entities.has(change.kind+':'+change.id)||related.some(key=>deps.entities.has('branch:'+key))){affected.add(id);for(const revision of deps.revisions)revisions.add(revision);}
+            // A shared revision can affect retention in an otherwise separate tree.
+            for(const [id,deps]of this.syncFingerprintDeps)if(affected.has(id)||[...deps.revisions].some(revision=>revisions.has(revision)))this.syncFingerprintDeps.delete(id);
+            for(const id of this.syncFingerprintDeps.keys()){const key='fingerprint:'+id;if(this.memoCache.has(key))fingerprints.set(key,this.memoCache.get(key));}
+        }else this.syncFingerprintDeps.clear();
+        this.version++;this.memoCache.clear();for(const [key,value]of fingerprints)this.memoCache.set(key,value);this.graphCache=null;
+    }
     memo(key, fn) { if (!this.memoCache.has(key)) this.memoCache.set(key, fn()); return this.memoCache.get(key); }
     parsed(revisionId, agent, end) {
         const key = agent + ':' + revisionId + (end===undefined?'':':'+end);
@@ -108,7 +130,7 @@ export class Store {
     all(kind) { return this.allStatement.all(kind).map(x => JSON.parse(x.body)); }
     get(kind, key) { const row = this.getStatement.get(kind, key); assert(row, `${kind} 不存在`, 404); return JSON.parse(row.body); }
     find(kind, key) { const row = this.getStatement.get(kind, key); return row ? JSON.parse(row.body) : undefined; }
-    put(kind, value) { if(this.entityWrite.run(kind, value.id, JSON.stringify(value)).changes){if(kind==='revision')this.graphProjections=null;this.invalidate();} return value; }
+    put(kind, value) { if(this.entityWrite.run(kind, value.id, JSON.stringify(value)).changes){if(kind==='revision')this.graphProjections=null;this.invalidate({kind,id:value.id,value});} return value; }
     checkpointOrganization(id){checkpointOrganization(this,id);}
     checkpointProject(id){for(const root of new Set(this.all('branch').filter(b=>b.projectId===id).map(b=>rootOf(this,b.id).id)))this.checkpointOrganization(root);}
     local(key, value, options = {}) {
@@ -141,7 +163,7 @@ export class Store {
                         this.localWrite.run(key,JSON.stringify(rows));
                         const kept=new Set(rows.map(i=>i.baselineRef).filter(Boolean));
                         for(const ref of new Set(this.instanceCache.map(i=>i.baselineRef).filter(Boolean)))if(!kept.has(ref))this.db.prepare('DELETE FROM instance_baselines WHERE hash=?').run(ref);
-                        this.instanceCache=rows.map((row,index)=>({...row,baseline:value[index].baseline}));this.invalidate();
+                        this.instanceCache=rows.map((row,index)=>({...row,baseline:value[index].baseline}));this.invalidate({kind:'instances'});
                     };
                     if(this.db.isTransaction)persist();else this.transaction(persist);
                 }

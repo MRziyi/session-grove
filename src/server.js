@@ -1,3 +1,4 @@
+import {PrefixTitles} from './prefix-titles.js';
 import {conflictItems,resolveConflicts,repairInheritedProjectConflicts,clearConflictFailure,conflictId} from './conflicts.js';
 import {TranscriptionTitles} from './transcription-titles.js';
 import {Autostart} from './autostart.js';
@@ -5,7 +6,7 @@ import {installedClientLinks} from './client-links.js';
 import {repairLegacyRecoveries} from './recovery-lineage.js';
 import { discardChanges } from './discard-changes.js';
 import { refreshNativeClients } from './client-refresh.js';
-import {stageTrashAsync,restoreTrashAsync,expireTrash,cleanupLocal,isTrashed} from './trash.js';
+import {stageTrashAsync,restoreTrashAsync,expireTrash,cleanupLocal,cleanupLocalAsync,isTrashed} from './trash.js';
 import {nativeTrashCandidates,moveNativeToRecovery,deleteRecoveryCopies,restoreRecoveryCopiesAsync} from './trash-actions.js';
 import os from 'node:os';
 import { recordPreview } from './record-preview.js';
@@ -39,7 +40,7 @@ export function createApp({ root, roots, guard, demo = false, startupOptions = {
     const store = new Store(root), native = new Native(store, { roots, guard }), token = randomBytes(32).toString('hex');
     const lineageRepair=repairLegacyRecoveries(store);
     const repairedConflicts=repairInheritedProjectConflicts(store);
-    const webAssets = new Map(['index.html', 'app.js', 'chat-selection.js', 'library-view.js', 'session-drag.js', 'inline-name.js', 'select.js', 'markdown.js', 'i18n.js', 'style.css'].map(file => [file, fs.readFileSync(path.join(webRoot, file))]));
+    const webAssets = new Map(['index.html', 'app.js', 'graph-ancestors.js', 'tree-search.js', 'chat-selection.js', 'library-view.js', 'session-drag.js', 'inline-name.js', 'select.js', 'markdown.js', 'i18n.js', 'style.css'].map(file => [file, fs.readFileSync(path.join(webRoot, file))]));
     const configFile = path.join(root, 'git-sync.json');
     const diagnostics = new Diagnostics(root);
     if(lineageRepair.repaired.length||lineageRepair.skipped.length)diagnostics.record('recovery-lineage-repair',lineageRepair);
@@ -66,6 +67,7 @@ export function createApp({ root, roots, guard, demo = false, startupOptions = {
     const operation = (kind, value) => { for (const res of streams) res.write('event: operation\ndata: ' + JSON.stringify({kind, ...value}) + '\n\n'); };
     autoSync.onOperation = value => {operation('sync', {...value, status:autoSync.status()});if(value.state!=='running')intelligence.observe();};
     const intelligence = new Intelligence(store, { transcriptions:new TranscriptionTitles(store,native,demo?{support:()=>({supported:false,reason:'Transcription updates are unavailable in demo mode.'})}:{}), onChange: id => autoSync.schedule([id]), onStatus: value => operation('intelligence', value), canApply: () => !autoSync.running && !capturePromise && !trashPromise && !discardPromise && !transcriptionPromise && !stopping });
+    const prefixTitles=new PrefixTitles(store,native,intelligence.transcriptions);
     const timing = () => ({ discardOperation, intelligence: intelligence.status(), trashOperation, appVersion: VERSION, serverNow: Date.now(), stateVersion: diagnostics.startedAt + ':' + store.version + ':' + store.cloudVersion, update: { nextRunAt: nextCaptureAt, lastRunAt: lastCaptureAt, started: !!store.local('localUpdateStarted'), operation: updateOperation } });
     let expiryTimer;const configureExpiry=()=>{clearTimeout(expiryTimer);const entries=expireTrash(store),next=entries.filter(e=>!e.expired).map(e=>Date.parse(e.expiresAt)).sort((a,b)=>a-b)[0];if(next){expiryTimer=setTimeout(configureExpiry,Math.max(1000,Math.min(2147483647,next-Date.now())));expiryTimer.unref();}};configureExpiry();
     const trashSnapshot = () => ({ trashEntries:(store.local('trashEntries')||[]).filter(e=>!e.expired&&!e.restoredAt).map(e=>({...e,projectIds:e.projectIds||[...new Set(e.branchIds.map(id=>store.find('branch',id)?.projectId||INBOX_ID))]})), trashNative:nativeTrashCandidates(store) });
@@ -88,7 +90,7 @@ export function createApp({ root, roots, guard, demo = false, startupOptions = {
             assert(!req.headers['sec-fetch-site'] || ['same-origin', 'none'].includes(req.headers['sec-fetch-site']), '不允许跨站请求', 403);
             const url = new URL(req.url, `http://${expected}`), route = url.pathname;
             if (req.method === 'GET' && route === '/api/service') return send(200, { pid: process.pid, instance, stopping });
-            if (req.method === 'GET' && ['/', '/app.js', '/chat-selection.js', '/library-view.js', '/session-drag.js', '/inline-name.js', '/i18n.js', '/select.js', '/markdown.js', '/style.css'].includes(route)) {
+            if (req.method === 'GET' && ['/', '/app.js', '/graph-ancestors.js', '/tree-search.js', '/chat-selection.js', '/library-view.js', '/session-drag.js', '/inline-name.js', '/i18n.js', '/select.js', '/markdown.js', '/style.css'].includes(route)) {
                 const file = route === '/' ? 'index.html' : route.slice(1);
                 return send(200, webAssets.get(file), file.endsWith('.css') ? 'text/css' : file.endsWith('.js') ? 'text/javascript' : 'text/html; charset=utf-8');
             }
@@ -213,7 +215,7 @@ export function createApp({ root, roots, guard, demo = false, startupOptions = {
                 const ids=requestedTrees.length?[...new Set(requestedTrees.flatMap(id=>treeMembers(store,id).filter(b=>!b.synthetic&&!isTrashed(store,b.id)&&(body.view==='archived'?archived(b):!archived(b))&&(!activeAgent||b.agent===activeAgent)).map(b=>b.id)))]:body.branchIds||[];
                 assert(ids.length,'Select sessions first.');
                 const treeIds=requestedTrees.filter(id=>treeMembers(store,id).filter(b=>!b.synthetic&&!isTrashed(store,b.id)).every(b=>ids.includes(b.id)));
-                if(!requestedTrees.length){assert(ids.length===1,'Select one complete path.');const graph=store.treeGraph(ids[0],'all');assert(graph.version===body.version&&graph.nodes.some(n=>n.id===body.nodeId&&n.endBranchIds.includes(ids[0])),'Select a complete session endpoint.',409);}
+                if(!requestedTrees.length){assert(ids.length===1,'Select one complete path.');const views=body.view==='archived'?['archived','all']:['in-use','all'];assert(views.some(view=>{const graph=store.treeGraph(ids[0],view);return graph.version===body.version&&graph.nodes.some(n=>n.id===body.nodeId&&n.endBranchIds.includes(ids[0]));}),'Select a complete session endpoint.',409);}
                 const selectedIds=new Set(requestedTrees.length?requestedTrees.flatMap(id=>treeMembers(store,id).filter(b=>!b.synthetic&&!isTrashed(store,b.id)).map(b=>b.id)):ids);
                 assert(!store.instances().some(i=>selectedIds.has(i.branchId)&&isActive(i)),'Deactivate all active sessions in the selection before moving it to Trash.',409);
                 const entry=await runTrash('trash',async report=>{
@@ -222,8 +224,8 @@ export function createApp({ root, roots, guard, demo = false, startupOptions = {
                     const entry=await stageTrashAsync(store,ids,treeIds,{onProgress:report});
                     const copies=store.instances().filter(i=>ids.includes(i.branchId)&&i.file&&fs.existsSync(i.file));
                     const cleanup=copies.length?await moveNativeToRecovery(store,native,copies.map(i=>i.id),{onProgress:report,deferCleanup:true}):{blocked:[]};
-                    await report({phase:'Removing unused local records',completed:0,total:null});cleanupLocal(store);
-                    configureExpiry();autoSync.reconcileTimer();return {...entry,blocked:cleanup.blocked};
+                    await cleanupLocalAsync(store,{onProgress:report});
+                    await report({phase:'Updating sync status',completed:0,total:null});configureExpiry();autoSync.reconcileTimer(true);return {...entry,blocked:cleanup.blocked};
                 });return send(202,entry);
             }
             if(req.method==='POST'&&route==='/api/trash/restore'){const result=await runTrash('restore',report=>restoreTrashAsync(store,body.id,{onProgress:report}));repairLegacyRecoveries(store);autoSync.schedule();return send(201,result);}
@@ -369,6 +371,12 @@ export function createApp({ root, roots, guard, demo = false, startupOptions = {
                 return { changed: members.filter(b => !b.synthetic).length, clientRefresh,branchIds:members.filter(b=>!b.synthetic).map(b=>b.id),projectIds:[...new Set(members.map(b=>b.projectId||INBOX_ID))] };
                 });return send(200,managed);
             }
+            const prefixRoute=route.match(/^\/api\/trees\/([^/]+)\/title-prefix$/);
+            if(prefixRoute&&req.method==='GET')return send(200,prefixTitles.plan(prefixRoute[1]));
+            if(prefixRoute&&req.method==='POST'){
+                const result=await runTrash('prefix',report=>prefixTitles.apply(prefixRoute[1],body.prefix,body.version,{onProgress:report}));
+                autoSync.schedule(result.branchIds);return send(200,result);
+            }
             const transcription = route.match(/^\/api\/branches\/([^/]+)\/transcription-title$/);
             if(req.method==='POST'&&transcription){
                 const branch=store.get('branch',transcription[1]),name=typeof body.name==='string'?body.name.trim():'';
@@ -497,7 +505,7 @@ export function createApp({ root, roots, guard, demo = false, startupOptions = {
     }
     configureCapture();
     server.on('close', () => { clearInterval(interval);clearTimeout(expiryTimer); autoSync.close(); store.close(); });
-    const app = { server, store, native, autoSync, diagnostics, settings, intelligence, autostart, token, instance, quiesce() {
+    const app = { server, store, native, prefixTitles, autoSync, diagnostics, settings, intelligence, autostart, token, instance, quiesce() {
         stopping = true; intelligence.close(); clearTimeout(interval);clearTimeout(expiryTimer); autoSync.closed = true;
         clearTimeout(autoSync.timer); clearTimeout(autoSync.retryTimer); clearTimeout(autoSync.interval);
         if (settings.job?.state !== 'running') autoSync.cloud.connection?.controller?.abort(new Error('Server is stopping.'));

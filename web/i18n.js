@@ -1,5 +1,33 @@
 let language = localStorage.getItem('grove-language') === 'zh' ? 'zh' : 'en';
 const dictionary = {
+"Search in the detail header covers the whole Session tree. Choose a result to open its transcription and matching message.":"详情页标题栏的搜索覆盖整棵 Session 树。选择结果即可打开所属 Transcription 并定位到匹配消息。",
+"The prefix action previews names for active client sessions. It replaces its previous prefix and synchronizes client titles; Session and node labels stay independent.":"批量前缀操作会预览已激活客户端会话的名称，替换此前由此功能添加的前缀并同步客户端标题；Session 和节点名称保持独立。",
+"Offscreen ancestors stay connected at the graph edge. Select an ancestor card to return to it; a grouped card opens the hidden chain.":"视窗外的祖先节点会保留在图的边缘并继续连线。点击祖先卡片可返回该节点，点击汇总卡片可查看隐藏的祖先链。",
+"Checking retained history":"正在检查保留历史",
+"Storage cleanup deferred":"空间清理已排队",
+"Updating sync status":"正在更新同步状态",
+"Prefix":"前缀",
+"Apply":"应用",
+"Client unavailable":"客户端不可用",
+"There are no active sessions in this tree.":"此树没有已激活的会话。",
+"Reading client titles":"正在读取客户端名称",
+"Updating client titles":"正在更新客户端名称",
+"Refreshing client titles":"正在刷新客户端名称",
+"Client titles updated":"客户端名称已更新",
+"Restoring previous titles":"正在恢复原名称",
+"Active sessions changed. Review the current titles and retry.":"已激活会话已变化，请检查当前名称后重试。",
+"Open the supported client before changing active session titles.":"请先打开受支持的客户端，再修改已激活会话名称。",
+"Enter a prefix.":"请输入前缀。",
+"Enter a prefix (1–40 characters, without brackets).":"请输入 1–40 字符的前缀，不包含方括号。",
+"A prefixed title exceeds 200 characters. Use a shorter prefix.":"添加前缀后的名称超过 200 字符，请缩短前缀。",
+
+"Ancestors":"祖先节点",
+"{count} ancestors":"{count} 个祖先节点",
+"Search this session":"搜索此 Session",
+"Search this session…":"搜索此 Session…",
+"{count} results":"{count} 个结果",
+"Prefix active session titles":"批量添加会话名前缀",
+
 "Reading organization changes":"读取整理修改",
 "Restoring organization changes":"撤销整理修改",
 "Organization changes discarded":"已撤销整理修改，交流记录保持不变",
@@ -816,7 +844,7 @@ const dictionary = {
 };
 export function t(key, values = {}) {
     let result = language === 'zh' ? dictionary[key] || key : key;
-    if (language === 'en' && values.count === 1) result = result.replace(/\bchats\b/g, 'chat').replace(/\bbranches\b/g, 'branch').replace(/\bsessions\b/g, 'session').replace(/\bcompactions\b/g, 'compaction');
+    if (language === 'en' && values.count === 1) result = result.replace(/\bchats\b/g, 'chat').replace(/\bbranches\b/g, 'branch').replace(/\bsessions\b/g, 'session').replace(/\bcompactions\b/g, 'compaction').replace(/\bresults\b/g, 'result');
     for (const [name, value] of Object.entries(values))
         result = result.replaceAll(`{${name}}`, String(value));
     return result;

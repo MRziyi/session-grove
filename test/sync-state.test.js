@@ -50,6 +50,13 @@ test('old implicit upload preferences do not opt into the new automatic pipeline
  savePreferences(a.store,{autoUploadEnabled:false});assert.equal(preferences(a.store).autoUploadEnabled,false);
 });
 
+test('unavailable automatic upload timers skip all-library fingerprint work',async t=>{
+ const e=await setup(t),a=e.device('lazy-timer'),auto=new AutoSync(a.store,()=>({url:'git@example.invalid:test/data.git'}));t.after(()=>auto.close());
+ auto.cloud.dirtyIds=()=>assert.fail('An unavailable timer must not scan sync graphs');auto.reconcileTimer();
+ savePreferences(a.store,{autoUploadEnabled:true});auto.running=true;auto.reconcileTimer();auto.running=false;auto.unlocked=false;auto.reconcileTimer();
+ auto.unlocked=true;auto.reconcileTimer(true);assert.ok(auto.interval);auto.reconcileTimer(false);assert.equal(auto.interval,null);
+});
+
 
 test('backend project directory and content listing agree through archive and restore',async t=>{
  const e=await syncFixture(t),a=e.device('directory');const p=a.store.project('Project'),empty=a.store.project('Empty');const b=branch(a.store,p.id,'Session');

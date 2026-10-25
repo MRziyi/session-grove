@@ -14,9 +14,9 @@ Grove is a local Node.js 24+ service with a DOM/SVG browser interface. Node prov
 | Shared local/sync projections | `src/cloud-view.js`, `src/project-view.js` |
 | Git snapshots, subprocesses and transfer scheduling | `src/git-cloud.js`, `src/git-remote.js`, `src/auto-sync.js` |
 | Organization-only rollback | `src/discard-changes.js` |
-| Recovery copies and native deletion protection | `src/trash.js`, `src/trash-actions.js`, `src/trash-native.js` |
-| Model naming and native title synchronization | `src/intelligence.js`, `src/transcription-titles.js` |
-| Browser layout and interaction | `web/app.js`, `web/library-view.js`, `web/session-drag.js` |
+| Recovery copies, background reclamation and native deletion protection | `src/trash.js`, `src/cleanup-worker.js`, `src/trash-actions.js`, `src/trash-native.js` |
+| Model naming and native title synchronization | `src/intelligence.js`, `src/transcription-titles.js`, `src/prefix-titles.js` |
+| Browser layout, tree search and ancestor context | `web/app.js`, `web/library-view.js`, `web/tree-search.js`, `web/graph-ancestors.js`, `web/session-drag.js` |
 
 ## Storage and identity
 
@@ -36,5 +36,9 @@ SQLite, native activation choices, credentials, context-configuration backups an
 ## Resources
 
 Parsing and record caches are bounded; immutable summaries and graph inputs are reused while valid. Reconstructable Git cache writes avoid a forced disk flush per file. Authoritative library writes and credential writes retain durability. Windows credential staging restricts an empty file's ACL before writing secrets, and permission checks read the current ACL.
+
+Sync status retains small per-tree digests and dependency IDs, rather than export graphs. Entity changes invalidate affected trees, shared revision dependencies and retention-mode transitions; instance availability alone does not change sync bytes. Disabled automatic upload avoids an unnecessary all-library fingerprint pass.
+
+Trash reclamation scans retained history and organization baselines in a read-only SQLite worker snapshot. The main thread applies its plan only if the store and database have not changed and no transfer reader is active; otherwise reclamation is deferred. Recovery creation and native-copy protection precede reclamation. Progress distinguishes retention analysis, local record removal and sync-status updates.
 
 Use the measurements and validation procedures in [Testing](testing.md). Old WebDAV credentials or cache files on disk are not read to reactivate a retired provider.

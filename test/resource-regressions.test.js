@@ -85,3 +85,37 @@ test('renaming reuses only lightweight revision projections and changed history 
  s.treeGraph(b.id,'in-use');assert.ok(reads>0,'new revision invalidates old projection inputs');
  const other=s.branch(null,'Other','codex',codexSample('/elsewhere',[['Other','Done']]));s.treeGraph(other.id);assert.equal(s.graphProjections.rootId,other.id,'at most one tree retains projections');
 });
+
+test('sync fingerprint reuse stays equivalent to a cold calculation across mutations and cleanup',async t=>{
+ const s=setup(t),{GitCloud}=await import('../src/git-cloud.js'),{stageTrash,cleanupLocal}=await import('../src/trash.js'),p=s.project('P'),q=s.project('Q');
+ const a=s.branch(p.id,'A','codex',codexSample('/fixture',[['A','Ready'],['Next','Done']])),b=s.branch(q.id,'B','codex',codexSample('/fixture',[['B','Ready']])),cloud=new GitCloud(s,()=>({url:'git@example.invalid:test/data.git'}));
+ const check=()=>{const warm=cloud.dirtyIds().sort(),values=s.syncCollections().items.map(i=>[i.id,s.memoCache.get('fingerprint:'+i.id)]);s.invalidate();assert.deepEqual(cloud.dirtyIds().sort(),warm);assert.deepEqual(s.syncCollections().items.map(i=>[i.id,s.memoCache.get('fingerprint:'+i.id)]),values);};
+ cloud.dirtyIds();const cache=cloud.cache();for(const root of s.syncCollections().items)cache.ack[root.id]=hash(JSON.stringify(treeSnapshot(s,root.id)));cloud.save(cache);
+ s.edit(a.id,{name:'A renamed'});assert.ok(s.memoCache.has('fingerprint:'+b.id),'an unrelated tree keeps its small fingerprint');check();
+ s.fork(a.id,{name:'New fork',end:s.detail(a.id).checkpoints[0].end});check();
+ s.put('project',{...q,name:'Q renamed'});check();
+ const revision=s.get('revision',b.head);s.put('revision',{...revision,source:{...revision.source,testMarker:true}});check();
+ try{s.transaction(()=>{s.put('branch',{...s.get('branch',b.id),name:'Rolled back'});throw Error('rollback');});}catch{}check();assert.equal(s.get('branch',b.id).name,'B');
+ stageTrash(s,[a.id]);cleanupLocal(s);check();
+});
+
+test('native availability changes and cleanup do not rebuild unaffected sync graphs',async t=>{
+ const s=setup(t),{GitCloud}=await import('../src/git-cloud.js'),{stageTrash,cleanupLocal}=await import('../src/trash.js'),a=s.branch(null,'A','codex',codexSample('/fixture',[['A','Ready']])),b=s.branch(null,'B','codex',codexSample('/fixture',[['B','Ready']])),cloud=new GitCloud(s,()=>({url:'git@example.invalid:test/data.git'}));
+ const retired=s.branch(null,'Earlier trash','codex',codexSample('/fixture',[['Old','Ready']]));stageTrash(s,[retired.id]);cleanupLocal(s);
+ cloud.dirtyIds();s.local('instances',[{id:'native',branchId:b.id,applied:true}]);const build=s.buildExportGraph;s.buildExportGraph=()=>{throw Error('No unchanged export should be rebuilt');};assert.ok(cloud.dirtyIds().includes(b.id));s.buildExportGraph=build;
+ stageTrash(s,[a.id]);cleanupLocal(s);s.buildExportGraph=()=>{throw Error('The remaining tree is unchanged');};assert.deepEqual(cloud.dirtyIds(),[b.id]);s.buildExportGraph=build;
+});
+
+test('async cleanup keeps the event loop alive and discards a stale reclamation plan',async t=>{
+ const s=setup(t),{stageTrash,cleanupLocalAsync}=await import('../src/trash.js'),raw=codexSample('/fixture',[['Recover this','Ready']]),b=s.branch(null,'Removed','codex',raw);stageTrash(s,[b.id]);
+ let replacement,ticks=0;const timer=setInterval(()=>ticks++,1);
+ try{const result=await cleanupLocalAsync(s,{onProgress:async p=>{if(p.phase==='Removing unused local records')replacement=s.branch(null,'Arrived during cleanup','codex',raw);}});assert.equal(result.deferred,true);assert.ok(ticks>0,'history preparation yields to timers');assert.equal(s.raw(replacement.head),raw);assert.equal(s.cleanupDeferred,true);}finally{clearInterval(timer);}
+ await cleanupLocalAsync(s);assert.equal(s.raw(s.get('branch',replacement.id).head),raw);
+});
+
+test('shared revisions invalidate every dependent tree fingerprint',t=>{
+ const s=setup(t),a=s.branch(null,'A','codex',codexSample('/fixture',[['Shared','Ready']])),b=s.branch(null,'B','codex',codexSample('/fixture',[['Other','Ready']]));
+ s.put('branch',{...b,head:a.head});const cloud=new Cloud(s,()=>({}));cloud.dirtyIds();
+ const revision=s.get('revision',a.head);s.put('revision',{...revision,source:{...revision.source,marker:'changed'}});cloud.dirtyIds();
+ const values=[a,b].map(b=>s.memoCache.get('fingerprint:'+b.id));s.invalidate();cloud.dirtyIds();assert.deepEqual([a,b].map(b=>s.memoCache.get('fingerprint:'+b.id)),values);
+});

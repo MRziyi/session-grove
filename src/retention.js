@@ -32,11 +32,10 @@ export function requiredRanges(graph) {
     for (const n of graph.nodes || []) require(n.revisionId, n.end);
     return ranges;
 }
-export function bodyRefs(graph) {
+export function addBodyRefs(graph,refs = new Set()) {
     if (!graph.retention) {
-        const refs = new Set();
         for (const r of graph.revisions) for (const h of r.refs) refs.add(h);
-        return [...refs];
+        return refs;
     }
     const needed = requiredRanges(graph),
         declared = new Map(Object.entries(graph.retention.ranges || {})),
@@ -44,7 +43,6 @@ export function bodyRefs(graph) {
     assert(graph.retention.schema === 1, 'Unsupported retention manifest.');
     for (const [id, n] of needed)
         assert((declared.get(id) ?? -1) >= n, 'Retention manifest omits live context.');
-    const refs = new Set();
     for (const [id, values] of Object.entries(graph.retention.extras || {})) {
         const r = revisions.get(id),
             available = new Set(r?.refs || []);
@@ -62,8 +60,9 @@ export function bodyRefs(graph) {
         );
         for (const h of r.refs.slice(0, end)) refs.add(h);
     }
-    return [...refs];
+    return refs;
 }
+export function bodyRefs(graph){return [...addBodyRefs(graph)];}
 export function retainedGraph(graph, deleted) {
     const rows = new Map(graph.branches.map((b) => [b.id, b])),
         needed = new Set(

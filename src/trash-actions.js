@@ -5,7 +5,7 @@ import {gunzipSync} from 'node:zlib';
 import {bodyRefs} from './retention.js';
 import {DatabaseSync} from 'node:sqlite';
 import {assert,hash,inside,now,safePath} from './util.js';
-import {stageTrashAsync,isTrashed,cleanupLocal,restoreTrash,restoreTrashAsync} from './trash.js';
+import {stageTrashAsync,isTrashed,cleanupLocal,cleanupLocalAsync,restoreTrash,restoreTrashAsync} from './trash.js';
 import {removeTrashNativeCopies} from './trash-native.js';
 import {connect} from './codex-rpc.js';
 import {codexBinary} from './native-archive.js';
@@ -106,7 +106,7 @@ export async function moveNativeToRecovery(store,native,instanceIds,{checkFile=c
         }
     }
     if(!deferCleanup){
-        await onProgress({phase:'Removing unused local records',completed:0,total:null});cleanupLocal(store);
+        await cleanupLocalAsync(store,{onProgress});
         await onProgress({phase:'Recovery move finished',completed:instanceIds.length,total:instanceIds.length});
     }
     return result;
