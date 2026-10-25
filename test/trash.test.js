@@ -3,7 +3,7 @@ import test from 'node:test';import assert from 'node:assert/strict';import fs f
 import {once} from 'node:events';
 import {Store} from '../src/store.js';import {Native} from '../src/native.js';import {codexSample,claudeSample,codexTurn} from '../src/demo.js';
 import {stageTrash,restoreTrash,expireTrash,cleanupLocal,isTrashed} from '../src/trash.js';import {savePreferences} from '../src/preferences.js';
-async function setup(t){const root=fs.mkdtempSync(path.join(os.tmpdir(),'grove-local-test-')),stores=[];t.after(()=>{stores.forEach(s=>s.close());fs.rmSync(root,{recursive:true,force:true});});return {root,device:name=>{const store=new Store(path.join(root,name));stores.push(store);return {store};}};}
+async function setup(t){const root=fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(),'grove-local-test-'))),stores=[];t.after(()=>{stores.forEach(s=>s.close());fs.rmSync(root,{recursive:true,force:true});});return {root,device:name=>{const store=new Store(path.join(root,name));stores.push(store);return {store};}};}
 test('whole-tree Trash keeps a local recovery copy only until its configurable expiry', async (t) => {
     const e = await setup(t),
         a = e.device('local');

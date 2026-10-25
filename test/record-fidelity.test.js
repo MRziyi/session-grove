@@ -1,7 +1,7 @@
 import test from 'node:test';import assert from 'node:assert/strict';import fs from 'node:fs';import os from 'node:os';import path from 'node:path';
 import {Store} from '../src/store.js';import {Native} from '../src/native.js';import {codexSample,claudeSample,codexTurn} from '../src/demo.js';
 import {stageTrash,restoreTrash,expireTrash,cleanupLocal,isTrashed} from '../src/trash.js';import {savePreferences} from '../src/preferences.js';
-async function setup(t){const root=fs.mkdtempSync(path.join(os.tmpdir(),'grove-local-test-')),stores=[];t.after(()=>{stores.forEach(s=>s.close());fs.rmSync(root,{recursive:true,force:true});});return {root,device:name=>{const store=new Store(path.join(root,name));stores.push(store);return {store};}};}
+async function setup(t){const root=fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(),'grove-local-test-'))),stores=[];t.after(()=>{stores.forEach(s=>s.close());fs.rmSync(root,{recursive:true,force:true});});return {root,device:name=>{const store=new Store(path.join(root,name));stores.push(store);return {store};}};}
 import {parse,renderNative} from '../src/transcript.js';import {ledger} from '../src/context-ledger.js';import {markdown} from '../web/markdown.js';
 test('Markdown never executes raw HTML or unsafe links and formats code, lists and tables',()=>{
  const output=markdown('# Heading\n\n**bold** `code`\n\n- item\n\n<script>alert(1)</script> [x](javascript:alert) ![image](https://example.test/image)\n\n```js\n<x>\n```\n\n| a | b |\n| -- | -- |\n| 1 | 2 |');
