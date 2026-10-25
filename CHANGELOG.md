@@ -1,20 +1,16 @@
 # Changelog
 
-## 1.1.11
+## Unreleased
 
 - Centralize Projects visibility, item counts and session counts in a backend projection consumed by both navigation and listing. Retain durable project identities; distinguish empty, filtered, archived and unloaded directories.
 - Native file availability only affects Active membership, never the presence of saved project history.
 - Verify decoded compressed histories during native archive and preserve compression on active-session rewrites.
 - Add lifecycle tests for archive/restore, cloud-only and missing-file records, incomplete directories, compressed native archive and compressed writeback.
-
-
-## 1.1.10
-
 - Discover compressed Codex rollouts and match them to native index paths; recover cached sessions incorrectly marked missing without rewriting compressed files.
 - Preserve compressed bytes when parking native records.
 - Hide empty projects and derive navigation counts from the same visible items as the content list.
-- Validation: 345 tests passed, 2 skipped; compressed discovery and missing-state recovery covered.
-
+- Preserve decoded-history identity and physical-byte race checks throughout compressed Trash/recovery operations, including native indexes that retain uncompressed paths.
+- Reveal empty projects as drag destinations while a session drag is active, keeping normal project browsing uncluttered.
 
 ## 1.1.9
 

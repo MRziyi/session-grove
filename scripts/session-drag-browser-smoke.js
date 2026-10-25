@@ -24,10 +24,12 @@ try{
  await call('Runtime.enable');await call('Emulation.setFocusEmulationEnabled',{enabled:true});await call('Page.bringToFront');await call('Emulation.setDeviceMetricsOverride',{width:1100,height:720,deviceScaleFactor:1,mobile:false});
  await wait('document.querySelector(".project-directory [data-scope]")');
  await evaluate('document.querySelector(".project-directory [data-scope]").click()');await wait('document.querySelectorAll("#session-list [data-item]").length===30');
+ assert.equal(await evaluate(`!!document.querySelector('.project-directory [data-scope="${empty.id}"]')`),false,'empty destinations stay hidden during normal browsing');
  const ids=await evaluate('[...document.querySelectorAll("#session-list [data-item]")].slice(0,2).map(e=>e.dataset.item)');
  await evaluate(`for(const id of ${JSON.stringify(ids)})document.querySelector('[data-select="'+id+'"]').click()`);
  await evaluate(`document.querySelector('[data-item="${ids[0]}"]').scrollIntoView({behavior:'instant',block:'center'});window.__drag=new DataTransfer();document.querySelector('[data-item="${ids[0]}"]').dispatchEvent(new DragEvent('dragstart',{bubbles:true,dataTransfer:window.__drag}))`);
  assert.equal(await evaluate('document.querySelectorAll(".session-row.dragging").length'),2);
+ assert.equal(await evaluate(`!!document.querySelector('.project-directory [data-scope="${empty.id}"]')`),true,'dragging reveals empty destinations');
  const before=await evaluate('document.querySelector("#session-list").scrollTop');
  await evaluate('(()=>{const el=document.querySelector("#session-list"),r=el.getBoundingClientRect();el.dispatchEvent(new DragEvent("dragover",{bubbles:true,cancelable:true,dataTransfer:window.__drag,clientX:r.x+r.width/2,clientY:innerHeight-2}))})()');
  await wait(`document.querySelector('#session-list').scrollTop>${before+100}`);

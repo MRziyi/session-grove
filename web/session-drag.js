@@ -1,8 +1,8 @@
 // Delegation survives list refreshes; native drag events retain normal click/selection behavior.
-export function installSessionDrag({canDrag,items,selected,projects,move,expandOlder}) {
+export function installSessionDrag({canDrag,items,selected,projects,move,expandOlder,onDragChange=()=>{}}) {
     let drag=null,frame=0,lastTime=0,point=null,highlight=null,expandTimer=null,expandTarget=null;
     const clearHighlight=()=>{highlight?.classList.remove('project-drop-target');highlight=null;};
-    const end=()=>{cancelAnimationFrame(frame);frame=0;lastTime=0;point=null;drag=null;clearTimeout(expandTimer);expandTarget=null;clearHighlight();document.body.classList.remove('session-dragging');document.querySelectorAll('.session-row.dragging').forEach(el=>el.classList.remove('dragging'));};
+    const end=()=>{const wasDragging=!!drag;cancelAnimationFrame(frame);frame=0;lastTime=0;point=null;drag=null;clearTimeout(expandTimer);expandTarget=null;clearHighlight();document.body.classList.remove('session-dragging');document.querySelectorAll('.session-row.dragging').forEach(el=>el.classList.remove('dragging'));if(wasDragging)onDragChange(false);};
     const targetAt=(x,y)=>{
         const el=document.elementFromPoint(Math.max(0,Math.min(innerWidth-1,x)),Math.max(0,Math.min(innerHeight-1,y)));
         const target=el?.closest('[data-project-group],.project-directory [data-scope]');
@@ -37,7 +37,7 @@ export function installSessionDrag({canDrag,items,selected,projects,move,expandO
         e.dataTransfer.effectAllowed='move';e.dataTransfer.setData('application/x-grove-sessions',JSON.stringify(drag.map(i=>i.id)));
         e.dataTransfer.setData('text/plain',drag.map(i=>i.name).join('\n'));
         for(const el of document.querySelectorAll('#session-list [data-item]'))if(drag.some(i=>i.id===el.dataset.item))el.classList.add('dragging');
-        document.body.classList.add('session-dragging');point={x:e.clientX,y:e.clientY};frame=requestAnimationFrame(tick);
+        document.body.classList.add('session-dragging');onDragChange(true);point={x:e.clientX,y:e.clientY};frame=requestAnimationFrame(tick);
     });
     document.addEventListener('dragover',e=>{
         if(!drag)return;e.preventDefault();point={x:e.clientX,y:e.clientY};updateTarget();e.dataTransfer.dropEffect=highlight?'move':'none';

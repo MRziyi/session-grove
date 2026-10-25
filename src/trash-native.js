@@ -29,7 +29,8 @@ export function removeTrashNativeCopies(store, native, branchIds, options = {}) 
         );
         safePath(inside(store.root, i.file) ? store.root : native.roots[i.agent], i.file);
         options.checkFile?.(i.file);
-        if (i.observedHash && hash(fs.readFileSync(i.file)) !== i.observedHash) {
+        const physicalStamp=hash(fs.readFileSync(i.file));
+        if (i.observedHash && hash(native.read(i.file)) !== i.observedHash) {
             blocked.push({
                 instanceId: i.id,
                 reason: 'Native history changed after Trash. Keep this copy for review.',
@@ -73,7 +74,7 @@ export function removeTrashNativeCopies(store, native, branchIds, options = {}) 
                     assert(
                         !row ||
                             !row.rollout_path ||
-                            path.resolve(row.rollout_path) === path.resolve(i.file),
+                            path.resolve(fs.existsSync(row.rollout_path)?row.rollout_path:row.rollout_path+'.zst') === path.resolve(i.file),
                         'Native thread moved. Update before removing it.',
                     );
                     db.prepare('DELETE FROM threads WHERE id=?').run(i.nativeId);
@@ -119,7 +120,7 @@ export function removeTrashNativeCopies(store, native, branchIds, options = {}) 
             atomic(index, lines.length ? lines.join('\n') + '\n' : '');
         }
         options.checkFile?.(i.file);
-        if (i.observedHash && hash(fs.readFileSync(i.file)) !== i.observedHash) { blocked.push({instanceId:i.id,reason:'Native history changed. Retry to save its latest version.'}); continue; }
+        if (hash(fs.readFileSync(i.file)) !== physicalStamp) { blocked.push({instanceId:i.id,reason:'Native history changed. Retry to save its latest version.'}); continue; }
         fs.rmSync(i.file);
         if (i.agent === 'claude' && options.companionsCaptured) fs.rmSync(path.join(path.dirname(i.file),i.nativeId),{recursive:true,force:true});
         i.applied = false;

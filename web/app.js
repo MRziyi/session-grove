@@ -158,7 +158,7 @@ function renderNavigation() {
     const entry = (scope, name, count, css = '') => `<button class="nav-entry ${css} ${selectedScope === scope ? 'selected' : ''}" data-scope="${esc(scope)}" ${selectedScope === scope ? 'aria-current="page"' : ''}><span class="nav-name">${state.data.projects.some(p=>p.id===scope)?projectName(scope,name):esc(name)}</span><span class="count">${count}</span></button>`;
     const directoryGroups=projectGroups(d.projectItems, d.projects);
     const projectTimes=new Map(directoryGroups.map(g=>[g.id,g.updatedAt])),olderIds=new Set(directoryGroups.filter(g=>isOlder(g.items)).map(g=>g.id));
-    const projects = d.projectDirectory;
+    const projects = state.sessionDragging?d.projectAvailability.filter(p=>!p.archived):d.projectDirectory;
     const archivedProjects = d.projects.filter(p => p.archived && (d.items.some(i => i.projectId === p.id) || p.count>0));
     const archivedSessions = d.items.filter(i => !archivedProjects.some(p => p.id === i.projectId)).reduce((n, i) => n + i.sessions.filter(s => s.archived).length, 0);
     const clientArchiveCount=new Set([...(d.trashNative||[]).filter(i=>i.clientArchived&&(!i.background||d.preferences?.showScheduledSessions)).map(i=>i.branchId),...d.items.flatMap(i=>i.sessions.filter(s=>s.archived||archivedProjects.some(p=>p.id===i.projectId)).map(s=>s.id))]).size;
@@ -1198,6 +1198,7 @@ installSessionDrag({
     canDrag:()=>state.scope!=='archived'&&state.scope!=='trash'&&!state.tree&&!working&&state.connected!==false,
     items:()=>state.list.items,selected:()=>state.selected,projects:()=>state.data.projects,
     expandOlder:()=>{state.olderProjects=true;renderNavigation();},
+    onDragChange:dragging=>{state.sessionDragging=dragging;renderNavigation();},
     move:(itemIds,projectId)=>run(async()=>{await api('/move','POST',{itemIds,projectId});state.selected.clear();state.projectFocus=projectId;state.expandedProjects.add(projectId);})
 });
 

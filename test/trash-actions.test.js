@@ -158,3 +158,27 @@ test('compressed native children still protect the prefix file from deletion',as
  fs.writeFileSync(child,zstdCompressSync(Buffer.from(JSON.stringify({type:'session_meta',payload:{id:crypto.randomUUID(),history_base:{thread_id:instance.nativeId,end_ordinal_exclusive:1,end_byte_offset:1}}})+'\n')));
  const result=await moveNativeToRecovery(store,native,[instance.id],options);assert.equal(result.moved.length,0);assert.ok(result.blocked.some(b=>/forks still reference/.test(b.reason)));assert.ok(fs.existsSync(instance.file));
 });
+
+test('compressed client copies move to recovery and restore their full conversation',async t=>{
+ const {store,native,b,instance}=setup(t),plain=instance.file;
+ fs.writeFileSync(plain+'.zst',zstdCompressSync(fs.readFileSync(plain)));fs.unlinkSync(plain);native.collect();stageTrash(store,[b.id]);
+ const result=await moveNativeToRecovery(store,native,[instance.id],options);
+ assert.deepEqual(result.blocked,[]);assert.deepEqual(result.moved,[instance.id]);assert.equal(fs.existsSync(plain+'.zst'),false);
+ const restored=restoreTrash(store,result.recoveryIds[0]);assert.match(store.raw(store.get('branch',restored.branchIds[0]).head),/Original/);
+});
+
+test('an archived Codex index may keep the original name of a compressed rollout',async t=>{
+ const {store,native,b,instance}=setup(t),plain=instance.file;
+ fs.writeFileSync(plain+'.zst',zstdCompressSync(fs.readFileSync(plain)));fs.unlinkSync(plain);native.collect();stageTrash(store,[b.id]);
+ const {DatabaseSync}=await import('node:sqlite'),db=new DatabaseSync(path.join(native.roots.codex,'state_5.sqlite'));
+ db.exec('CREATE TABLE threads(id TEXT PRIMARY KEY,archived INTEGER,rollout_path TEXT)');db.prepare('INSERT INTO threads VALUES(?,1,?)').run(instance.nativeId,plain);db.close();
+ const result=await moveNativeToRecovery(store,native,[instance.id],{checkFile:()=>{}});assert.deepEqual(result.blocked,[]);assert.deepEqual(result.moved,[instance.id]);
+});
+
+test('direct removal uses decoded identity while detecting changes to compressed bytes',async t=>{
+ const {store,native,b,instance}=setup(t),plain=instance.file;
+ fs.writeFileSync(plain+'.zst',zstdCompressSync(fs.readFileSync(plain)));fs.unlinkSync(plain);native.collect();stageTrash(store,[b.id]);
+ const {removeTrashNativeCopies}=await import('../src/trash-native.js');let checks=0;
+ const result=removeTrashNativeCopies(store,native,[b.id],{archivedByClient:true,recoverySaved:true,checkFile:()=>{if(++checks===2)fs.appendFileSync(plain+'.zst',Buffer.from('changed'));}});
+ assert.equal(checks,2,'the source is checked again immediately before removal');assert.equal(result.removed,0);assert.ok(result.blocked.some(b=>/changed/.test(b.reason)));assert.ok(fs.existsSync(plain+'.zst'));
+});

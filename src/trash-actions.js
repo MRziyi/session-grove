@@ -37,7 +37,7 @@ async function archiveCodex(native, instance) {
     if(!row.archived){const client=connect(codexBinary(),native.roots.codex);try{await client.init();await client.request('thread/archive',{threadId:instance.nativeId});}finally{await client.close();}row=read();}
     assert(row?.archived,'The client could not archive this session. Stop its current task and retry.');
     assert(inside(native.roots.codex,row.rollout_path),'Native copy is outside managed storage.');
-    instance.file=row.rollout_path;instance.applied=false;instance.desired=false;instance.nativeArchived=true;
+    instance.file=fs.existsSync(row.rollout_path)?row.rollout_path:row.rollout_path+'.zst';instance.applied=false;instance.desired=false;instance.nativeArchived=true;
 }
 function verifiedRecovery(store, entry) {
     if (!entry) return false;
@@ -63,11 +63,11 @@ export async function moveNativeToRecovery(store,native,instanceIds,{checkFile=c
             safePath(inside(store.root,i.file)?store.root:native.roots[i.agent],i.file);
             checkFile(i.file);
             await report({phase:'Reading client history',completed:result.moved.length,total:instanceIds.length});
-            const physical=fs.readFileSync(i.file,'utf8'),stamp=hash(physical),companion=path.join(path.dirname(i.file),i.nativeId);
+            const physical=fs.readFileSync(i.file),stamp=hash(physical),observedHash=hash(native.read(i.file)),companion=path.join(path.dirname(i.file),i.nativeId);
             const auxiliary=i.agent==='claude'?auxiliarySnapshot(companion):[],companionStamp=i.agent==='claude'?auxiliaryStamp(companion):null;
             const existing=(store.local('trashEntries')||[]).find(e=>!e.expired&&!e.restoredAt&&e.branchIds.includes(i.branchId)&&fs.existsSync(path.join(store.root,'trash',e.id+'.json.gz')));
             if(existing)await report({phase:'Verifying recovery backup',completed:result.moved.length,total:instanceIds.length});
-            let entry=stamp===i.observedHash&&!auxiliary.length&&verifiedRecovery(store,existing)?existing:null;
+            let entry=observedHash===i.observedHash&&!auxiliary.length&&verifiedRecovery(store,existing)?existing:null;
             if(!entry) {
                 const original=store.find('branch',i.branchId),raw=native.history(i.file,i.agent);
                 const source={operation:'import',nativeId:i.nativeId,cwd:i.cwd,...(auxiliary.length?{auxiliary}:{})};
@@ -96,7 +96,7 @@ export async function moveNativeToRecovery(store,native,instanceIds,{checkFile=c
             store.local('trashEntries',(store.local('trashEntries')||[]).map(e=>e.id===entry.id?{...e,expiresAt,nativeInstanceId:i.id}:e));
             assert(hash(fs.readFileSync(i.file))===stamp,'Native history changed. Retry to save its latest version.');
             if(i.agent==='claude')assert(auxiliaryStamp(companion)===companionStamp,'Companion files changed. Retry to save their latest version.');
-            i={...i,observedHash:stamp};store.local('instances',store.instances().map(v=>v.id===i.id?i:v));
+            i={...i,observedHash};store.local('instances',store.instances().map(v=>v.id===i.id?i:v));
             await report({phase:'Removing client copy',completed:result.moved.length,total:instanceIds.length});
             const removed=removeTrashNativeCopies(store,native,[i.branchId],{archivedByClient:true,recoverySaved:true,deferCleanup:true,instanceIds:[i.id],checkFile,companionsCaptured:true});
             result.blocked.push(...removed.blocked);if(removed.removed)result.moved.push(i.id);
