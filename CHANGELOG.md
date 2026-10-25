@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Restore the original project category heading layout, adding only a small disclosure triangle without moving the title, count or selection control.
+- Let offline Discard read verified historical graphs up to the existing 128 MiB graph limit; report output-limit failures explicitly and preserve UTF-8 across Git output chunks.
+- When a legacy library lacks its old undo snapshot, allow Discard to use the last fully imported remote graph only when both its recorded content hash and semantic baseline match.
 ## 1.1.10
 
 - Remove the retired WebDAV transport, credentials workflow, migration tools and provider-only tests. Keep Git snapshots, local recovery and their regression coverage; existing legacy files on disk remain untouched.

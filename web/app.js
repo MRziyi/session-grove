@@ -361,10 +361,11 @@ function projectRows(g) {
     return {limited,expanded,shown:limited&&!expanded?initial:g.items};
 }
 function foldButton(g,limited,expanded) {return limited?`<button class="show-project" data-expand-project="${esc(g.id)}">${t(expanded?'Show fewer':'Show all {count}',{count:g.items.length})}</button>`:'';}
-function projectHeading(g){const collapsed=state.collapsedProjects.has(g.id);return `<button type="button" class="project-heading" data-toggle-project="${esc(g.id)}" aria-expanded="${!collapsed}"><span class="project-chevron" aria-hidden="true">${collapsed?'▾':'▴'}</span>${projectName(g.id,g.name==='Scheduled & background'?t(g.name):g.name)}</button>`;}
+function projectHeading(g){const collapsed=state.collapsedProjects.has(g.id);return `<button type="button" class="project-chevron" data-toggle-project="${esc(g.id)}" aria-label="${esc(t(collapsed?'Expand':'Collapse')+' '+g.name)}" aria-expanded="${!collapsed}">${collapsed?'▾':'▴'}</button>${projectName(g.id,g.name==='Scheduled & background'?t(g.name):g.name)}`;}
 function bindProjectFolds() {
     $$('[data-expand-project]').forEach(el=>el.onclick=()=>{const id=el.dataset.expandProject;state.expandedProjects.has(id)?state.expandedProjects.delete(id):state.expandedProjects.add(id);renderList();if(state.tree)renderRail();});
     $$('[data-toggle-project]').forEach(el=>el.onclick=()=>{const id=el.dataset.toggleProject;state.collapsedProjects.has(id)?state.collapsedProjects.delete(id):state.collapsedProjects.add(id);renderList();if(state.tree)renderRail();});
+    $$('.project-group>h2').forEach(el=>el.onclick=e=>{if(!e.target.closest('button,input,[data-name-kind]'))el.querySelector('[data-toggle-project]')?.click();});
 }
 
 function focusProject(id, scroll = true) {

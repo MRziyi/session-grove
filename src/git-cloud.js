@@ -200,10 +200,17 @@ export class GitCloud extends CloudView {
             if(tree.code)continue;
             const entry=tree.stdout.split('\0').map(line=>/^100644 blob ([a-f0-9]{40,64})\t(.+)$/.exec(line)).find(row=>row?.[2]===file);
             if(!entry)continue;
-            const result=await remote.run(['cat-file','blob',entry[1]],{accepted:[0,128],env});
+            // Historical graphs have the same size allowance as cached graphs;
+            // the generic command limit is too small for large session trees.
+            const result=await remote.run(['cat-file','blob',entry[1]],{accepted:[0,128],env,maxOutputBytes:128*1024*1024});
             if(result.code)continue;
             try{const candidate=JSON.parse(result.stdout);if(digest(candidate)===ack){this.rememberBaseline(id,candidate);return candidate;}}catch{}
         }
+        // Old libraries can lack the acknowledged graph while a later Pull kept
+        // newer local edits. Fall back only to a fully imported remote graph
+        // whose content hash AND semantic baseline were already verified.
+        const cache=this.cache();
+        if(graph&&cache.loaded?.[id]?.includes(digest(graph))&&cache.baselines?.[id]&&digest(changeSnapshot(graph))===digest(cache.baselines[id]))return graph;
         assert(false,'No verified local sync snapshot is available for this session. Its current data was kept.',409);
     }
     pendingItems() {

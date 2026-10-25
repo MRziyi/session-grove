@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { spawn } from 'node:child_process';
+import {StringDecoder} from 'node:string_decoder';
 import { assert } from './util.js';
 
 export function gitRemote(value, { allowLocal = false } = {}) {
@@ -17,7 +18,8 @@ export class GitRemote {
         this.directory = directory; this.url = url; this.onProgress = onProgress;
         this.controller = new AbortController();
     }
-    async run(args, { accepted = [0], progress = false, input = null, env = {}, timeout = 10 * 60 * 1000 } = {}) {
+    async run(args, { accepted = [0], progress = false, input = null, env = {}, timeout = 10 * 60 * 1000, maxOutputBytes = 32 * 1024 * 1024 } = {}) {
+        assert(Number.isSafeInteger(maxOutputBytes)&&maxOutputBytes>0&&maxOutputBytes<=128*1024*1024,'Invalid Git output limit.');
         this.controller.signal.throwIfAborted();
         return new Promise((resolve, reject) => {
             const child = spawn('git', ['-c', 'core.hooksPath=/dev/null', '-c', 'commit.gpgsign=false', '-c', 'core.quotePath=false', '-c', 'core.pager=cat', ...args], {
@@ -26,8 +28,14 @@ export class GitRemote {
             });
             if (input !== null) { child.stdin.on('error', () => {}); child.stdin.end(input); }
             let stdout = '', stderr = '', progressBuffer = '', settled = false, phase = '', phaseStarted = Date.now();
+            const decoder=new StringDecoder('utf8');let outputBytes=0,outputError;
             const timer = setTimeout(() => child.kill('SIGTERM'), timeout); timer.unref();
-            child.stdout.on('data', chunk => { stdout += chunk; if (stdout.length > 32 * 1024 * 1024) child.kill(); });
+            child.stdout.on('data', chunk => {
+                if(outputError)return;
+                outputBytes+=chunk.length;
+                if(outputBytes>maxOutputBytes){outputError=Object.assign(new Error('Git '+args[0]+' output exceeds the '+maxOutputBytes+' byte limit.'),{code:'GIT_OUTPUT_LIMIT'});child.kill();return;}
+                stdout+=decoder.write(chunk);
+            });
             child.stderr.on('data', chunk => {
                 stderr = (stderr + chunk).slice(-16384);
                 if (progress) {
@@ -45,7 +53,7 @@ export class GitRemote {
                 }
             });
             child.on('error', e => { settled = true; clearTimeout(timer); reject(e); });
-            child.on('close', code => { clearTimeout(timer); if (settled) return; if (accepted.includes(code)) resolve({ stdout: stdout.trim(), stderr, code }); else reject(Object.assign(new Error('Git ' + args[0] + ' failed: ' + (stderr.trim() || 'process interrupted')), { gitExitCode: code })); });
+            child.on('close', code => { clearTimeout(timer); if (settled) return; if(outputError){reject(outputError);return;}stdout+=decoder.end();if (accepted.includes(code)) resolve({ stdout: stdout.trim(), stderr, code }); else reject(Object.assign(new Error('Git ' + args[0] + ' failed: ' + (stderr.trim() || 'process interrupted')), { gitExitCode: code })); });
         });
     }
     async init() {

@@ -286,3 +286,18 @@ test('discard recovers an older verified baseline from local Git after the worki
   throw error;
  }
 });
+
+test('legacy Discard without its old snapshot requires a verified fully imported remote baseline',async t=>{
+ const {discardChanges}=await import('../src/discard-changes.js'),e=fixture(t),a=e.device('legacy-undo'),b=branch(a);await push(a);
+ a.store.local(a.cloud.undoKey(b.id),null);const cache=a.cloud.cache(),baseline=structuredClone(cache.baselines[b.id]);
+ cache.ack[b.id]='f'.repeat(64);cache.baselines[b.id]={...baseline,projects:{}};a.cloud.save(cache);a.store.edit(b.id,{name:'Unwanted local organization'});
+ const remote=a.cloud.connection.remote,run=remote.run.bind(remote);remote.run=(args,options)=>{assert.ok(!['fetch','push','ls-remote'].includes(args[0]));return run(args,options);};
+ const native={collect:()=>({errors:[]})};
+ await assert.rejects(discardChanges(a.store,a.cloud,native,a.cloud.pendingItems()),/No verified local/);
+ assert.equal(a.store.get('branch',b.id).name,'Unwanted local organization');
+ cache.baselines[b.id]=baseline;const loaded=cache.loaded[b.id];cache.loaded[b.id]=[];a.cloud.save(cache);
+ await assert.rejects(discardChanges(a.store,a.cloud,native,a.cloud.pendingItems()),/No verified local/);
+ cache.loaded[b.id]=loaded;a.cloud.save(cache);
+ const result=await discardChanges(a.store,a.cloud,native,a.cloud.pendingItems());
+ assert.ok(result.recoveryId);assert.equal(a.store.get('branch',b.id).name,'Sample');assert.equal(a.cloud.pendingItems().length,0);
+});

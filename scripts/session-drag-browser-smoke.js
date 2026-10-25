@@ -25,6 +25,9 @@ try{
  await call('Runtime.enable');await call('Emulation.setFocusEmulationEnabled',{enabled:true});await call('Page.bringToFront');await call('Emulation.setDeviceMetricsOverride',{width:1100,height:720,deviceScaleFactor:1,mobile:false});
  await wait('document.querySelector(".project-directory [data-scope]")');
  await evaluate('document.querySelector(".project-directory [data-scope]").click()');await wait('document.querySelectorAll("#session-list [data-item]").length===30');
+ // Removing the absolute disclosure must leave the original heading geometry
+ // unchanged: title, count and selection checkbox remain direct h2 children.
+ assert.deepEqual(await evaluate(`(()=>{const h=document.querySelector('.project-group>h2'),arrow=h.querySelector('[data-toggle-project]'),title=h.querySelector('[data-name-kind]'),actions=h.querySelector('.group-actions'),box=e=>{const r=e.getBoundingClientRect();return [r.x,r.y,r.width,r.height]},before=[box(h),box(title),box(actions)];arrow.remove();const after=[box(h),box(title),box(actions)];h.prepend(arrow);return {same:JSON.stringify(before)===JSON.stringify(after),direct:title.parentElement===h,small:arrow.getBoundingClientRect().width<=10};})()`),{same:true,direct:true,small:true});
  assert.equal(await evaluate(`!!document.querySelector('.project-directory [data-scope="${empty.id}"]')`),false,'empty destinations stay hidden during normal browsing');
  const ids=await evaluate('[...document.querySelectorAll("#session-list [data-item]")].slice(0,2).map(e=>e.dataset.item)');
  await evaluate(`for(const id of ${JSON.stringify(ids)})document.querySelector('[data-select="'+id+'"]').click()`);
