@@ -57,6 +57,7 @@ export class TranscriptionTitles {
             for(const {instance} of snapshots){const current=await client.request('thread/read',{threadId:instance.nativeId,includeTurns:false});assert(current.thread.name===title,'The client title changed before it could be applied in Grove.',409);}
             validatePath(validate);
             this.store.transaction(()=>{
+                this.store.checkpointOrganization(branchId);
                 const ids=new Set(instances.map(i=>i.id));this.store.local('instances',this.store.instances().map(i=>ids.has(i.id)?{...i,title,observedTitle:title}:i));
                 const b=this.store.get('branch',branchId);this.store.put('branch',metadata(b,{transcriptionTitle:title,transcriptionNameOrigin:origin,originalTitle:title},{automatic:origin==='automatic'}));
             });return {nativeIds:instances.map(i=>i.nativeId),refresh:refreshed.status,at:now()};

@@ -2,7 +2,12 @@
 
 ## Unreleased
 
-- Restore the original project category heading layout, adding only a small disclosure triangle without moving the title, count or selection control.
+- Restrict Discard to Grove organization edits: names, project assignment, node labels/grouping and context preferences. Preserve all messages, new sessions/forks, native files and active instances; no deactivation confirmation is involved.
+- Record lightweight organization checkpoints for new sessions, keep content-only changes queued, and pause discarded smart-organization work until explicitly resumed through the existing attention indicator and Continue action, including after refresh or new messages.
+- Display explicit organization-only results instead of treating a confirmation or a no-op as a completed content rollback.
+- Keep offline Discard snapshot reads free of Git configuration writes and share concurrent checkout initialization, preventing config-lock races after startup.
+- Show Discard errors in the floating progress card and place its close control at the top right without an extra grid row.
+- Lighten project category separators and align the disclosure triangle with enough space for inline renaming; preserve collapse and drag-and-drop behavior.
 - Let offline Discard read verified historical graphs up to the existing 128 MiB graph limit; report output-limit failures explicitly and preserve UTF-8 across Git output chunks.
 - When a legacy library lacks its old undo snapshot, allow Discard to use the last fully imported remote graph only when both its recorded content hash and semantic baseline match.
 ## 1.1.10

@@ -1279,7 +1279,7 @@ dialog::backdrop {
 /* Sticky project headers meet the toolbar; no content leaks above them. */
 #session-list { padding-top:0; }
 .project-group { scroll-margin-top:0; }
-.project-group>h2 { border-radius:0 0 6px 6px; }
+.project-group>h2 { border-radius:0; background:var(--surface,#fff); padding:6px 12px; gap:10px; }
 .older-projects-toggle { width:100%; display:flex; gap:8px; align-items:center; border:0; background:#e3eaf1; color:#516a80; text-align:left; padding:11px; border-radius:6px; font-size:12px; }
 .older-projects-toggle span { margin-left:auto; }
 .older-projects { margin-top:18px; }
@@ -1455,7 +1455,9 @@ body{height:100dvh;display:flex;flex-direction:column;overflow:hidden}
 .restored-highlight{animation:restored-flash .8s ease-in-out 2}
 @keyframes restored-flash{0%,100%{background:transparent}50%{background:#cbe5ef;box-shadow:inset 3px 0 #477f9b}}
 @media(prefers-reduced-motion:reduce){.restored-highlight{animation:none;background:#cbe5ef;box-shadow:inset 3px 0 #477f9b}}
-#trash-progress [data-dismiss-task]{float:right;padding:0 4px;border:0;background:transparent;color:inherit;font-size:18px;line-height:1}
+#trash-progress .task-title{padding-right:24px}
+#trash-progress .task-message{white-space:pre-wrap;min-width:0}
+#trash-progress [data-dismiss-task]{position:absolute;top:10px;right:10px;width:22px;height:22px;padding:0;border:0;background:transparent;color:inherit;font-size:18px;line-height:22px}
 
 #sync-control #pending-uploads #pending-select-all{width:74px;min-width:74px;flex:0 0 74px;justify-content:center}
 
@@ -1526,4 +1528,4 @@ body{height:100dvh;display:flex;flex-direction:column;overflow:hidden}
 .transcription-end{pointer-events:auto}.transcription-end .editable-name{cursor:text;padding:0;margin:0;border:0}.transcription-end .editable-name:hover{outline:1px solid #91aaba;outline-offset:1px}
 
 #chat-selection-tag{flex-shrink:0;white-space:nowrap;margin-left:8px;padding:3px 7px;border:1px solid #d7b8e6;border-radius:12px;background:#f2e8f8;color:#743b91;font-size:11px;line-height:16px;cursor:pointer}#chat-selection-tag:hover{background:#e9d9f2}#chat-selection-tag:focus-visible{outline:2px solid #743b91;outline-offset:2px}
-.project-group>h2>.project-chevron{position:absolute;left:2px;top:50%;transform:translateY(-50%);width:8px;height:14px;padding:0;border:0;border-radius:0;background:transparent;color:inherit;font-size:10px;line-height:14px;box-shadow:none}.project-chevron:focus-visible{outline:2px solid #4388b2;outline-offset:2px}
+.project-group>h2>.project-chevron{position:static;flex:0 0 12px;width:12px;height:14px;padding:0;border:0;border-radius:0;background:transparent;color:inherit;font-size:10px;line-height:14px;box-shadow:none}.project-chevron:focus-visible{outline:2px solid #4388b2;outline-offset:2px}

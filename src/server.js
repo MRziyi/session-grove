@@ -151,16 +151,11 @@ export function createApp({ root, roots, guard, demo = false, startupOptions = {
                         }
                         assert(!stopping,'Server is stopping.',503);
                         assert(repository===autoSync.readConfig()?.url,'The sync repository changed while waiting. Current data was kept.',409);
-                        autoSync.migrating=true;store.transferReaders=(store.transferReaders||0)+1;acquired=true;
-                        discardPromise=discardChanges(store,autoSync.cloud,native,body.selections,{confirmation:body.confirmation,onProgress:report,deactivate:async branchIds=>{
-                            const before=store.instances();
-                            if(!demo&&!guard)await archiveNative(store,native,branchIds,{archiveBranches:false});
-                            else{try{for(const id of branchIds)native.setActive(id,null,false);await native.applyAsync(branchIds,{onProgress:report});}catch(error){const current=store.instances();for(const i of current){const old=before.find(v=>v.id===i.id);i.desired=old?.desired||false;}store.local('instances',current);throw error;}}
-                            await refreshNativeClients(native,before);
-                        }});
+                        autoSync.migrating=true;acquired=true;
+                        discardPromise=discardChanges(store,autoSync.cloud,null,body.selections,{onProgress:report});
                         const result=await discardPromise;const dirty=new Set(autoSync.cloud.dirtyIds());autoSync.queue=new Set([...autoSync.queue].filter(id=>dirty.has(id)));store.local('uploadQueue',[...autoSync.queue]);return result;
-                    }catch(error){await report({state:'error',phase:error.message});throw error;}
-                    finally{if(acquired){discardPromise=null;autoSync.migrating=false;store.transferReaders--;if(!store.transferReaders&&store.cleanupDeferred)cleanupLocal(store);autoSync.configureTimer();configureExpiry();intelligence.kick();}}
+                    }catch(error){await report({state:'error',phase:error.message,error:error.message});throw error;}
+                    finally{if(acquired){discardPromise=null;autoSync.migrating=false;autoSync.configureTimer();intelligence.observe();}}
                 })();
                 try{return send(200,await discardRequest);}finally{discardRequest=null;}
             }
@@ -403,6 +398,7 @@ export function createApp({ root, roots, guard, demo = false, startupOptions = {
                 if ('description' in body)
                     p.description = String(body.description).slice(0, 2000);
                 p.updatedAt = now();
+                store.checkpointProject(previous.id);
                 return send(200, store.put('project', metadata(previous, p)));
             }
             if (req.method === 'POST' && route === '/api/branches')

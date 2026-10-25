@@ -17,6 +17,7 @@ export function changeSnapshot(graph) {
         nodes: Object.fromEntries(graph.branches.flatMap(b => {
             const assigned = new Map();
             for (const [chat, annotation] of Object.entries(layouts[b.layoutHead]?.assignments || {})) {
+                if(!annotation)continue;
                 if (!assigned.has(annotation.id)) assigned.set(annotation.id, {name:annotation.name,chats:[]});
                 assigned.get(annotation.id).chats.push(chat);
             }

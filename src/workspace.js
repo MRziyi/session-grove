@@ -292,6 +292,7 @@ export function organize(store, branchId, { version, pathId, chatIds, action, na
         if (annotation) assert(annotation.name.length > 0 && annotation.name.length <= 200, 'Enter a node title (1–200 characters).');
         for (const id of selected) assignments[id] = annotation;
         const layout = { id: newId(), rootId: root.id, parent: root.layoutHead || null, assignments, createdAt: nextModifiedAt(...treeMembers(store, root.id)) };
+        store.checkpointOrganization(root.id);
         store.put('layout', layout);
         store.put('branch', { ...root, layoutHead: layout.id, ...editTimes(root,layout.createdAt,nameOrigin==='automatic') });
         for (const affected of graph.paths.filter(p => p.messages.some(m => selected.has(m.id)))) {
@@ -310,6 +311,7 @@ export function moveItems(store, { itemIds, projectId, projectName, automatic=fa
         const project = projectId === INBOX_ID ? inboxProject() : projectId ? store.get('project', projectId) : store.project(projectName);
         assert(!project.archived, 'Restore the destination project first.');
         for (const id of roots) {
+            store.checkpointOrganization(id);
             for (const b of treeMembers(store, id)) {
                 // Written directly here to keep project creation and all moves atomic.
                 store.put('branch', metadata(b, { projectId: project.id === INBOX_ID ? null : project.id, group: '' },{automatic}));

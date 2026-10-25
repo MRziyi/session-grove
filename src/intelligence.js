@@ -34,8 +34,10 @@ export class Intelligence {
         this.observe(false);this.kick();
     }
     config(){return {classify:false,nameNodes:false,nameTranscripts:false,concurrency:2,minIntervalSeconds:0,...json(this.file,{})};}
+    suppressed(id){const b=this.store.find('branch',id);return !!b&&!!this.store.local('intelligenceSuppressed')?.[rootOf(this.store,id).id];}
+    awaitingConfirmation(){return Object.keys(this.store.local('intelligenceSuppressed')||{}).filter(id=>active(this.store,this.store.find('branch',id))).length;}
     get pending(){return this.tasks.size?Promise.allSettled([...this.tasks.values()].map(task=>task.promise)):null;}
-    status(){const c=this.config();return {model:MODEL,hasKey:!!c.apiKey,classify:c.classify,nameNodes:c.nameNodes,nameTranscripts:c.nameTranscripts,transcriptionSupport:this.transcriptions?.capabilities()||{supported:false,reason:'A compatible Codex VS Code client is required for live transcription-title updates.'},concurrency:c.concurrency,minIntervalSeconds:c.minIntervalSeconds,activeRequests:this.tasks.size,running:this.running,pending:this.data.jobs.length,waitingForEvidence:c.classify?this.data.waiting.filter(id=>!this.data.jobs.some(j=>j.kind!=='node'&&j.id===id)).length:0,phase:this.phase||null,current:this.current||null,error:this.error,completed:this.completed||0};}
+    status(){const c=this.config();return {awaitingConfirmation:this.awaitingConfirmation(),model:MODEL,hasKey:!!c.apiKey,classify:c.classify,nameNodes:c.nameNodes,nameTranscripts:c.nameTranscripts,transcriptionSupport:this.transcriptions?.capabilities()||{supported:false,reason:'A compatible Codex VS Code client is required for live transcription-title updates.'},concurrency:c.concurrency,minIntervalSeconds:c.minIntervalSeconds,activeRequests:this.tasks.size,running:this.running,pending:this.data.jobs.length,waitingForEvidence:c.classify?this.data.waiting.filter(id=>!this.data.jobs.some(j=>j.kind!=='node'&&j.id===id)).length:0,phase:this.phase||null,current:this.current||null,error:this.error,completed:this.completed||0};}
     publish(){this.onStatus(this.status());}
     persist(){this.data.error=this.error;this.store.local('intelligenceState',this.data);}
     async save(body){
@@ -58,6 +60,7 @@ export class Intelligence {
     observe(enqueue=true){
         if(this.closed)return;
         const c=this.config(),branches=this.store.all('branch'),roots=new Map();
+        this.data.jobs=this.data.jobs.filter(job=>!this.suppressed(job.id));
         for(const b of branches){
             if(!this.data.seen[b.id]&&enqueue&&c.classify&&!b.archived&&!isTrashed(this.store,b.id)&&ungrouped(b)&&!b.parentId&&!b.synthetic)this.data.waiting.push(b.id);
             this.data.seen[b.id]=true;
@@ -69,6 +72,7 @@ export class Intelligence {
         this.data.jobs=this.data.jobs.filter(j=>['node','transcript'].includes(j.kind)||this.store.find('branch',j.id)&&rootOf(this.store,j.id).id===j.id);
         this.data.waiting=[];
         for(const item of families){
+            if(this.suppressed(item.id))continue;
             let root=this.store.get('branch',item.id);
             const sourceId=item.sessionIds.find(id=>nameable(this.store,this.store.find('branch',id))),source=this.store.get('branch',sourceId);
             // Completion belongs to the synced tree, not this device's queue.
@@ -84,6 +88,7 @@ export class Intelligence {
         for(const b of branches.filter(b=>b.excluded==='empty'&&!isTrashed(this.store,b.id))){const root=rootOf(this.store,b.id);if(!root.sessionAutomaticName&&!this.data.waiting.includes(root.id))this.data.waiting.push(root.id);}
         // Only build changed graphs while node naming is enabled.
         if(c.nameNodes)for(const [id,members] of roots){
+            if(this.suppressed(id))continue;
             const signature=hash(JSON.stringify([this.store.get('branch',id).layoutHead,members.map(b=>[b.id,b.head,b.layoutHead,b.endpointName,b.parentId,b.forkEnd])]));
             if(this.data.trees[id]?.signature===signature&&this.data.trees[id]?.policy===3)continue;
             let graph;try{graph=this.store.treeGraph(id,'in-use');}catch{continue;}
@@ -110,6 +115,7 @@ export class Intelligence {
     syncFirstTitles(roots){
         const cache=this.data.firstTitles||={};
         for(const [rootId,members] of roots){
+            if(this.suppressed(rootId))continue;
             const root=this.store.get('branch',rootId);
             if(!root.layoutHead){cache[rootId]={signature:null,firstName:null};continue;}
             const signature=hash(JSON.stringify([root.layoutHead,members.map(b=>[b.id,b.nameOrigin,b.automaticName?.at])]));
@@ -118,6 +124,7 @@ export class Intelligence {
             const first=graph.paths[0]&&graph.nodes.find(n=>n.id===graph.paths[0].nodeIds[0]);
             if(previous&&typeof previous==='object'&&previous.firstName!==first?.name&&first?.name&&root.sessionNameOrigin!=='manual'&&!(!root.sessionNameOrigin&&(root.nameOrigin==='manual'||root.groveNamed&&!root.nameOrigin))){
                 if(root.sessionName!==first.name){
+                    this.store.checkpointOrganization(rootId);
                     this.store.put('branch',metadata(root,{sessionName:first.name,sessionNameOrigin:'automatic',sessionAutomaticName:root.sessionAutomaticName||{name:first.name,basis:'first-node',nodeId:first.id,at:now(),model:graph.assignments[first.chatIds[0]]?.nameOrigin==='automatic'?MODEL:null}},{automatic:true}));
                     this.onChange(rootId);
                 }
@@ -139,7 +146,7 @@ export class Intelligence {
         // A tree is shared by all its native paths. Rebuild it once, and only
         // when its membership, history, layout or eligible client copies change.
         for(const [root,members] of families){
-            const eligible=members.filter(b=>eligibleIds.has(b.id));
+            const eligible=members.filter(b=>eligibleIds.has(b.id)&&!this.suppressed(b.id));
             if(!eligible.length){delete scans[root];continue;}
             const signature=hash(JSON.stringify([members,eligible.map(b=>b.id)]));
             for(const job of this.data.jobs.filter(j=>j.kind==='transcript'&&eligible.some(b=>b.id===j.id)))job.waitingForClient=!this.transcriptions.ready(job.id);
@@ -164,6 +171,7 @@ export class Intelligence {
     }
 
     prepare(job){
+        if(this.suppressed(job.id))return null;
         const b=this.store.find('branch',job.id);
         if(job.kind==='transcript'){
             if(!active(this.store,b)||b.transcriptionNameOrigin==='manual')return null;
@@ -193,7 +201,7 @@ export class Intelligence {
         if(!this.canApply()){this.timer=setTimeout(()=>this.kick(),500);this.timer.unref?.();return;}
         this.timer=setTimeout(()=>{this.run();this.kick();},Math.max(25,this.lastStartedAt+config.minIntervalSeconds*1000-Date.now()));this.timer.unref?.();
     }
-    retry(){this.error=null;this.observe();this.persist();this.publish();this.kick();return this.status();}
+    retry(){this.store.local('intelligenceSuppressed',{});this.data.trees={};this.error=null;this.observe();this.persist();this.publish();this.kick();return this.status();}
     run(){
         if(this.closed||this.error)return;
         if(!this.canApply())return;
@@ -226,13 +234,14 @@ export class Intelligence {
                 // A manual rename/move wins, but a completed model pass is still
                 // recorded rather than silently scheduling the same paid work again.
                 const branch=this.store.find('branch',job.id);
-                if(!['node','transcript'].includes(job.kind)&&branch&&!branch.sessionAutomaticName){
+                if(!['node','transcript'].includes(job.kind)&&branch&&!branch.sessionAutomaticName&&!this.suppressed(job.id)){
                     const source=this.store.find('branch',job.sourceId||job.id);
                     const evidence=source&&sessionEvidence(this.store.parsed(source.head,source.agent).records,source.agent);
                     if(evidence&&hash(evidence.user)===job.userHash){this.recordName(job.id,result,prepared.evidence);this.onChange(job.id);}
                 }
                 this.finish(job);if(job.kind==='transcript')this.observe();return;
             }
+            this.store.checkpointOrganization(job.id);
             if(job.kind==='transcript'){
                 const renamed=await this.transcriptions.rename(job.id,result.name,{signal:task.controller.signal,expected:job.expectedNames,validate:()=>!!this.prepare(job)});
                 this.store.put('branch',{...this.store.get('branch',job.id),transcriptionNaming:{name:result.name,model:MODEL,at:now(),shape:job.shape,evidenceHash:job.evidenceHash,...renamed}});

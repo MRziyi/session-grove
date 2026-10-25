@@ -9,6 +9,7 @@ import { bodyRefs, retainedGraph } from './retention.js';
 import { applyTrashState, deletedIds, trashState } from './trash.js';
 import { changeSnapshot, sessionChanges, commitMessage } from './session-changes.js';
 import { cloudProjectId } from './inbox.js';
+import {organizationUndoKey,currentOrganization,organizationSnapshot,organizationSignature,hasOrganizationChanges} from './organization-undo.js';
 const digest = value => hash(JSON.stringify(value));
 
 // Git owns history, content deduplication, packing and atomic ref publication.
@@ -22,13 +23,17 @@ export class GitCloud extends CloudView {
         const config = this.readConfig();
         const url = gitRemote(config.url, { allowLocal: config.allowLocal === true });
         if (this.connection) return this.connection;
+        if (this.connecting) return this.connecting.promise;
         this.useSavedCache();
         const remote = new GitRemote(path.join(this.store.root, 'git-cache', hash(url)), url, p => this.onProgress?.(p));
-        await remote.init();
-        this.connection = { remote, controller: remote.controller };
-        return this.connection;
+        const promise=remote.init().then(()=>{
+            remote.controller.signal.throwIfAborted();
+            return this.connection={remote,controller:remote.controller};
+        });
+        this.connecting={remote,promise};
+        try{return await promise;}finally{if(this.connecting?.promise===promise)this.connecting=null;}
     }
-    lock() { this.connection?.remote.controller.abort(); super.lock(); }
+    lock() { this.connecting?.remote.controller.abort();this.connecting=null;this.connection?.remote.controller.abort(); super.lock(); }
     directory() { return this.connection?.remote.directory || path.join(this.store.root, 'git-cache', hash(this.readConfig().url || '')); }
     file(name) {
         const file = path.join(this.directory(), name);
@@ -181,6 +186,11 @@ export class GitCloud extends CloudView {
     }
     undoKey(id) { return 'git-undo:'+hash(this.readConfig().url||'')+':'+id; }
     rememberBaseline(id,graph) { this.store.local(this.undoKey(id),{ack:digest(graph),graph}); }
+    async organizationBaseline(id){
+        const cache=this.cache();let graph;try{graph=this.read(this.folder(id)+'/graph.json');}catch{}
+        if(graph&&cache.loaded?.[id]?.includes(digest(graph))&&cache.baselines?.[id]&&digest(changeSnapshot(graph))===digest(cache.baselines[id]))return graph;
+        return this.undoBaseline(id);
+    }
     async undoBaseline(id) {
         this.useSavedCache();const ack=this.cache().ack[id];
         if(!ack)return null;
@@ -190,7 +200,9 @@ export class GitCloud extends CloudView {
         if(graph&&digest(graph)===ack)return graph;
         // A failed Push may have rewritten the working cache. Read committed local objects,
         // never fetch/push to make Discard work and never trust an unmatched snapshot.
-        await this.connect();const remote=this.connection.remote,file=this.folder(id)+'/graph.json';
+        // Offline recovery must not initialize a checkout or write Git config.
+        // Multiple baseline lookups may run together immediately after startup.
+        const remote=this.connection?.remote||new GitRemote(this.directory(),this.readConfig().url),file=this.folder(id)+'/graph.json';
         const env={GIT_NO_LAZY_FETCH:'1'},head=this.cache().gitHead;
         const history=await remote.run(['log','--all','--max-count=64','--format=%H','--',file],{accepted:[0,128],env});
         for(const commit of new Set([head,...history.stdout.split(/\s+/)].filter(v=>/^[a-f0-9]{40,64}$/.test(v||'')))){
@@ -220,7 +232,10 @@ export class GitCloud extends CloudView {
             const graph = treeSnapshot(this.store,i.id);
             let before = c.baselines?.[i.id];
             if (!before && c.ack[i.id]) before = this.store.memo('git-baseline:'+i.id+':'+c.ack[i.id],()=>changeSnapshot(this.read(this.folder(i.id)+'/graph.json')));
-            return {id:i.id,name:i.name,project:graph.projects.find(p=>p.id===cloudProjectId(i.projectId))?.name || 'Ungrouped',updatedAt:i.updatedAt,action:'upload',changes:sessionChanges(before,changeSnapshot(graph),this.store)};
+            const changes=sessionChanges(before,changeSnapshot(graph),this.store),checkpoint=this.store.local(organizationUndoKey(i.id));
+            if(!before&&checkpoint){const localBefore=changeSnapshot({...checkpoint,revisions:checkpoint.branches.map(b=>this.store.find('revision',b.head)).filter(Boolean)});changes.push(...sessionChanges(localBefore,changeSnapshot(graph),this.store).filter(c=>!['session-added','session-removed','transcript-appended','transcript-updated','archive-changed','project-archive','metadata-changed'].includes(c.kind)));}
+            const discardable=!!(before&&changes.some(c=>!['session-added','session-removed','transcript-appended','transcript-updated','archive-changed','project-archive'].includes(c.kind))||checkpoint&&hasOrganizationChanges(checkpoint,currentOrganization(this.store,i.id)));
+            return {id:i.id,name:i.name,project:graph.projects.find(p=>p.id===cloudProjectId(i.projectId))?.name || 'Ungrouped',updatedAt:i.updatedAt,action:'upload',discardable,changes};
         }).concat((this.store.local('trashPending') || []).map(e=>({id:e.id,name:(this.store.local('trashEntries')||[]).find(t=>t.id===e.id)?.names.join(', ') || 'Removed sessions',project:this.store.all('project').find(p=>p.id===this.store.find('branch',e.branchIds[0])?.projectId)?.name || 'Ungrouped',action:'remove',updatedAt:e.at,changes:[{kind:'session-removed',label:'Session removed'}]})));
         return items.map(item=>({...item,version:digest([this.readConfig().url||'',item.action==='remove'?(this.store.local('trashPending')||[]).find(e=>e.id===item.id):treeSnapshot(this.store,item.id),c.ack[item.id]||null])}));
     }
@@ -276,7 +291,9 @@ export class GitCloud extends CloudView {
         // A failed/non-fast-forward push never clears pending work or acknowledges data.
         const c = this.cache();
         for(const id of archivedRemovals){delete c.ack[id];delete c.loaded[id];if(c.baselines)delete c.baselines[id];}
-        for (const [id, graph] of snapshots) { c.ack[id] = digest(graph); this.rememberBaseline(id,graph); (c.baselines ||= {})[id] = changeSnapshot(graph); c.loaded[id] = [digest(graph)]; }
+        for (const [id, graph] of snapshots) { c.ack[id] = digest(graph); this.rememberBaseline(id,graph); (c.baselines ||= {})[id] = changeSnapshot(graph); c.loaded[id] = [digest(graph)];
+            if(organizationSignature(currentOrganization(this.store,id))===organizationSignature(organizationSnapshot(graph)))this.store.db.prepare('DELETE FROM local WHERE key=?').run(organizationUndoKey(id));
+        }
         c.lastUpload = now(); c.gitHead = remote.head; this.save(c);
         if (state.events.length) applyTrashState(this.store, state); await this.loadDirectory(); this.saveDirectory();
         return { published: snapshots.size, uploaded: 0, commit: remote.head };

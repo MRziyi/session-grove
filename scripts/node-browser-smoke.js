@@ -190,6 +190,12 @@ try{
  app.intelligence.data.jobs=[{key:'queued-fixture'}];app.intelligence.publish();await wait('document.querySelector("#smart-status").textContent==="Smart organization queued"');
  await evaluate('document.querySelector("#smart-status").click()');await wait('document.querySelector("#intelligence-status")?.textContent.includes("Smart organization queued")');
  assert.ok(await evaluate('document.querySelector("#intelligence-status").textContent.includes("remaining")'));await evaluate('document.querySelector("#dialog-close").click()');app.intelligence.data.jobs=[];app.intelligence.publish();
+ store.local('intelligenceSuppressed',{[parent.id]:'discarded'});app.intelligence.publish();
+ await wait('document.querySelector("#smart-status").textContent==="Smart organization needs attention"');
+ await evaluate('document.querySelector("#smart-status").click()');await wait('document.querySelector("#retry-intelligence")?.textContent==="Continue"&&!document.querySelector("#retry-intelligence").hidden');
+ assert.ok(await evaluate('document.querySelector("#intelligence-status").textContent.includes("paused")'));
+ await evaluate('document.querySelector("#retry-intelligence").click()');await wait('document.querySelector("#retry-intelligence").hidden');assert.equal(app.intelligence.status().awaitingConfirmation,0);
+ await evaluate('document.querySelector("#dialog-close").click()');
  await call('Emulation.setDeviceMetricsOverride',{width:1512,height:982,deviceScaleFactor:1,mobile:false});
  await evaluate('document.querySelector("#language-toggle").click()');assert.equal(await evaluate('document.querySelector("#language-toggle").textContent'),'中');
  await evaluate('document.querySelector("#language-toggle").click()');assert.equal(await evaluate('document.querySelector("#language-toggle").textContent'),'En');

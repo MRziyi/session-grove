@@ -1,4 +1,5 @@
 import {matchesCompaction,policyForCompactions,compactionDisabled} from './compaction-identity.js';
+import {checkpointOrganization} from './organization-undo.js';
 import {claudeFork} from './claude.js';
 import {retainedGraph,bodyRefs,withForkMetadata} from './retention.js';
 import {deletedIds,isTrashed} from './trash.js';
@@ -108,6 +109,8 @@ export class Store {
     get(kind, key) { const row = this.getStatement.get(kind, key); assert(row, `${kind} 不存在`, 404); return JSON.parse(row.body); }
     find(kind, key) { const row = this.getStatement.get(kind, key); return row ? JSON.parse(row.body) : undefined; }
     put(kind, value) { if(this.entityWrite.run(kind, value.id, JSON.stringify(value)).changes){if(kind==='revision')this.graphProjections=null;this.invalidate();} return value; }
+    checkpointOrganization(id){checkpointOrganization(this,id);}
+    checkpointProject(id){for(const root of new Set(this.all('branch').filter(b=>b.projectId===id).map(b=>rootOf(this,b.id).id)))this.checkpointOrganization(root);}
     local(key, value, options = {}) {
         if (key.startsWith('cloud:')) {
             if (!this.cloudCache.has(key)) { const body = this.localRead.get(key)?.body; this.cloudCache.set(key, { body, value: body ? JSON.parse(body) : null }); }
@@ -211,6 +214,7 @@ export class Store {
             b.archived = !!patch.archived;
         if ('archived' in patch && b.background) b.backgroundManaged = true;
         if (JSON.stringify(b) === JSON.stringify(previous)) return b;
+        this.checkpointOrganization(branchId);
         b.updatedAt = now();
         return this.put('branch', metadata(previous, b,{automatic}));
     }

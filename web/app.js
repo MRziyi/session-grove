@@ -45,7 +45,7 @@ let clockTimer = null, modalVersion = 0;
 const operations = {}, operationTimers = {}, seenOperations={};
 let activityGroups=[];
 function showOperation(kind, value) {
-    if(kind==='discard'){if(state.pendingDiscard&&!state.pendingDiscard.complete){if(value.phase&&!state.pendingDiscard.steps.includes(value.phase))state.pendingDiscard.steps.push(value.phase);renderDiscardProgress();}showOperation('trash',{...value,action:'discard',progress:{phase:value.phase,completed:value.completed,total:value.total,detail:value.detail},state:value.state==='confirmation'?'success':value.state,finishedAt:value.state!=='running'?Date.now():undefined});return;}
+    if(kind==='discard'){if(state.pendingDiscard&&!state.pendingDiscard.complete){if(value.phase&&!state.pendingDiscard.steps.includes(value.phase))state.pendingDiscard.steps.push(value.phase);renderDiscardProgress();}showOperation('trash',{...value,error:value.error||(value.state==='error'?value.phase:null),action:'discard',progress:{phase:value.phase,completed:value.completed,total:value.total,detail:value.detail},finishedAt:['success','error'].includes(value.state)?Date.now():undefined});return;}
     if(kind==='intelligence'){if(state.data)state.data.intelligence=value;renderCloudStatus();return;}
     const signature=value.id+':'+value.state+':'+JSON.stringify(value.progress||null); if(seenOperations[kind]===signature)return;seenOperations[kind]=signature;
     if (value.state==='success' && value.finishedAt && Date.now() - value.finishedAt > 3500) { if(kind==='trash'){delete operations.trash;if(state.data)state.data.trashOperation=value;renderCloudStatus();} return; }
@@ -184,13 +184,14 @@ const transferPhaseNames={'Fetching Git changes':'Checking for updates','Importi
 
 function renderIntelligence(){
     const value=state.data?.intelligence,button=$('#smart-status');if(!button)return;
-    button.hidden=!value?.running&&!value?.error&&!value?.pending;
+    button.hidden=!value?.running&&!value?.error&&!value?.pending&&!value?.awaitingConfirmation;
     const phase=t(value?.phase||'Smart organization queued');
-    button.textContent=t(value?.error?'Smart organization needs attention':value?.phase||'Smart organization queued');
+    button.textContent=t(value?.error||value?.awaitingConfirmation?'Smart organization needs attention':value?.phase||'Smart organization queued');
     button.title=value?.error?[value.current,errorText(value.error)].filter(Boolean).join(' · '):[value?.current,value?.pending?t('{count} remaining',{count:value.pending}):''].filter(Boolean).join(' · ');
-    button.classList.toggle('has-error',!!value?.error);button.onclick=()=>settings();
+    button.classList.toggle('has-error',!!value?.error||!!value?.awaitingConfirmation);button.onclick=()=>settings();
     const detail=$('#intelligence-status');if(detail)detail.textContent=value?.error?[t('Smart organization needs attention'),value.current,errorText(value.error)].filter(Boolean).join(' · '):value?.pending||value?.running?[phase,value.current,value.activeRequests?t('{count} active',{count:value.activeRequests}):'',t('{count} remaining',{count:value.pending})].filter(Boolean).join(' · '):value?.waitingForEvidence?t('{count} sessions are waiting for their own first request and reply.',{count:value.waitingForEvidence}):'';
-    if($('#retry-intelligence'))$('#retry-intelligence').hidden=!value?.error;
+    if(value?.awaitingConfirmation&&detail)detail.textContent=[detail.textContent,t('Discarded organization is paused for {count} sessions. Choose Continue to organize them again.',{count:value.awaitingConfirmation})].filter(Boolean).join(' ');
+    const retry=$('#retry-intelligence');if(retry){retry.hidden=!value?.error&&!value?.awaitingConfirmation;retry.textContent=t(value?.awaitingConfirmation?'Continue':'Retry');}
 }
 
 function renderCloudStatus(){
@@ -267,7 +268,8 @@ function renderTrashProgress() {
     if(box.hidden){box.hidePopover?.();return;}
     if(box.showPopover&&!box.matches(':popover-open'))box.showPopover();
     const p=op.progress||{},total=p.total,count=p.completed||0;
-    box.innerHTML=`<strong>${t(({resolve:'Resolve conflicts',open:'Open session',recovery:'Move to recovery',restore:'Restore to Projects',delete:'Delete recovery copies',activate:'Activate',deactivate:'Deactivate',archive:'Client archive',convert:'Activate as',discard:'Discard'})[op.action]||'Move to Trash')}</strong>${op.state==='error'?`<button type="button" data-dismiss-task aria-label="${t('Close')}">×</button>`:''}<div>${esc(t(op.state==='error'?op.error:op.state==='success'?'Complete':p.phase||'Checking selection'))}</div>${p.detail?`<small class="task-detail">${esc(p.detail)}</small>`:''}${op.state==='running'?`<progress ${total>0?`max="${total}" value="${count}"`:''}></progress>${total>0?`<small>${count} / ${total}</small>`:''}`:''}`;
+    const message=op.state==='error'?(op.error||p.phase||'Operation failed'):p.phase||(op.state==='success'?'Complete':'Checking selection');
+    box.innerHTML=`<strong class="task-title">${t(({resolve:'Resolve conflicts',open:'Open session',recovery:'Move to recovery',restore:'Restore to Projects',delete:'Delete recovery copies',activate:'Activate',deactivate:'Deactivate',archive:'Client archive',convert:'Activate as',discard:'Discard'})[op.action]||'Move to Trash')}</strong>${op.state==='error'?`<button type="button" data-dismiss-task aria-label="${t('Close')}">×</button>`:''}<div class="task-message" ${op.state==='error'?'role="alert"':''}>${esc(t(message))}</div>${p.detail?`<small class="task-detail">${esc(p.detail)}</small>`:''}${op.state==='running'?`<progress ${total>0?`max="${total}" value="${count}"`:''}></progress>${total>0?`<small>${count} / ${total}</small>`:''}`:''}`;
     const dismiss=box.querySelector('[data-dismiss-task]');if(dismiss)dismiss.onclick=()=>{state.dismissedTask=op.id;renderTrashProgress();};
 }
 async function trashRequest(path,body,action) {
@@ -277,24 +279,20 @@ async function trashRequest(path,body,action) {
 }
 function renderDiscardProgress(){
     const box=$('#pending-progress'),action=state.pendingDiscard;if(!box||!action)return;
-    const goals=action.approval?[...action.approval.sessions.map(s=>t('Deactivate {name} ({client}) and discard its changes.',{name:s.name,client:s.agent==='codex'?'Codex':'Claude Code'})),...action.approval.additional.map(s=>t(s.updated?'Updated since selection: {name}':'Also revert {name}',{name:s.name}))]:[];
-    box.innerHTML=action.approval?`<div class="discard-confirmation"><span>${esc(goals.join(' '))}</span><button id="confirm-discard" type="button">${t('Confirm')}</button></div>`:action.error?`<p class="pending-status warning" role="alert">${esc(action.error)}</p>`:action.steps?.length?`<p class="pending-status">${esc(t(action.steps.at(-1)))}</p>`:'';
-    const confirm=$('#confirm-discard');if(confirm)confirm.onclick=()=>performDiscard(action.approval.confirmation);
+    box.innerHTML=action.error?`<p class="pending-status warning" role="alert">${esc(action.error)}</p>`:action.steps?.length?`<p class="pending-status">${esc(t(action.steps.at(-1)))}</p>`:'';
 }
-async function performDiscard(confirmation=null){
+async function performDiscard(){
     if(working||!pendingSelection.size)return;
-    if(!confirmation)state.pendingDiscard={selections:[...pendingSelection].map(([id,version])=>({id,version})),steps:[]};
-    const action=state.pendingDiscard;action.approval=null;action.error=null;action.complete=false;working=true;clearTimeout(pendingTimer);
+    state.pendingDiscard={selections:[...pendingSelection].map(([id,version])=>({id,version})),steps:[]};
+    const action=state.pendingDiscard;action.error=null;action.complete=false;working=true;clearTimeout(pendingTimer);
     const box=$('#pending-uploads');for(const el of box.querySelectorAll('input,button'))el.disabled=true;
     action.steps.push('Reading current changes');renderDiscardProgress();
     try{
-        const result=await api('/synchronize/discard','POST',{selections:action.selections,confirmation});
-        if(result.confirmationRequired){action.approval=result;renderDiscardProgress();return;}
-        pendingSelection.clear();action.complete=true;action.steps.push('Changes discarded');
-        if(state.tree){const latest=await api('/state');if(!latest.items.some(i=>i.id===state.tree.id)){state.tree=null;state.scope=PROJECTS;clearRange();}}
+        const result=await api('/synchronize/discard','POST',{selections:action.selections});
+        pendingSelection.clear();action.complete=true;action.steps.push(result.discarded?'Organization changes discarded':'No organization changes to discard.');
         await refresh();if(!box.hidden){await showPendingUploads(true);renderDiscardProgress();}
     }catch(error){action.error=error.message;renderDiscardProgress();}
-    finally{working=false;for(const el of box.querySelectorAll('input,button'))el.disabled=false;renderCloudStatus();}
+    finally{working=false;for(const el of box.querySelectorAll('input,button'))el.disabled=el.dataset.discardable==='false';const selectAll=box.querySelector('#pending-select-all');if(selectAll)selectAll.disabled=!box.querySelector('[data-pending-select]:not(:disabled)');renderCloudStatus();}
 }
 async function resolveSelectedConflicts(choice){
     if(working||!conflictSelection.size)return;
@@ -321,12 +319,14 @@ async function showPendingUploads(force=false){
     try{
         const version=state.data.stateVersion;let request=pendingFetch;if(!request||request.mode!==mode){request={mode,promise:api(mode==='conflicts'?'/conflicts':'/synchronize/pending')};pendingFetch=request;request.promise.finally(()=>{if(pendingFetch===request)pendingFetch=null;}).catch(()=>{});}const data=await request.promise;if(ticket!==pendingTicket||box.hidden)return;box.dataset.version=version;
         if(mode==='conflicts'){renderConflictItems(box,data);positionSyncPanel(box,$('#push-zone'));return;}
-        for(const id of pendingSelection.keys()){const item=data.items.find(i=>i.id===id);if(item)pendingSelection.set(id,item.version);else pendingSelection.delete(id);}
+        const eligible=data.items.filter(i=>i.action==='upload'&&i.discardable);
+        for(const id of pendingSelection.keys()){const item=eligible.find(i=>i.id===id);if(item)pendingSelection.set(id,item.version);else pendingSelection.delete(id);}
         box.innerHTML=`<div class="pending-heading"><strong>${t('Pending uploads')}</strong><div class="actions"><button type="button" id="discard-pending" hidden>${t('Discard')}</button><button type="button" id="pending-select-all"></button></div></div>${data.items.length?`<ul>${data.items.map(i=>`<li class="pending-row"><div class="pending-title"><span title="${esc(i.name)}">${esc(i.name)}</span>${i.project?`<small title="${esc(i.project)}">${esc(i.project)}</small>`:''}</div><input type="checkbox" data-pending-select="${esc(i.id)}" aria-label="${esc(t('Select {name}',{name:i.name}))}" ${pendingSelection.has(i.id)?'checked':''}><div class="pending-summary"><time>${esc(date(i.updatedAt))}</time>${i.changes?.length?`<ul class="pending-changes">${i.changes.map(c=>`<li>${c.session&&c.session!==i.name?esc(c.session)+': ':''}${esc(t(c.label,c))}</li>`).join('')}</ul>`:''}</div></li>`).join('')}</ul>`:`<p>${t('No local changes waiting to upload.')}</p>`}<div id="pending-progress" role="status" aria-live="polite"></div>`;
-        const update=()=>{$('#discard-pending').hidden=!pendingSelection.size;$('#pending-select-all').textContent=t(pendingSelection.size?'Deselect':'Select all');$('#pending-select-all').disabled=!data.items.length;};update();
+        box.querySelector('.pending-heading').insertAdjacentHTML('afterend',`<p class="pending-note">${t('Discard only reverts organization. Conversation updates stay queued.')}</p>`);
+        const update=()=>{$('#discard-pending').hidden=!pendingSelection.size;$('#pending-select-all').textContent=t(pendingSelection.size?'Deselect':'Select all');$('#pending-select-all').disabled=!eligible.length;};update();
         const clearProgress=()=>{state.pendingDiscard=null;$('#pending-progress').replaceChildren();};
-        $('#pending-select-all').onclick=()=>{clearProgress();if(pendingSelection.size)pendingSelection.clear();else for(const i of data.items)pendingSelection.set(i.id,i.version);for(const el of $$('[data-pending-select]'))el.checked=pendingSelection.has(el.dataset.pendingSelect);update();};
-        for(const checkbox of $$('[data-pending-select]'))checkbox.onchange=()=>{clearProgress();const item=data.items.find(i=>i.id===checkbox.dataset.pendingSelect);checkbox.checked?pendingSelection.set(item.id,item.version):pendingSelection.delete(item.id);update();};
+        $('#pending-select-all').onclick=()=>{clearProgress();if(pendingSelection.size)pendingSelection.clear();else for(const i of eligible)pendingSelection.set(i.id,i.version);for(const el of $$('[data-pending-select]'))el.checked=pendingSelection.has(el.dataset.pendingSelect);update();};
+        for(const checkbox of $$('[data-pending-select]')){checkbox.disabled=!eligible.some(i=>i.id===checkbox.dataset.pendingSelect);checkbox.dataset.discardable=String(!checkbox.disabled);checkbox.onchange=()=>{clearProgress();const item=eligible.find(i=>i.id===checkbox.dataset.pendingSelect);if(!item)return;checkbox.checked?pendingSelection.set(item.id,item.version):pendingSelection.delete(item.id);update();};}
         $('#discard-pending').onclick=()=>performDiscard();renderDiscardProgress();
         positionSyncPanel(box,$('#push-zone'));
     }catch(e){if(ticket===pendingTicket)box.innerHTML=`<div class="pending-heading"><strong>${t(mode==='conflicts'?'Sync conflicts':'Pending uploads')}</strong></div><p class="settings-error" role="alert">${esc(e.message)}</p>`;}
@@ -1069,7 +1069,7 @@ async function settings(options = {}) {
     } catch(e) { toast(e.message); }
 }
 function information() {
-    modal('Information', `<details open><summary>${t('Using Grove')}</summary><ul class="action-guide"><li>${t('Update reads your local sessions. Pull gets changes from your other devices. Push sends your changes after pulling.')}</li><li>${t('Activate opens the selected node and its preceding context in your tool. Deactivate is available at the active endpoint.')}</li><li>${t('A Session is a whole tree; a transcription is one client path; a node is a stretch of conversation. Pending means it has no node label yet.')}</li><li>${t('Renaming changes the Grove label. Your conversation keeps the same identity.')}</li></ul></details><details><summary>${t('Sync and recovery')}</summary><p>${t('Sessions are stored as readable files in your Git repository. Earlier versions remain in Git history.')}</p><p>${t('Changes made during upload remain queued for the next upload.')}</p><p>${t('Trash keeps a recovery copy on this device until its displayed expiry date.')}</p><p>${t('Discard restores the last synced version. New unsynced sessions are removed from Grove. A local recovery copy is kept.')}</p></details><details><summary>${t('Smart organization')}</summary><p>${t('Smart organization names each session once, including existing sessions and forks. Manual names are preserved. Automatic node names are checked again when their range changes.')}</p><p>${t('Classification uses the first human request, project names and a short workspace hint. Node naming uses the first human request and last assistant reply in that node.')}</p><p>${t('Your API key and switches stay on this device. User messages are kept complete; long assistant replies are shortened in the middle.')}</p></details><details><summary>${t('Tokens and tools')}</summary><p>${t('Token counts estimate the selected conversation and recorded tool context. Model capacity and compaction thresholds come from available model settings.')}</p>${['lean','full','messages'].map(m=>`<p><strong>${t(modeName(m))}</strong> — ${contextCopy(m)}</p>`).join('')}<p>${t('Switching tools creates a new session. Thinking and attachments remain in the original.')}</p></details>${(state.data.plan?.pendingRecovery||[]).map(id=>`<button type="button" data-recover="${esc(id)}">${t('Recover interrupted operation')}</button>`).join('')}${state.data.conflicts.length?`<button type="button" id="review-sync-conflicts">${t('Review sync conflicts')}</button>`:''}`,null);
+    modal('Information', `<details open><summary>${t('Using Grove')}</summary><ul class="action-guide"><li>${t('Update reads your local sessions. Pull gets changes from your other devices. Push sends your changes after pulling.')}</li><li>${t('Activate opens the selected node and its preceding context in your tool. Deactivate is available at the active endpoint.')}</li><li>${t('A Session is a whole tree; a transcription is one client path; a node is a stretch of conversation. Pending means it has no node label yet.')}</li><li>${t('Renaming changes the Grove label. Your conversation keeps the same identity.')}</li></ul></details><details><summary>${t('Sync and recovery')}</summary><p>${t('Sessions are stored as readable files in your Git repository. Earlier versions remain in Git history.')}</p><p>${t('Changes made during upload remain queued for the next upload.')}</p><p>${t('Trash keeps a recovery copy on this device until its displayed expiry date.')}</p><p>${t('Discard reverts names, project assignments and node organization. Conversation history and active sessions are kept.')}</p></details><details><summary>${t('Smart organization')}</summary><p>${t('Smart organization names each session once, including existing sessions and forks. Manual names are preserved. Automatic node names are checked again when their range changes.')}</p><p>${t('Classification uses the first human request, project names and a short workspace hint. Node naming uses the first human request and last assistant reply in that node.')}</p><p>${t('Your API key and switches stay on this device. User messages are kept complete; long assistant replies are shortened in the middle.')}</p></details><details><summary>${t('Tokens and tools')}</summary><p>${t('Token counts estimate the selected conversation and recorded tool context. Model capacity and compaction thresholds come from available model settings.')}</p>${['lean','full','messages'].map(m=>`<p><strong>${t(modeName(m))}</strong> — ${contextCopy(m)}</p>`).join('')}<p>${t('Switching tools creates a new session. Thinking and attachments remain in the original.')}</p></details>${(state.data.plan?.pendingRecovery||[]).map(id=>`<button type="button" data-recover="${esc(id)}">${t('Recover interrupted operation')}</button>`).join('')}${state.data.conflicts.length?`<button type="button" id="review-sync-conflicts">${t('Review sync conflicts')}</button>`:''}`,null);
     const operation=state.data.cloud.operation;
     if (operation) $('#dialog-content').insertAdjacentHTML('beforeend', `<details id="transfer-diagnostics"><summary>${t('Last transfer')}</summary><dl><dt>${t('Elapsed')}</dt><dd>${Math.round(((operation.finishedAt||Date.now())-operation.startedAt)/1000)} s</dd>${operation.summary?`<dt>${t('Sessions checked')}</dt><dd>${operation.summary.checked||0}</dd><dt>${t('Items pushed')}</dt><dd>${operation.summary.published||0}</dd>`:''}</dl></details>`);
     if($('#review-sync-conflicts'))$('#review-sync-conflicts').onclick=()=>{$('#dialog').close();showPendingUploads(true);};

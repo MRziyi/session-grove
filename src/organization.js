@@ -61,6 +61,7 @@ export function commitPending(store, branchId, { name, end, revisionId, expected
         assert(Number(expectedStart) === pending.start, 'This range was already organized. Refresh before committing.', 409);
         assert(pending.checkpoints.some(c => c.end === Number(end)), 'Choose a complete turn boundary.');
         const node = { id: id(), branchId, revisionId: branch.head, name: text(name, 'Node name'), start: pending.start, end: Number(end), previousId: branch.nodeHead || null, createdAt: nextModifiedAt(branch) };
+        store.checkpointOrganization(branchId);
         store.put('node', node);
         store.put('branch', { ...branch, nodeHead: node.id, ...editTimes(branch,node.createdAt) });
         return node;

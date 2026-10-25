@@ -11,8 +11,8 @@ app.server.prependListener('request',(req,res)=>{
  if(req.url!=='/api/events')return;const write=res.write.bind(res);
  res.write=(chunk,...args)=>{if(delayDiscardEvents&&String(chunk).includes('"kind":"discard"')){delayedEvents.push(new Promise(resolve=>setTimeout(()=>{if(!res.destroyed)write(chunk,...args);resolve();},200)));return true;}return write(chunk,...args);};
 });
-const mistake=app.store.branch(null,'Discard this accidental session','codex',codexSample(root,[['Accidental','Draft']]));
-const activeMistake=app.store.branch(null,'Active accidental session','codex',codexSample(root,[['Test activation','Draft']]));app.native.setActive(activeMistake.id,root,true);app.native.apply([activeMistake.id]);
+const mistake=app.store.branch(null,'Original session label','codex',codexSample(root,[['Accidental','Draft']]));app.store.edit(mistake.id,{name:'Discard this accidental label'});
+const activeMistake=app.store.branch(null,'Original active label','codex',codexSample(root,[['Test activation','Draft']]));app.native.setActive(activeMistake.id,root,true);app.native.apply([activeMistake.id]);app.store.edit(activeMistake.id,{name:'Active accidental label'});
 const pull=Promise.withResolvers(),push=Promise.withResolvers();let failPull=false,unchangedPull=false;
 app.autoSync.run=async(store,config,direction,ids)=>{
  const metrics=app.autoSync.cloud.metrics;metrics.requests+=3;metrics.bytesReceived+=4096;
@@ -51,20 +51,33 @@ try{
  assert.equal(await evaluate('document.querySelector("#pending-uploads").hidden'),true,'hover panel closes on pointer leave');
  await hover('#push-zone');await wait('document.querySelector("#discard-pending")&&!document.querySelector("#pending-uploads").hidden');
  assert.equal(await evaluate('!!document.querySelector("#close-pending")'),false);
+ const undoBaseline=app.autoSync.cloud.undoBaseline.bind(app.autoSync.cloud),discardError='Synthetic Git config lock: current data was kept.';
+ app.autoSync.cloud.undoBaseline=async()=>{throw Object.assign(new Error(discardError),{status:409});};
+ try{
+  await evaluate('document.querySelector("#discard-pending").click()');
+  await wait(`document.querySelector('#trash-progress .task-message')?.textContent===${JSON.stringify(discardError)}`);
+  const status=await(await fetch('http://127.0.0.1:'+app.server.address().port+'/api/status',{headers:{'X-Grove-Token':app.token}})).json();
+  assert.equal(status.discardOperation.error,discardError);assert.ok(app.store.find('branch',mistake.id));
+  for(const width of [1512,390]){
+   await call('Emulation.setDeviceMetricsOverride',{width,height:982,deviceScaleFactor:1,mobile:false});await fits('#trash-progress');
+   assert.ok(await evaluate(`(()=>{const box=document.querySelector('#trash-progress'),b=box.getBoundingClientRect(),x=box.querySelector('[data-dismiss-task]').getBoundingClientRect(),title=box.querySelector('.task-title').getBoundingClientRect();return x.width<=24&&x.height<=24&&x.right>b.right-18&&Math.abs(x.y+x.height/2-title.y-title.height/2)<5;})()`),'close is a compact top-right control on the title row');
+  }
+  await call('Emulation.setDeviceMetricsOverride',{width:1512,height:982,deviceScaleFactor:1,mobile:false});
+  fs.mkdirSync('test-results',{recursive:true});fs.writeFileSync('test-results/discard-error-card.png',Buffer.from((await call('Page.captureScreenshot',{format:'png'})).data,'base64'));
+  await evaluate('document.querySelector("#trash-progress [data-dismiss-task]").click()');assert.equal(await evaluate('document.querySelector("#trash-progress").hidden'),true);
+ }finally{app.autoSync.cloud.undoBaseline=undoBaseline;}
+ await hover('#push-zone');await wait('!document.querySelector("#pending-uploads").hidden');
  await evaluate('document.querySelector("#discard-pending").click()');
- await wait(`!document.querySelector('[data-pending-select="${mistake.id}"]')&&document.querySelector('#pending-uploads').textContent.includes('Waiting upload')`);
- assert.ok(!app.store.find('branch',mistake.id));assert.ok((app.store.local('trashEntries')||[]).some(e=>e.rescueFor==='discard-pending'));
- await evaluate(`document.querySelector('[data-pending-select="${activeMistake.id}"]').click();document.querySelector('#discard-pending').click()`);
- await wait('document.querySelector("#confirm-discard")');
- assert.ok(app.store.instances().some(i=>i.branchId===activeMistake.id&&i.applied),'preview does not deactivate');
- assert.ok(await evaluate('document.querySelector("#pending-progress").textContent.includes("Active accidental session")&&document.querySelector("#confirm-discard").textContent==="Confirm"'));
- fs.mkdirSync('test-results',{recursive:true});fs.writeFileSync('test-results/pending-discard-confirmation.png',Buffer.from((await call('Page.captureScreenshot',{format:'png'})).data,'base64'));
+ await wait(`document.querySelector('[data-pending-select="${mistake.id}"]')?.disabled&&document.querySelector('#pending-progress').textContent.includes('Organization changes discarded')`);
+ assert.equal(app.store.get('branch',mistake.id).name,'Original session label');assert.equal(app.store.get('branch',mistake.id).head,mistake.head);assert.equal((app.store.local('trashEntries')||[]).length,0);
+ const activeBefore=JSON.stringify(app.store.instances()),activeCopy=app.store.instances().find(i=>i.branchId===activeMistake.id),activeBytes=fs.readFileSync(activeCopy.file);
  delayDiscardEvents=true;
- await evaluate('document.querySelector("#confirm-discard").click()');await wait('document.querySelector("#pending-progress").textContent.includes("Changes discarded")&&!document.querySelector("#confirm-discard")');
+ await evaluate(`document.querySelector('[data-pending-select="${activeMistake.id}"]').click();document.querySelector('#discard-pending').click()`);
+ await wait(`document.querySelector('[data-pending-select="${activeMistake.id}"]')?.disabled&&document.querySelector('#pending-progress').textContent.includes('Organization changes discarded')`);
+ assert.equal(await evaluate('!!document.querySelector("#confirm-discard")'),false);
  await Promise.all(delayedEvents);await new Promise(r=>setTimeout(r,100));
- assert.ok(await evaluate('document.querySelector("#pending-progress").textContent.includes("Changes discarded")'),'late progress events cannot replace a completed discard');delayDiscardEvents=false;
- assert.ok(!app.store.find('branch',activeMistake.id));assert.ok(app.store.instances().some(i=>i.branchId===b.id&&i.applied));
- assert.ok(await evaluate('document.querySelector("#pending-progress").textContent.includes("Changes discarded")'));
+ assert.ok(await evaluate('document.querySelector("#pending-progress").textContent.includes("Organization changes discarded")'),'late progress events cannot replace a completed discard');delayDiscardEvents=false;
+ assert.equal(app.store.get('branch',activeMistake.id).name,'Original active label');assert.equal(JSON.stringify(app.store.instances()),activeBefore);assert.deepEqual(fs.readFileSync(activeCopy.file),activeBytes);
 
 
  await evaluate('document.querySelector("#upload").click()');await wait('document.querySelector("#sync").dataset.operation==="running"');

@@ -26,6 +26,34 @@ function fixture(t) {
 }
 const branch = (d, name = 'Sample') => d.store.branch(null, name, 'codex', codexSample('/synthetic', [['Hello ' + name, 'Ready']]));
 const push = async d => { d.auto.startTransfer('push'); return d.auto.syncJob; };
+
+test('concurrent Git connections share initialization and a cancelled initialization cannot reconnect',async t=>{
+ const e=fixture(t),a=e.device('connect-race'),init=GitRemote.prototype.init,gate=Promise.withResolvers();let calls=0,attempts=[];
+ GitRemote.prototype.init=async function(){calls++;await gate.promise;return init.call(this);};
+ try{
+  attempts=Array.from({length:12},()=>a.cloud.connect());assert.equal(calls,1);
+  gate.resolve();const connections=await Promise.all(attempts);assert.ok(connections.every(c=>c===connections[0]));
+ }finally{gate.resolve();await Promise.allSettled(attempts);GitRemote.prototype.init=init;}
+ a.cloud.lock();const cancelledGate=Promise.withResolvers();
+ GitRemote.prototype.init=async function(){await cancelledGate.promise;return init.call(this);};
+ try{
+  const pending=a.cloud.connect(),rejected=assert.rejects(pending,error=>error.name==='AbortError');a.cloud.lock();cancelledGate.resolve();await rejected;assert.equal(a.cloud.connection,null);
+ }finally{cancelledGate.resolve();GitRemote.prototype.init=init;}
+ assert.ok((await a.cloud.connect()).remote); // a failed/cancelled attempt is retryable
+});
+
+test('cold batch Discard reads Git history without initializing or touching a held config lock',async t=>{
+ const {discardChanges}=await import('../src/discard-changes.js'),e=fixture(t),a=e.device('cold-discard');
+ const branches=[branch(a,'First'),branch(a,'Second')];await push(a);
+ for(const b of branches){a.store.local(a.cloud.undoKey(b.id),null);a.store.edit(b.id,{name:'Unwanted '+b.name});a.cloud.write(a.cloud.folder(b.id)+'/graph.json',{schema:3,branches:[],projects:[],revisions:[],nodes:[],layouts:[]});}
+ const lock=path.join(a.cloud.directory(),'.git','config.lock');fs.writeFileSync(lock,'synthetic external lock');a.cloud.lock();
+ const init=GitRemote.prototype.init;GitRemote.prototype.init=async()=>{assert.fail('Offline Discard must not initialize Git');};
+ try{
+  const result=await discardChanges(a.store,a.cloud,{collect:()=>({errors:[]})},a.cloud.pendingItems());
+  assert.equal(result.discarded,2);assert.deepEqual(branches.map(b=>a.store.get('branch',b.id).name),['First','Second']);
+  assert.equal(fs.readFileSync(lock,'utf8'),'synthetic external lock');assert.equal(a.cloud.connection,null);
+ }finally{GitRemote.prototype.init=init;}
+});
 test('Git import preserves Unicode JSON strings and original conversation dates after metadata naming',async t=>{
     const e=fixture(t),a=e.device('unicode-source'),b=e.device('unicode-reader');
     const raw=codexSample('/synthetic',[['Unicode \u2028 and \u2029 separators','a'.repeat(70000)+'\u2028end']]);
@@ -196,7 +224,7 @@ test('lightweight verification downloads no session blobs or history and leaves 
     assert.ok(commands.some(args=>args.includes('--filter=tree:0')));
 });
 
-test('discard restores the exact acknowledged snapshot, removes an empty fork and keeps recovery',async t=>{
+test('discard restores organization while retaining new forks and metadata recovery',async t=>{
     const {discardChanges}=await import('../src/discard-changes.js');
     const e=fixture(t),a=e.device('undo'),b=branch(a);await push(a);
     const baseline=a.cloud.cache().ack[b.id];
@@ -205,12 +233,12 @@ test('discard restores the exact acknowledged snapshot, removes an empty fork an
     a.store.put('branch',{...child,activationNodeName:'Pending'});
     const pending=a.cloud.pendingItems();assert.equal(pending.length,1);
     const result=await discardChanges(a.store,a.cloud,{collect:()=>({errors:[]})},pending);
-    assert.equal(a.store.get('branch',b.id).name,'Sample');assert.ok(!a.store.find('branch',child.id));
-    assert.equal(a.cloud.cache().ack[b.id],baseline);assert.equal(a.cloud.dirtyIds().length,0);
-    assert.ok(fs.existsSync(path.join(a.store.root,'trash',result.recoveryId+'.json.gz')));
-    const restored=restoreTrash(a.store,result.recoveryId);assert.ok(restored);assert.ok(a.store.all('branch').some(b=>b.name==='Empty fork'),'discarded work can be recovered under new identities');
+    assert.equal(a.store.get('branch',b.id).name,'Sample');assert.equal(a.store.get('branch',child.id).head,child.head);
+    assert.equal(a.cloud.cache().ack[b.id],baseline);assert.equal(a.cloud.dirtyIds().length,1);
+    assert.ok(a.store.local('organization-recovery:'+result.recoveryId));
+    assert.equal(a.cloud.pendingItems()[0].discardable,false);assert.ok(a.cloud.pendingItems()[0].changes.some(c=>c.kind==='session-added'));
 });
-test('discard reconciles updated selections and only confirms active changed conversations',async t=>{
+test('discard reconciles organization selections without deactivating changed conversations',async t=>{
     const {discardChanges}=await import('../src/discard-changes.js');
     const e=fixture(t),a=e.device('undo-guards'),b=branch(a);await push(a);const native={collect:()=>({errors:[]})};
     a.store.edit(b.id,{name:'First'});const stale=a.cloud.pendingItems();a.store.edit(b.id,{name:'Second'});
@@ -218,22 +246,23 @@ test('discard reconciles updated selections and only confirms active changed con
     a.store.local('instances',[{id:'native',branchId:b.id,agent:'codex',nativeId:'native-id',applied:true,baseRevision:b.head}]);
     await discardChanges(a.store,a.cloud,native,a.cloud.pendingItems());assert.equal(a.store.get('branch',b.id).name,'Sample');
     a.store.ingest(b.id,a.store.raw(b.head)+codexTurn('New question','New answer').map(v=>JSON.stringify(v)+'\n').join(''),b.head,{operation:'capture'});
-    const approval=await discardChanges(a.store,a.cloud,native,a.cloud.pendingItems());assert.equal(approval.confirmationRequired,true);assert.equal(approval.sessions[0].nativeId,'native-id');
+    const head=a.store.get('branch',b.id).head,instances=JSON.stringify(a.store.instances());
+    const result=await discardChanges(a.store,a.cloud,native,a.cloud.pendingItems());assert.equal(result.confirmationRequired,undefined);assert.equal(result.discarded,0);assert.equal(a.store.get('branch',b.id).head,head);assert.equal(JSON.stringify(a.store.instances()),instances);
 });
-test('discarding a never-synced session works offline without publishing a deletion',async t=>{
+test('discard does not delete a never-synced session with no organization edits',async t=>{
     const {discardChanges}=await import('../src/discard-changes.js');
     const e=fixture(t),a=e.device('undo-new'),b=branch(a);
-    await discardChanges(a.store,a.cloud,{collect:()=>({errors:[]})},a.cloud.pendingItems());
-    assert.ok(!a.store.find('branch',b.id));assert.equal(a.cloud.pendingItems().length,0);assert.equal((a.store.local('trashPending')||[]).length,0);
+    const result=await discardChanges(a.store,a.cloud,{collect:()=>assert.fail('No native capture')},a.cloud.pendingItems());
+    assert.equal(result.discarded,0);assert.equal(a.store.get('branch',b.id).head,b.head);assert.equal(a.cloud.pendingItems().length,1);assert.equal((a.store.local('trashPending')||[]).length,0);
 });
-test('discard cancels a queued removal and restores the original synced identities',async t=>{
+test('organization discard does not change Trash identities or deletion work',async t=>{
     const {discardChanges}=await import('../src/discard-changes.js');
     const e=fixture(t),a=e.device('undo-removal'),b=branch(a);await push(a);
     stageTrash(a.store,[b.id],[b.id]);cleanupLocal(a.store);
-    await discardChanges(a.store,a.cloud,{collect:()=>({errors:[]})},a.cloud.pendingItems());
-    assert.ok(!a.store.isTrashed(b.id));assert.equal(a.cloud.pendingItems().length,0);assert.equal(a.store.get('branch',b.id).name,'Sample');
+    const pending=JSON.stringify(a.store.local('trashPending'));const result=await discardChanges(a.store,a.cloud,{collect:()=>assert.fail('No native capture')},a.cloud.pendingItems());
+    assert.equal(result.discarded,0);assert.ok(a.store.isTrashed(b.id));assert.equal(JSON.stringify(a.store.local('trashPending')),pending);
 });
-test('shared project rollback is automatic and preserves other sessions edits and undo bodies',async t=>{
+test('shared project rollback preserves other organization edits and replacement conversation content',async t=>{
     const {discardChanges}=await import('../src/discard-changes.js');
     const e=fixture(t),a=e.device('undo-gc'),p=a.store.project('Original project'),b=branch(a),other=branch(a,'Other');
     a.store.edit(b.id,{name:'Original'});a.store.moveItems({itemIds:[b.id,other.id],projectId:p.id});await push(a);
@@ -245,7 +274,7 @@ test('shared project rollback is automatic and preserves other sessions edits an
     a.store.put('branch',{...a.store.get('branch',b.id),head:revision.id});
     stageTrash(a.store,[other.id],[other.id]);cleanupLocal(a.store);
     await discardChanges(a.store,a.cloud,native,a.cloud.pendingItems().filter(i=>i.id===b.id));
-    assert.equal(a.store.raw(a.store.get('branch',b.id).head),original);
+    assert.equal(a.store.get('branch',b.id).head,revision.id);assert.match(a.store.raw(revision.id),/Replacement/);assert.notEqual(a.store.raw(revision.id),original);
 });
 
 test('Git keeps previous archives local and retains only the prefix needed by active descendants',async t=>{

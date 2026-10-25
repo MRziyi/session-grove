@@ -12,7 +12,7 @@ test('offline baseline lookup reads graphs above the generic Git limit without c
   const head=(await remote.run(['rev-parse','HEAD'])).stdout,blob=(await remote.run(['rev-parse','HEAD:trees/'+hash(id)+'/graph.json'])).stdout;
   await assert.rejects(remote.run(['cat-file','blob',blob]),error=>error.code==='GIT_OUTPUT_LIMIT');
   let saved;
-  const cloud=Object.assign(Object.create(GitCloud.prototype),{store:{local:()=>null},readConfig:()=>({url:remote.url}),cache:()=>({ack:{[id]:ack},gitHead:head}),read:()=>null,connect:async()=>{cloud.connection={remote};},rememberBaseline:(_id,value)=>{saved=value;}});
+  const cloud=Object.assign(Object.create(GitCloud.prototype),{store:{local:()=>null},connection:{remote},readConfig:()=>({url:remote.url}),cache:()=>({ack:{[id]:ack},gitHead:head}),read:()=>null,connect:async()=>{throw Error('Offline lookup must not initialize Git');},rememberBaseline:(_id,value)=>{saved=value;}});
   const run=remote.run.bind(remote);remote.run=(args,options)=>{assert.ok(!['fetch','push','ls-remote'].includes(args[0]));return run(args,options);};
   const restored=await cloud.undoBaseline(id);assert.equal(hash(JSON.stringify(restored)),ack);assert.equal(restored.note,graph.note);assert.equal(saved,restored);
  }finally{fs.rmSync(root,{recursive:true,force:true,maxRetries:5,retryDelay:100});}
