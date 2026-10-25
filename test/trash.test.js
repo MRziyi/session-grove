@@ -133,3 +133,29 @@ test('expired local recovery files are removed on service startup even if local 
         assert.ok(app.store.local('trashEntries')[0].expired);
     }finally{await new Promise(resolve=>app.close(resolve));}
 });
+
+test('opaque compaction context retains node labels through repeated recovery',async t=>{
+ const e=await setup(t),{store}=e.device('opaque-recovery');
+ const raw=codexSample(e.root,[['Before','Before answer']])+JSON.stringify({type:'compacted',payload:{message:'',replacement_history:[]}})+'\n'+codexTurn('After','After answer').map(r=>JSON.stringify(r)+'\n').join('');
+ let branch=store.branch(null,'Opaque path','codex',raw),g=store.treeGraph(branch.id);
+ assert.equal(g.paths[0].context.compactions[0].shareable,false);
+ for(const [index,name]of [[0,'Before label'],[1,'After label']]){g=store.treeGraph(branch.id);store.organize(branch.id,{version:g.version,pathId:branch.id,nodeId:g.nodes[index].id,action:'rename',name});}
+ const chats=store.treeGraph(branch.id).paths[0].messages.map(m=>m.id);
+ for(let i=0;i<2;i++){const entry=stageTrash(store,[branch.id]),result=restoreTrash(store,entry.id);branch=store.get('branch',result.branchIds[0]);g=store.treeGraph(branch.id);assert.deepEqual(g.nodes.map(n=>n.name),['Before label','After label']);assert.deepEqual(g.paths[0].messages.map(m=>m.id),chats);}
+});
+
+test('legacy recovered compaction identities migrate without reviving dissolved labels',async t=>{
+ const {hash}=await import('../src/util.js'),{gzipSync,gunzipSync}=await import('node:zlib');
+ const e=await setup(t),{store}=e.device('legacy-opaque');
+ const raw=codexSample(e.root,[['Before','Ready']])+JSON.stringify({type:'compacted',payload:{message:'',replacement_history:[]}})+'\n'+codexTurn('After','Result').map(r=>JSON.stringify(r)+'\n').join('');
+ const original=store.branch(null,'Recovered once','codex',raw),branch=store.put('branch',{...original,chatIdentity:'original-chat-identity'}),g=store.treeGraph(branch.id),event=g.paths[0].context.compactions[0],assignments={};let prefix='';
+ for(const m of g.paths[0].messages){prefix=hash(prefix+JSON.stringify([m.role,m.text]));if(m.line>event.line)assignments[branch.chatIdentity+':'+hash(prefix+hash(event.id+branch.id)).slice(0,24)]={id:'legacy-label',name:'Legacy after compact'};}
+ const layout=store.put('layout',{id:'legacy-layout',rootId:branch.id,parent:null,createdAt:new Date().toISOString(),assignments});store.put('branch',{...branch,layoutHead:layout.id});
+ assert.ok(store.treeGraph(branch.id).nodes.some(n=>n.name==='Legacy after compact'));
+ const entry=stageTrash(store,[branch.id]),file=path.join(store.root,'trash',entry.id+'.json.gz'),backup=JSON.parse(gunzipSync(fs.readFileSync(file)));
+ for(const layout of backup.graph.layouts)layout.assignments=assignments;
+ fs.writeFileSync(file,gzipSync(Buffer.from(JSON.stringify(backup))));
+ const restored=restoreTrash(store,entry.id),id=restored.branchIds[0];let graph=store.treeGraph(id);assert.ok(graph.nodes.some(n=>n.name==='Legacy after compact'),'old recovery backups retain legacy identity aliases');
+ const node=graph.nodes.find(n=>n.name==='Legacy after compact');store.organize(id,{version:graph.version,pathId:id,chatIds:node.chatIds,action:'dissolve'});assert.ok(!store.treeGraph(id).nodes.some(n=>n.name==='Legacy after compact'));
+ const second=restoreTrash(store,stageTrash(store,[id]).id);assert.ok(!store.treeGraph(second.branchIds[0]).nodes.some(n=>n.name==='Legacy after compact'),'an explicit Pending assignment wins over legacy labels');
+});

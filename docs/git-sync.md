@@ -1,54 +1,45 @@
-# Git sync
+# Git sync and local recovery
 
-The runtime uses native Git over SSH and an application-owned checkout. Local SQLite remains the UI/index store; it is never committed. No new package dependency is needed.
+Native Git over SSH is the only sync transport. Grove uses an application-owned checkout, separate from the user's project/source repository. Local SQLite remains the authoritative library and is never committed.
 
 ## Repository format
 
-```
-grove.json                         # format and schema marker
-trash.json                         # deletion identities, no transcript bodies
-trees/<hash-of-tree-id>/index.json  # project/session listing metadata
-trees/<hash-of-tree-id>/graph.json  # logical branches, nodes and revision refs
+```text
+grove.json                         format and schema marker
+trash.json                         deletion identities
+trees/<hash-of-tree-id>/index.json  project/session listing metadata
+trees/<hash-of-tree-id>/graph.json  branches, nodes and revision references
 trees/<hash-of-tree-id>/records/000000.jsonl
 ```
 
-Records are plain `[contentHash, originalRecordText]` JSONL, grouped into bounded files (8 MiB target; an individual record may exceed this, but files must remain below 95 MiB). Metadata is separate, so renaming does not rewrite record files. Git decides compression and delta encoding. Grove graph branches are data, not Git branches. The repository uses `main`; normal fast-forward pushes publish snapshots atomically. No force-push, application HTTP object uploads, readback downloads or cloud-wide garbage collection.
+Record files contain `[contentHash, originalRecordText]` JSONL. LF separates records; Unicode line/paragraph separators inside strings remain content. Files target 8 MiB and must remain below 95 MiB. Metadata is separate so ordinary renames do not rewrite conversation bodies. Git handles compression/delta encoding.
 
-## Pull and Push
+The data repository uses `main`. Normal fast-forward pushes publish snapshots; Grove does not force-push or rewrite remote history. Keep the repository private because it contains readable conversation text. Native files, activation choices, API keys, SQLite and recovery copies are device-local.
 
-- Pull fetches `main`, validates the Grove format and file types, and imports every current session into local SQLite. Unopened sessions are local too, so the UI has no cloud badges. An interrupted import can be retried from the checkout.
-- Push first performs Pull, then writes the current dirty trees and deletion markers into the checkout, commits and pushes. It acknowledges only the captured snapshot. Changes made while Git runs remain pending.
-- Session metadata/transcript modification dates drive reconciliation and sorting. Fetch, open and commit timestamps do not replace those dates. Native activation remains local.
-- No background Pull. Automatic Push is off by default; enabling it starts a countdown only for pending work. Browsing and local Rename/Activate/Trash do not wait for network completion.
-- A stale remote rejection preserves local database changes. Retry Pull/Push to reconcile. We target sequential personal use, not team collaboration.
-- Settings verifies SSH access and repository format without publishing. It uses `ls-remote` for emptiness, then a disposable depth-one, tree-filtered fetch to inspect only the top-level layout and `grove.json`. It does not check out files, download session bodies or fetch history. Nonempty servers must advertise partial-clone filtering; verification never falls back to an unfiltered fetch. Full validation remains part of Pull/Push. Connect an empty repository or an existing Grove-format repository, not a source-code repository. Git uses the existing SSH configuration in batch mode; keys stay with SSH.
+## Capture, Pull and Push
 
-The split Pull / Push buttons contain the progress fill. Push fills Pull first, then Push. Workflow milestones allocate portions of the fill to preparation, transfer and import; the separately displayed percentage measures the named current phase, not total operation bytes. Unknown work uses a moving highlight. The action text remains to the left of the aligned toolbar buttons; measured speed and phase ETA appear only when available. Errors remain inline with expandable, bounded details. There is no separate transfer-progress panel or duplicate stage tags. Completed buttons briefly show a check and fade back to their idle appearance. New local edits clear Push success and add a pending dot. A Pull with no remote change and no outstanding local imports reports “Already up to date”.
+Update captures native history locally. Pull fetches and validates the repository, then imports its current sessions into SQLite. It does not upload. Push pulls first, captures dirty trees/deletion markers, commits and pushes, and acknowledges only that snapshot. Local changes made during a transfer remain pending.
 
-## Reviewing sync conflicts
+Automatic Push is opt-in and runs only while work is pending. There is no background Pull. Local browsing and permitted local actions stay available during transfers. Failures preserve verified work, show the failing phase, and require retry where appropriate; unknown totals remain indeterminate.
 
-Click the sync error or open the Push dropdown to review affected sessions/projects. Each row compares the synced version (**Keep previous**) with the current local version (**Keep current**). Select individual rows or Select all, then apply one choice to the selected items. These labels describe the two sources, not their wall-clock order.
+Archived branches/projects are local-only. An archived ancestor contributes the shared prefix needed by active descendants. Explicit Push removes archived-only entries from the current repository snapshot; earlier Git commits can still contain them.
 
-Choices update local records and acknowledge both metadata/organization histories. A changed item must be reviewed again before applying a stale selection. Keeping a previous transcript saves a local recovery copy, deactivates the replaced client copy and detaches/suppresses its native identity so a later Update does not import the discarded history again. Resolving metadata alone preserves conversation records. Resolutions remain ordinary local changes for the next Push.
+## Conflicts
 
-Project membership is inherited from the tree root before conflict comparison. Older same-version child-project conflicts caused solely by stale derived membership are repaired automatically; real field differences remain explicit choices.
+Keep previous and Keep current compare the synced and current local versions. They are source choices, not a judgment based on wall-clock time. A changed selection must be reviewed again. Conversation replacement saves a recovery copy and uses native-copy safeguards; metadata-only resolution preserves messages. Resolutions stay local until the next Push.
 
-## Trash and history
+Project membership follows the tree root. Old conflicts caused only by stale derived child membership can be repaired; real field differences remain explicit.
 
-Trash disappears from the latest snapshot after Push; older Git commits may retain the previous content. Local recovery copies stay on this device. Shared prefixes required by surviving paths remain available. See [Trash and recovery](trash-design.md).
+## Organization-only Discard
 
-## Change summaries and identity
+Only pending rows with reversible Grove organization edits can be discarded: labels, project assignment, node grouping and context preferences. Discard preserves messages, revisions, new sessions/forks, native files, client transcription titles, activation state and Trash identities. Conversation/client changes remain queued for Push.
 
-Pending uploads compare a compact semantic baseline with the current graph: session rename/move/add/remove, transcript append or rewrite, node rename/regroup/dissolve, context settings, and project metadata. These same captured changes generate the Git commit subject and body with project/session names. Changes made after the upload snapshot remain pending. Transcript append counts are native records, not model tokens or conversation turns.
+Targets come from verified downloaded metadata or a local pre-edit organization checkpoint. No network operation is needed. Old selections and changes during preparation fail safely; appended conversation content remains intact. Project metadata outside the selected tree's current project scope is preserved. Batches with incompatible shared-project baselines require separate decisions.
 
-Grove names are display aliases. UUIDs, native thread IDs, immutable revision IDs and message identities are independent of these names. Renaming does not schedule native rematerialization. Re-activating an unchanged native Claude session preserves its existing UUID chain instead of forking it again. Active endpoints show a green dot and offer Deactivate directly. Activation previews use the graph's complete Pending number, explain context capacity/compaction thresholds with labels, and put tool switching beside Confirm. General explanations belong in Information.
+Rollback keeps a local metadata recovery record and reports a no-op honestly. It pauses affected [Smart Organization](smart-organization.md) until Continue is explicitly chosen, including after restart or new messages.
 
-## Discarding pending local changes
+## Trash
 
-Pending uploads separates organization edits from conversation changes. Only rows with reversible organization edits can be selected for Discard. The hover menu preserves selection when reopened.
+Moving an inactive path or tree to Trash saves local recovery data before native removal. Surviving paths keep shared ancestry. Native files still referenced by other sessions are protected, including references from compressed rollouts. Content identity and physical-byte stability are checked separately.
 
-Discard restores names, project assignments, node labels/grouping and context preferences from verified downloaded metadata or a local pre-edit organization checkpoint. It never replaces conversation revisions, removes new sessions/forks, changes native files, deactivates sessions or undoes Trash. Conversation additions and other content changes remain pending for Push. Active sessions do not require confirmation for an organization-only discard.
-
-The operation keeps a metadata-only recovery record locally. It uses read-only Git history when needed and performs no network transfer. Concurrent organization changes cause a safe retry; conversation growth is preserved. A no-op is explicitly reported as having no organization changes to discard. Discarded automatic organization stays paused across refresh, restart and new messages. The existing Smart Organization attention indicator opens Settings, where Continue explicitly resumes it.
-
-Previous archives is local-only in Git sync. Archived branches and archived projects are excluded from outgoing graphs; an archived ancestor contributes only the frozen prefix required by its active descendants. Catalog reads skip archived-only remote entries. Explicit Push removes those old entries from the current remote tree, without rewriting Git history or deleting local archives. Older clients must be upgraded to avoid reintroducing them.
+Recovery copies expire according to Settings. Restoring creates safe identities, restores organization/shared ancestry where available, and does not activate the recovered session. Git Push propagates deletion identities, but old Git commits can retain the historical content; Trash is not repository-history erasure.

@@ -234,10 +234,10 @@ export class GitCloud extends CloudView {
             if (!before && c.ack[i.id]) before = this.store.memo('git-baseline:'+i.id+':'+c.ack[i.id],()=>changeSnapshot(this.read(this.folder(i.id)+'/graph.json')));
             const changes=sessionChanges(before,changeSnapshot(graph),this.store),checkpoint=this.store.local(organizationUndoKey(i.id));
             if(!before&&checkpoint){const localBefore=changeSnapshot({...checkpoint,revisions:checkpoint.branches.map(b=>this.store.find('revision',b.head)).filter(Boolean)});changes.push(...sessionChanges(localBefore,changeSnapshot(graph),this.store).filter(c=>!['session-added','session-removed','transcript-appended','transcript-updated','archive-changed','project-archive','metadata-changed'].includes(c.kind)));}
-            const discardable=!!(before&&changes.some(c=>!['session-added','session-removed','transcript-appended','transcript-updated','archive-changed','project-archive'].includes(c.kind))||checkpoint&&hasOrganizationChanges(checkpoint,currentOrganization(this.store,i.id)));
+            const discardable=!!(before&&changes.some(c=>!['session-added','session-removed','transcript-appended','transcript-updated','archive-changed','project-archive','metadata-changed'].includes(c.kind))||checkpoint&&hasOrganizationChanges(checkpoint,currentOrganization(this.store,i.id)));
             return {id:i.id,name:i.name,project:graph.projects.find(p=>p.id===cloudProjectId(i.projectId))?.name || 'Ungrouped',updatedAt:i.updatedAt,action:'upload',discardable,changes};
         }).concat((this.store.local('trashPending') || []).map(e=>({id:e.id,name:(this.store.local('trashEntries')||[]).find(t=>t.id===e.id)?.names.join(', ') || 'Removed sessions',project:this.store.all('project').find(p=>p.id===this.store.find('branch',e.branchIds[0])?.projectId)?.name || 'Ungrouped',action:'remove',updatedAt:e.at,changes:[{kind:'session-removed',label:'Session removed'}]})));
-        return items.map(item=>({...item,version:digest([this.readConfig().url||'',item.action==='remove'?(this.store.local('trashPending')||[]).find(e=>e.id===item.id):treeSnapshot(this.store,item.id),c.ack[item.id]||null])}));
+        return items.map(item=>({...item,version:digest([this.readConfig().url||'',item.action==='remove'?(this.store.local('trashPending')||[]).find(e=>e.id===item.id):organizationSignature(currentOrganization(this.store,item.id)),c.ack[item.id]||null])}));
     }
     async publish(treeIds, { catalogFresh = false } = {}) {
         if (!catalogFresh) {

@@ -454,6 +454,7 @@ function* restoreSteps(store, entryId, backup) {
                 ...b,
                 id: mapping.get(b.id),
                 chatIdentity: b.chatIdentity || b.id,
+                ...(b.chatIdentity&&b.chatIdentity!==b.id?{contextIdentityAliases:[...new Set([...(b.contextIdentityAliases||[]),b.id])]}:{}),
                 recoveryIdentity: b.recoveryIdentity || b.id,
                 parentId: anchor?.id || mapping.get(b.parentId) || null,
                 ...(anchor?{forkRevision:anchor.head,forkEnd:store.get('revision',anchor.head).refs.length,forkParentEnd:store.get('revision',anchor.head).refs.length,projectId:anchor.projectId}:{}),

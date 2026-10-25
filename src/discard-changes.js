@@ -1,11 +1,11 @@
 import {assert,hash,id as newId,now} from './util.js';
-import {treeMembers} from './organization.js';
+import {treeMembers,metadata} from './organization.js';
 import {treeSnapshot} from './cloud-view.js';
 import {changeSnapshot} from './session-changes.js';
 import {isTrashed} from './trash.js';
-import {organizationFields,organizationClocks,organizationSnapshot,currentOrganization,organizationSignature,organizationUndoKey,organizationContentStamp} from './organization-undo.js';
+import {organizationFields,clientTitleFields,organizationClocks,organizationSnapshot,currentOrganization,organizationSignature,organizationUndoKey,organizationContentStamp} from './organization-undo.js';
 const digest=value=>hash(JSON.stringify(value));
-const contentIdentity=graph=>digest(graph.branches.map(b=>[b.id,b.head,b.parentId,b.forkRevision,b.forkEnd,b.forkParentEnd,!!b.archived,!!b.synthetic]));
+const contentIdentity=graph=>digest(graph.branches.map(b=>[b.id,b.head,b.parentId,b.forkRevision,b.forkEnd,b.forkParentEnd,!!b.archived,!!b.synthetic,...clientTitleFields.map(key=>b[key]??null)]));
 function restoreFields(current,saved,fields){const next={...current};for(const key of fields)if(Object.hasOwn(saved,key))next[key]=saved[key];else delete next[key];return next;}
 
 // Discard Grove organization only. Never collect, deactivate, remove, replace
@@ -13,6 +13,7 @@ function restoreFields(current,saved,fields){const next={...current};for(const k
 export async function discardChanges(store,cloud,_native,selections,{onProgress=async()=>{}}={}){
  assert(Array.isArray(selections)&&selections.length&&selections.every(s=>typeof s.id==='string'&&typeof s.version==='string'),'Select pending changes.');
  const pending=new Map(cloud.pendingItems().map(item=>[item.id,item]));
+ for(const selection of selections){const item=pending.get(selection.id);if(item?.action==='upload')assert(item.version===selection.version,'Organization changed since selection. Refresh and retry.',409);}
  const selected=[...new Set(selections.map(s=>s.id))].filter(id=>pending.get(id)?.action==='upload'&&pending.get(id).discardable!==false&&store.find('branch',id));
  await onProgress({phase:'Reading organization changes'});
  const plans=[];
@@ -27,6 +28,11 @@ export async function discardChanges(store,cloud,_native,selections,{onProgress=
   plans.push({id,before,target,graph,version:organizationSignature(before)});
  }
  const validate=()=>{for(const p of plans)assert(organizationSignature(currentOrganization(store,p.id))===p.version,'Organization changed while reverting. Refresh and retry.',409);};
+ const projectTargets=new Map();
+ for(const plan of plans)for(const project of plan.target.projects.filter(p=>plan.before.projects.some(current=>current.id===p.id))){
+  const signature=digest([project.name,project.description||'']);
+  assert(!projectTargets.has(project.id)||projectTargets.get(project.id)===signature,'Selected sessions have different project baselines. Discard them separately.',409);projectTargets.set(project.id,signature);
+ }
  validate();await onProgress({phase:'Restoring organization changes'});validate();
  let discarded=0;const recoveryId=newId();
  store.transaction(()=>{
@@ -34,12 +40,14 @@ export async function discardChanges(store,cloud,_native,selections,{onProgress=
   for(const plan of plans){
    const {id,target,before,graph}=plan,branches=new Map(target.branches.map(b=>[b.id,b]));
    for(const kind of ['node','layout'])for(const value of target[kind==='node'?'nodes':'layouts'])if(!store.find(kind,value.id))store.put(kind,value);
-   for(const project of target.projects){const current=store.find('project',project.id);if(current)store.put('project',restoreFields(current,project,['name','description',...organizationClocks]));}
+   for(const project of target.projects.filter(p=>before.projects.some(current=>current.id===p.id))){const current=store.find('project',project.id);if(current)store.put('project',restoreFields(current,project,['name','description',...organizationClocks]));}
    for(const current of treeMembers(store,id)){
     if(isTrashed(store,current.id))continue;
     const saved=branches.get(current.id);if(!saved)continue;
-    const next=restoreFields(current,saved,[...organizationFields,...organizationClocks]);
-    next.updatedAt=[current.contentUpdatedAt||current.updatedAt||'',saved.metadataUpdatedAt||''].sort().at(-1);
+    let next=restoreFields(current,saved,[...organizationFields,...organizationClocks]);
+    const clientChanged=clientTitleFields.some(key=>digest(current[key]??null)!==digest(saved[key]??null));
+    if(clientChanged)next=metadata(current,next);
+    else next.updatedAt=[current.contentUpdatedAt||current.updatedAt||'',saved.metadataUpdatedAt||''].sort().at(-1);
     store.put('branch',next);
    }
    // Project membership is inherited by new paths; their content, identity,
@@ -47,15 +55,14 @@ export async function discardChanges(store,cloud,_native,selections,{onProgress=
    const projectId=store.get('branch',id).projectId;
    for(const b of treeMembers(store,id))if(!isTrashed(store,b.id)&&b.projectId!==projectId)store.put('branch',{...b,projectId});
    const after=currentOrganization(store,id);
-   if(organizationSignature(after)!==plan.version){discarded++;recovery.push({id,before});}
-   suppressed[id]=organizationContentStamp(store,id);
+   if(organizationSignature(after)!==plan.version){discarded++;recovery.push({id,before});suppressed[id]=organizationContentStamp(store,id);}
    store.db.prepare('DELETE FROM local WHERE key=?').run(organizationUndoKey(id));
   }
   // Rebuild the shared export/index once after all metadata writes, rather
   // than rebuilding every conversation tree after each selected edit.
   for(const {id,graph} of plans){
    // Do not acknowledge appended messages, new paths or archives as uploaded.
-   if(graph){const current=treeSnapshot(store,id);if(contentIdentity(current)===contentIdentity(graph)&&organizationSignature(organizationSnapshot(current))===organizationSignature(organizationSnapshot(graph))){
+   if(graph){const current=treeSnapshot(store,id);if(current&&contentIdentity(current)===contentIdentity(graph)&&organizationSignature(organizationSnapshot(current))===organizationSignature(organizationSnapshot(graph))){
     const cache=cloud.cache();cache.ack[id]=digest(current);(cache.baselines||={})[id]=changeSnapshot(current);cloud.rememberBaseline(id,current);cloud.save(cache);
    }}
   }

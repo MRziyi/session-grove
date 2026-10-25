@@ -4,7 +4,6 @@ const dictionary = {
 "Restoring organization changes":"撤销整理修改",
 "Organization changes discarded":"已撤销整理修改，交流记录保持不变",
 "No organization changes to discard.":"没有可撤销的整理修改，交流记录保持不变。",
-"Discard only reverts organization. Conversation updates stay queued.":"Discard 仅撤销命名、分类和节点整理；新增交流记录仍保留并等待同步。",
 "Operation failed":"操作失败",
 "Date and sorting":"日期与排序",
 "Recent conversation":"最近对话",

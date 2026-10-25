@@ -238,11 +238,11 @@ test('discard restores organization while retaining new forks and metadata recov
     assert.ok(a.store.local('organization-recovery:'+result.recoveryId));
     assert.equal(a.cloud.pendingItems()[0].discardable,false);assert.ok(a.cloud.pendingItems()[0].changes.some(c=>c.kind==='session-added'));
 });
-test('discard reconciles organization selections without deactivating changed conversations',async t=>{
+test('discard rejects stale organization selections without deactivating changed conversations',async t=>{
     const {discardChanges}=await import('../src/discard-changes.js');
     const e=fixture(t),a=e.device('undo-guards'),b=branch(a);await push(a);const native={collect:()=>({errors:[]})};
     a.store.edit(b.id,{name:'First'});const stale=a.cloud.pendingItems();a.store.edit(b.id,{name:'Second'});
-    assert.equal((await discardChanges(a.store,a.cloud,native,stale)).discarded,1);assert.equal(a.store.get('branch',b.id).name,'Sample');a.store.edit(b.id,{name:'Second'});
+    await assert.rejects(discardChanges(a.store,a.cloud,native,stale),error=>error.status===409);assert.equal(a.store.get('branch',b.id).name,'Second');
     a.store.local('instances',[{id:'native',branchId:b.id,agent:'codex',nativeId:'native-id',applied:true,baseRevision:b.head}]);
     await discardChanges(a.store,a.cloud,native,a.cloud.pendingItems());assert.equal(a.store.get('branch',b.id).name,'Sample');
     a.store.ingest(b.id,a.store.raw(b.head)+codexTurn('New question','New answer').map(v=>JSON.stringify(v)+'\n').join(''),b.head,{operation:'capture'});

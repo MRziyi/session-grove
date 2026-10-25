@@ -24,7 +24,7 @@ try{
  console.log(JSON.stringify({phase:'read',trees:treeGraphs.length,failures:report.failures.length}));
  // Every real path: root, middle and endpoint preview, plus stale/missing-node rejection.
  for(const [index,{item,paths}] of treeGraphs.entries())await check('activation-preview-'+index,async()=>{
-  const graph=store.treeGraph(item.id);let previews=0,complete=0;
+  const graph=store.treeGraph(item.id,'in-use');let previews=0,complete=0;
   for(const p of graph.paths)for(const nodeId of new Set([p.nodeIds[0],p.nodeIds[Math.floor(p.nodeIds.length/2)],p.nodeIds.at(-1)])){
    try{const selected=nodeActivation(store,native,{branchId:p.branchId,nodeId,version:graph.version,cwd:root});previews++;if(selected.preview.complete)complete++;}
    catch(error){report.rejections.push({operation:'preview',tree:index,reason:error.message});}
@@ -37,10 +37,15 @@ try{
  // Materialize real prefixes from all multi-path families and standalone examples.
  const representatives=treeGraphs.filter(({paths},index)=>paths.length>1||index<3);
  for(const [index,{item}] of representatives.entries())await check('native-roundtrip-'+index,async()=>{
-  let graph=store.treeGraph(item.id);const p=graph.paths.find(p=>p.agent==='codex'&&p.canActivate)||graph.paths.find(p=>p.canActivate);if(!p)return {unavailable:'No supported complete native path'};
-  let activated=0;const chosen=[...new Set([p.nodeIds[0],p.nodeIds[Math.floor(p.nodeIds.length/2)],p.nodeIds.at(-1)])];
-  for(const nodeId of chosen){
-   graph=store.treeGraph(item.id);const selected=nodeActivation(store,native,{branchId:p.branchId,nodeId,version:graph.version,cwd:root});if(!selected.preview.complete){report.rejections.push({operation:'activate-incomplete',tree:index,node:nodeId});continue;}
+  let graph=store.treeGraph(item.id,'in-use');const p=graph.paths.find(p=>p.agent==='codex'&&p.canActivate)||graph.paths.find(p=>p.canActivate);if(!p)return {unavailable:'No supported complete native path'};
+  let activated=0;const chosen=[...new Set([p.nodeIds[0],p.nodeIds[Math.floor(p.nodeIds.length/2)],p.nodeIds.at(-1)])].map(nodeId=>({nodeId,lastChat:graph.nodes.find(n=>n.id===nodeId)?.chatIds.at(-1)}));
+  for(const anchor of chosen){
+   graph=store.treeGraph(item.id,'in-use');
+   // An earlier activation can subdivide Pending and replace segment IDs.
+   // Follow the original message boundary through the fresh graph.
+   const current=anchor.lastChat?graph.nodes.find(n=>n.branchIds.includes(p.branchId)&&n.chatIds.includes(anchor.lastChat)):graph.nodes.find(n=>n.id===anchor.nodeId);
+   assert.ok(current,'The selected original message boundary must remain on its path.');
+   const nodeId=current.id,selected=nodeActivation(store,native,{branchId:p.branchId,nodeId,version:graph.version,cwd:root});if(!selected.preview.complete){report.rejections.push({operation:'activate-incomplete',tree:index,node:nodeId});continue;}
    const before=hash(store.raw(selected.branch.head)),continuation=store.fork(p.branchId,{name:'Acceptance continuation',end:selected.end,revisionId:selected.branch.head,nodeBoundary:selected.nodeBoundary});
    native.setActive(continuation.id,root,true,{nodeName:selected.preview.nodeName});native.apply([continuation.id]);
    const instance=store.instances().find(i=>i.branchId===continuation.id);assert.ok(instance.applied&&fs.existsSync(instance.file));

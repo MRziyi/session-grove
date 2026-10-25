@@ -1,11 +1,12 @@
 import {rootOf,treeMembers} from './organization.js';
 import {hash} from './util.js';
 import {INBOX_ID} from './inbox.js';
-export const organizationFields=['name','projectId','group','sessionName','sessionNameOrigin','sessionAutomaticName','automaticName','nameOrigin','groveNamed','endpointName','contextPolicy','transcriptionTitle','transcriptionNameOrigin','transcriptionNaming','nodeHead','layoutHead'];
+export const clientTitleFields=['transcriptionTitle','transcriptionNameOrigin','transcriptionNaming'];
+export const organizationFields=['name','projectId','group','sessionName','sessionNameOrigin','sessionAutomaticName','automaticName','nameOrigin','groveNamed','endpointName','contextPolicy','nodeHead','layoutHead'];
 export const organizationClocks=['metadataUpdatedAt','manualUpdatedAt','automaticUpdatedAt','metaVersion','metaAncestors'];
 const pick=(value,fields)=>Object.fromEntries(['id',...fields].filter(key=>Object.hasOwn(value,key)).map(key=>[key,value[key]]));
 export function organizationSnapshot(graph){return {
- branches:graph.branches.map(b=>({...pick(b,[...organizationFields,...organizationClocks,'head']),projectId:b.projectId===INBOX_ID?null:b.projectId||null})),
+ branches:graph.branches.map(b=>({...pick(b,[...organizationFields,...clientTitleFields,...organizationClocks,'head']),projectId:b.projectId===INBOX_ID?null:b.projectId||null})),
  projects:graph.projects.filter(p=>p.id!==INBOX_ID).map(p=>pick(p,['name','description','createdAt','updatedAt',...organizationClocks])),
  nodes:graph.nodes||[],layouts:graph.layouts||[]
 };}

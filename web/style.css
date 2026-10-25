@@ -1362,7 +1362,7 @@ body{height:100dvh;display:flex;flex-direction:column;overflow:hidden}
 
 /* Keep the status to the left; every toolbar action shares one baseline. */
 #sync-control{flex-direction:row;align-items:center;max-width:440px;gap:10px}
-#sync-details{flex-direction:column;align-items:flex-end;flex-wrap:nowrap;max-width:240px;gap:2px}
+#sync-details{flex-direction:column;align-items:flex-end;flex-wrap:nowrap;max-width:240px;gap:1px}
 .settings-card{padding:12px}
 .settings-card>:first-child{margin-top:0}
 .settings-card>:last-child{margin-bottom:0}

@@ -61,3 +61,38 @@ test('discarded automatic labels are not recreated by refresh or restart with un
   smart.retry();clearTimeout(smart.timer);await smart.run();await smart.pending;assert.equal(calls,2);assert.equal(smart.status().awaitingConfirmation,0);assert.equal(f.store.get('branch',b.id).sessionName,'Automatic label');
  }finally{smart.close();await smart.pending;}
 });
+
+test('discard rejects a selection made before a later organization edit',async t=>{
+ const f=setup(t),b=f.store.branch(null,'Original','codex',codexSample(f.root,[['Question','Answer']]));f.sync(b.id);
+ f.store.edit(b.id,{name:'First edit'});const selected=f.cloud.pendingItems();f.store.edit(b.id,{name:'Later edit'});
+ await assert.rejects(discardChanges(f.store,f.cloud,forbiddenNative,selected),e=>e.status===409);
+ assert.equal(f.store.get('branch',b.id).name,'Later edit');
+});
+
+test('appended conversation after selection does not make an organization rollback stale',async t=>{
+ const f=setup(t),b=f.store.branch(null,'Original','codex',codexSample(f.root,[['Question','Answer']]));f.sync(b.id);
+ f.store.edit(b.id,{name:'Wrong'});const selected=f.cloud.pendingItems();append(f.store,b);const head=f.store.get('branch',b.id).head;
+ await discardChanges(f.store,f.cloud,forbiddenNative,selected);assert.equal(f.store.get('branch',b.id).name,'Original');assert.equal(f.store.get('branch',b.id).head,head);
+});
+
+test('returning a tree to its project preserves a separate edit to that project',async t=>{
+ const f=setup(t),a=f.store.project('A'),b=f.store.project('B'),session=f.store.branch(a.id,'Session','codex',codexSample(f.root,[['Question','Answer']]));f.sync(session.id);
+ f.store.moveItems({itemIds:[session.id],projectId:b.id});f.store.put('project',metadata(a,{name:'A renamed elsewhere'}));
+ const selected=f.cloud.pendingItems();await discardChanges(f.store,f.cloud,forbiddenNative,selected);
+ assert.equal(f.store.get('branch',session.id).projectId,a.id);assert.equal(f.store.get('project',a.id).name,'A renamed elsewhere');
+});
+
+test('discard preserves client-synchronized transcription titles and their pending upload',async t=>{
+ const f=setup(t),b=f.store.branch(null,'Original','codex',codexSample(f.root,[['Question','Answer']]));f.sync(b.id);
+ f.store.checkpointOrganization(b.id);f.store.put('branch',metadata(f.store.get('branch',b.id),{transcriptionTitle:'Client title',transcriptionNameOrigin:'manual'}));
+ f.store.edit(b.id,{name:'Wrong Grove label'});await discardChanges(f.store,f.cloud,forbiddenNative,f.cloud.pendingItems());
+ assert.equal(f.store.get('branch',b.id).name,'Original');assert.equal(f.store.get('branch',b.id).transcriptionTitle,'Client title');assert.equal(f.cloud.dirtyIds().length,1);assert.equal(f.cloud.pendingItems()[0].discardable,false);
+});
+
+test('a batch with incompatible shared project baselines leaves every selection untouched',async t=>{
+ const f=setup(t),p=f.store.project('First name'),a=f.store.branch(p.id,'A','codex',codexSample(f.root,[['A','Answer']]));f.sync(a.id);
+ f.store.put('project',metadata(p,{name:'Second name'}));const b=f.store.branch(p.id,'B','codex',codexSample(f.root,[['B','Answer']]));f.sync(b.id);
+ f.store.put('project',metadata(f.store.get('project',p.id),{name:'Current name'}));f.store.edit(a.id,{name:'A edit'});f.store.edit(b.id,{name:'B edit'});
+ await assert.rejects(discardChanges(f.store,f.cloud,forbiddenNative,f.cloud.pendingItems()),e=>e.status===409);
+ assert.equal(f.store.get('project',p.id).name,'Current name');assert.equal(f.store.get('branch',a.id).name,'A edit');assert.equal(f.store.get('branch',b.id).name,'B edit');
+});

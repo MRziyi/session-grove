@@ -1,21 +1,29 @@
-# Running and diagnosing Session Grove
+# Operations
 
-## 1.0 on Windows and macOS
+Installation and first use are covered in the [README](../README.md); in-app **ⓘ Information** explains controls. This page covers running and diagnosing the local service.
 
-Use Node.js 24+ and Git. Run `pnpm install`, then `pnpm start`; open `http://127.0.0.1:7421` and click Update for local discovery. `pnpm run demo` uses isolated samples. Windows uses the same commands in PowerShell. `--codex-home`, `--claude-home` and `--data-dir` override the default native/library directories.
+## Service and paths
 
-Settings connects a private Git SSH repository and optionally configures Smart Organization. The local files are `git-sync.json` and `intelligence.json`. Saved API keys are never returned to the browser or included in sync. Windows key files have restricted ACLs; Unix key files use mode 0600.
+Run `npm start` from the application checkout to start the background service. `npm run status` checks the matching library's service; `npm stop` requests shutdown through its authenticated local endpoint. `npm run dev` stays in the foreground. Open `http://127.0.0.1:7421`; `localhost` page visits redirect there.
 
-Project contents in Settings controls dates and ordering: recent conversation, include manual edits (default), or include automatic organization. These are display choices, not changes to the timestamps used for synchronization. Older records without separate manual/automatic clocks use the available naming provenance; exact historical intent cannot always be reconstructed.
+Defaults are `~/.session-grove` for the library, `~/.codex` for Codex and `~/.claude` for Claude. `--data-dir`, `--codex-home`, `--claude-home` and `--port` override them. Use matching arguments for service management; run `node bin/session-grove.js --help` for the current CLI options.
 
-Project category arrows collapse or expand their contents. Double-clicking a category name edits it. Collapsed categories remain drag destinations and keep their collapsed state after a drop.
+Settings → Local service provides login startup on macOS and Windows, off by default. macOS uses a user LaunchAgent; Windows uses a current-user Startup shortcut. Moving the checkout or changing Node's installation path requires refreshing the startup setting. Background output is under the library's `logs/server.log`.
 
-Context windows in Settings edits the active Codex profile’s context/compaction values or the Claude user auto-compaction budget. Other settings are preserved. Existing configuration is backed up under `context-backups/` before a change. Treat these backups as private: a native configuration can contain credentials. Select Default to remove the edited override and inherit the remaining client defaults. Changes save automatically. Open a new client session to apply changes; project/launch/environment overrides may take precedence.
+## Configuration
 
-Creating an additional continuation works while agents are running. Operations that edit or remove an existing native copy retain process/file protections. Windows uses native process enumeration and exclusive-file checks. See the [1.0 validation report](1.0-windows-validation.md) for exercised client versions and remaining fidelity/performance boundaries.
+Git repository settings are stored in `git-sync.json`. The Smart Organization key and switches are in `intelligence.json`, outside Git export. Unix key files use mode 0600; Windows writes use restricted ACLs. API responses expose whether a key exists, never its value.
 
-## Transfers and troubleshooting
+Context settings edit the selected Codex profile's supported limits or Claude's user auto-compaction budget. Other settings are preserved and originals are backed up under `context-backups/`. These backups may contain credentials. Default removes the edited override; other profile, project, environment or launch settings can still take precedence. See [Context](context.md).
 
-Use Pull to import and Push to publish. Automatic Push is opt-in. Failed operations retain their status and can be retried; local browsing stays available. Export diagnostics for a bug report rather than sharing a library or configuration file.
+Activity-date settings affect display ordering, not synchronization clocks. The choices are conversation activity, manual edits (default) and automatic organization. Legacy records use available provenance where separate clocks were not recorded.
 
-Run `node scripts/ci-test.js` and `node scripts/ci-test.js --browser` for validation. Git fixtures and browser profiles are disposable and contain synthetic histories. See [Git sync](git-sync.md) for storage, conflict and deletion semantics.
+## Troubleshooting
+
+- If sessions do not appear, use Update and check the configured native roots. Reading saved histories does not require an API key or Git configuration.
+- A missing-prefix error can indicate an unavailable earlier rollout segment. Codex compressed `.jsonl.zst` segments are read directly, using original decompressed byte offsets; do not manually rewrite history to bypass checks.
+- Repository verification uses local Git/SSH access. Check the repository address, SSH agent, host verification and account access when verification fails.
+- Failed operations remain visible and can be retried. Discard needs a verified local organization baseline, not a network fetch. See [Git sync](git-sync.md).
+- New continuation creation can work while clients run. Existing-file writes/removal retain process/file-use, unchanged-content and recovery protections.
+
+Diagnostic exports contain operation information intended for troubleshooting. Review exports before sharing them; do not publish an entire library, native logs, configuration backups or credentials. Reproduction and platform checks are in [Testing](testing.md).

@@ -10,6 +10,12 @@
 - Lighten project category separators and align the disclosure triangle with enough space for inline renaming; preserve collapse and drag-and-drop behavior.
 - Let offline Discard read verified historical graphs up to the existing 128 MiB graph limit; report output-limit failures explicitly and preserve UTF-8 across Git output chunks.
 - When a legacy library lacks its old undo snapshot, allow Discard to use the last fully imported remote graph only when both its recorded content hash and semantic baseline match.
+- Reject stale organization selections without rejecting conversation growth, preserve project edits outside the selected scope, and stop incompatible shared-project rollback batches before writing.
+- Preserve client-synchronized titles during organization-only Discard and keep their pending upload; pause automatic work only when organization actually changed.
+- Keep combined sync-error and paused-organization status within the header, and remove permanent Discard instructions from the pending panel.
+- Keep message identities stable across opaque compaction recovery, migrate legacy aliases, and honor explicit dissolved labels; follow stable message boundaries in native acceptance checks.
+- Consolidate current documentation into eight focused guides; retain historical validation references through immutable release tags.
+
 ## 1.1.10
 
 - Remove the retired WebDAV transport, credentials workflow, migration tools and provider-only tests. Keep Git snapshots, local recovery and their regression coverage; existing legacy files on disk remain untouched.
@@ -124,7 +130,7 @@
 - Store immutable native baselines separately and deduplicate them, capture only selected native histories during targeted operations, and scope rollback journals to affected instances.
 - Compact Pending uploads with title/category on one line, dates below checkboxes, full-width change lists and stationary Select all / Deselect controls. Enable Current Active drag to project categories. Group Client archive and Trash by project, and reveal restored project rows with two highlights.
 - Advertise VS Code links only for installed client extensions. Validate official Codex read/resume/archive/reactivate against real local history without submitting model turns.
-- Add repeatable private-corpus audits for all visible trees, representative root/middle/endpoint activation, legal/rejected HTTP operations, recovery, Discard, local Git round trips and browser layout. See [1.1 validation](docs/1.1-validation.md) for evidence and limitations.
+- Add repeatable private-corpus audits for all visible trees, representative root/middle/endpoint activation, legal/rejected HTTP operations, recovery, Discard, local Git round trips and browser layout. See [1.1 validation](https://github.com/MRziyi/session-grove/blob/v1.1.0/docs/1.1-validation.md) for evidence and limitations.
 
 ## 1.0.2
 
@@ -157,7 +163,7 @@
 - Default smart organization to two concurrent requests, with configurable concurrency and request spacing. Keep queued progress labeled, shorten the header and enlarge the About footer.
 - Add native context-window controls with profile-aware Codex edits and Claude auto-compaction budgets, private backups and stale-form protection.
 - Rewrite both READMEs around use cases and replace screenshots with synthetic examples rendered in the real UI.
-- See [1.0 validation](docs/1.0-windows-validation.md) and [release notes](docs/releases/v1.0.0.md).
+- See [1.0 validation](https://github.com/MRziyi/session-grove/blob/v1.0.0/docs/1.0-windows-validation.md) and [release notes](docs/releases/v1.0.0.md).
 
 ## 0.14.0
 

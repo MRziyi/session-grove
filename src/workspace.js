@@ -104,16 +104,18 @@ function* graphSteps(store, branchId) {
             if (childPrefix.length === parentPrefix.length && childPrefix.every((m, i) => m.role === parentPrefix[i].role && m.text === parentPrefix[i].text))
                 inherited = parentPrefix.map((m, i) => ({ ...m, line: childPrefix[i].line }));
         }
+        const identity=b.chatIdentity||b.id,legacyIdentities=new Set([b.id,...(Array.isArray(b.contextIdentityAliases)?b.contextIdentityAliases:[])]);legacyIdentities.delete(identity);
+        const aliasContexts=new Map([...legacyIdentities].map(id=>[id,'']));
         let prefix = '',contextKey='',previousContextKey='',eventIndex=0;
         const path = visible.map((m, index) => {
-            while(eventIndex<p.context.compactions.length&&p.context.compactions[eventIndex].line<m.line){const event=p.context.compactions[eventIndex++];previousContextKey=hash(previousContextKey+event.id+(event.shareable===false?b.id:''));if(event.supersededBy)continue;contextKey=hash(contextKey+event.id+(event.shareable===false?b.id:''));}
+            while(eventIndex<p.context.compactions.length&&p.context.compactions[eventIndex].line<m.line){const event=p.context.compactions[eventIndex++];previousContextKey=hash(previousContextKey+event.id+(event.shareable===false?b.id:''));if(event.supersededBy)continue;contextKey=hash(contextKey+event.id+(event.shareable===false?identity:''));for(const [id,key]of aliasContexts)aliasContexts.set(id,hash(key+event.id+(event.shareable===false?id:'')));}
             const inheritedMessage=inherited[index],sameContext=!inheritedMessage||inheritedMessage.contextKey===contextKey;
             prefix = hash(prefix + JSON.stringify([m.role, m.text]));
             const message = sameContext&&inheritedMessage || { ...m, id: `${b.chatIdentity || b.id}:${(contextKey?hash(prefix+contextKey):prefix).slice(0, 24)}`, ownerId: b.id, agent: b.agent, origin: contentOrigin(store, revisionId) };
             const ownId = `${b.chatIdentity || b.id}:${prefix.slice(0, 24)}`;
             if (ownId !== message.id) aliases.set(ownId, message.id);
             const previousId=`${b.chatIdentity||b.id}:${(previousContextKey?hash(prefix+previousContextKey):prefix).slice(0,24)}`;
-            const oldIds=contextAliases.get(message.id)||new Set();if(previousId!==message.id)oldIds.add(previousId);if(ownId!==message.id)oldIds.add(ownId);if(inheritedMessage&&!sameContext)oldIds.add(inheritedMessage.id);contextAliases.set(message.id,oldIds);
+            const oldIds=contextAliases.get(message.id)||new Set();for(const key of aliasContexts.values()){const legacyId=`${identity}:${(key?hash(prefix+key):prefix).slice(0,24)}`;if(legacyId!==message.id)oldIds.add(legacyId);}if(previousId!==message.id)oldIds.add(previousId);if(ownId!==message.id)oldIds.add(ownId);if(inheritedMessage&&!sameContext)oldIds.add(inheritedMessage.id);contextAliases.set(message.id,oldIds);
             const value = { ...message, contextKey, line: m.line, toolTokens: (byChat.get(m.line) || []).filter(e => ['tool-call', 'tool-result'].includes(e.kind)).reduce((n,e) => n + e.tokens, 0), activity: byChat.get(m.line) || [] };
             if (!messages.has(value.id)) messages.set(value.id, value);
             return value;
@@ -143,8 +145,18 @@ function* graphSteps(store, branchId) {
     const layout = root.layoutHead ? store.get('layout', root.layoutHead) : null;
     if (layout) for (const [id, value] of Object.entries(layout.assignments)) assignments[id] = value;
     // Existing annotations may address the formerly unshared child identity.
-    for (const [oldId, canonical] of aliases) if (assignments[oldId] && !assignments[canonical]) assignments[canonical] = assignments[oldId];
-    for(const [id,oldIds] of contextAliases)if(!assignments[id]){const previous=[...oldIds].find(old=>assignments[old]);if(previous)assignments[id]=assignments[previous];}
+    const explicit=layout?.assignments||{};
+    for(const [oldId,canonical]of aliases){
+        if(Object.hasOwn(explicit,canonical))continue;
+        if(Object.hasOwn(explicit,oldId))assignments[canonical]=explicit[oldId];
+        else if(!Object.hasOwn(assignments,canonical)&&Object.hasOwn(assignments,oldId))assignments[canonical]=assignments[oldId];
+    }
+    for(const [id,oldIds]of contextAliases){
+        if(Object.hasOwn(explicit,id))continue;
+        const previous=[...oldIds].find(old=>Object.hasOwn(explicit,old));
+        if(previous!==undefined)assignments[id]=explicit[previous];
+        else if(!Object.hasOwn(assignments,id)){const inherited=[...oldIds].find(old=>Object.hasOwn(assignments,old));if(inherited!==undefined)assignments[id]=assignments[inherited];}
+    }
     const next = new Map(), previous = new Map(), endpoints = new Set(), compactStarts = new Set();
     for (const p of paths) for (const event of p.context.compactions) {
         const first = p.messages.find(m => m.line > event.line);
