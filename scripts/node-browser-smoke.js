@@ -1,3 +1,4 @@
+import {listenForTests} from './test-server.js';
 import {browserBinary,closeBrowser,browserPort} from './browser-runtime.js';
 // Isolated Chrome/CDP regression for cross-branch selection and node activation.
 import fs from 'node:fs';import os from 'node:os';import path from 'node:path';import {spawn} from 'node:child_process';import {once} from 'node:events';import {pathToFileURL,fileURLToPath} from 'node:url';import assert from 'node:assert/strict';
@@ -12,7 +13,7 @@ store.put('branch',{...child,parentId:parent.id,forkRevision:parent.head,forkEnd
 for(const b of [parent,child])for(let i=b===parent?0:3;i<(b===parent?12:23);i++){const g=store.treeGraph(parent.id),p=g.paths.find(p=>p.branchId===b.id);store.organize(parent.id,{version:g.version,pathId:b.id,chatIds:p.messages.slice(i*2,i*2+2).map(m=>m.id),action:'combine',name:b.agent+' node '+i});}
 const beforeCompact=store.get('branch',parent.id).head;store.ingest(parent.id,store.raw(beforeCompact)+JSON.stringify({type:'compacted',payload:{message:'Retained parent context',replacement_history:[]}})+'\n',beforeCompact,{});
 app.native.setActive(parent.id,root,true);app.native.apply([parent.id]);
-app.server.listen(0,'127.0.0.1');await once(app.server,'listening');
+await listenForTests(app.server);
 const chrome=spawn(browserBinary(),['--headless=new','--no-first-run','--no-default-browser-check','--remote-debugging-port=0','--user-data-dir='+path.join(root,'chrome'),'about:blank'],{stdio:'ignore',windowsHide:true});let ws;
 try{
  const port=await browserPort(chrome,path.join(root,'chrome'));

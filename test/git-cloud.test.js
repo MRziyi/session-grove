@@ -26,6 +26,17 @@ function fixture(t) {
 }
 const branch = (d, name = 'Sample') => d.store.branch(null, name, 'codex', codexSample('/synthetic', [['Hello ' + name, 'Ready']]));
 const push = async d => { d.auto.startTransfer('push'); return d.auto.syncJob; };
+test('Git import preserves Unicode JSON strings and original conversation dates after metadata naming',async t=>{
+    const e=fixture(t),a=e.device('unicode-source'),b=e.device('unicode-reader');
+    const raw=codexSample('/synthetic',[['Unicode \u2028 and \u2029 separators','a'.repeat(70000)+'\u2028end']]);
+    const s=a.store.branch(null,'Original','codex',raw),stamp='2025-01-02T03:04:05.000Z';
+    a.store.put('branch',{...s,createdAt:stamp,updatedAt:stamp,contentUpdatedAt:stamp});a.store.edit(s.id,{name:'Named later'},{automatic:true});
+    await push(a);await pull(b);
+    assert.equal(b.store.raw(b.store.get('branch',s.id).head),raw);
+    assert.equal(b.store.get('branch',s.id).updatedAt,a.store.get('branch',s.id).updatedAt);
+    assert.equal(b.store.collections().items.find(i=>i.id===s.id).updatedAt,stamp);
+    assert.equal(b.cloud.dirtyIds().length,0);
+});
 const pull = async d => { d.auto.startTransfer('pull'); return d.auto.syncJob; };
 
 test('Git roundtrip, metadata-only rename and no-op Push preserve bodies and history', async t => {
@@ -125,21 +136,18 @@ test('Git rejects unsafe remotes and unrelated repository contents', async t => 
     const b = e.device('b'); await assert.rejects(pull(b), /Unexpected file or link/);
 });
 
-test('migration excludes old Archive and Trash before the first commit', async t => {
+test('initial Git publication excludes Archive and Trash and preserves the local source', async t => {
     const e = fixture(t), a = e.device('source');
     const kept = branch(a, 'Keep'), archived = branch(a, 'Archive'), trashed = branch(a, 'Trash');
     a.store.edit(archived.id, { archived: true }); stageTrash(a.store, [trashed.id], [trashed.id]);
-    const stage = path.join(e.root, 'migration');
-    execFileSync(process.execPath, ['scripts/migrate-git.js', '--source', a.store.root, '--staging', stage, '--remote', 'git@example.invalid:owner/test.git', '--local-only', '--prepare'], { cwd: process.cwd() });
-    const store = new Store(stage);
-    try {
-        const exported = store.exportGraph();
+    await push(a);const reader=e.device('reader');await pull(reader);
+    {
+        const store=reader.store,exported = store.exportGraph();
         assert.deepEqual(exported.branches.filter(b => !b.synthetic).map(b => b.id), [kept.id]);
         const text = bodyRefs(exported).map(h => store.objectStatement.get(h).body).join('\n');
         assert.match(text, /Hello Keep/); assert.doesNotMatch(text, /Hello Archive|Hello Trash/);
-        assert.equal(JSON.parse(fs.readFileSync(path.join(stage, 'prepared.json'))).excludedArchivedBranches, 1);
         assert.equal(a.store.get('branch', archived.id).archived, true); // source untouched
-    } finally { store.close(); }
+    }
 });
 
 test('pending semantic changes become the Git message and reset after Push', async t => {

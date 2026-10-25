@@ -127,10 +127,10 @@ test('automatic upload queue survives lock and failures and only runs after an o
     const { store, cwd } = setup(t), p = store.project('Queued'), b = store.branch(p.id, 'Main', 'codex', codexSample(cwd, [['Context', 'Ready']]));
     savePreferences(store, { autoUploadEnabled: true });
     let attempts = 0;
-    const auto = new AutoSync(store, () => ({ url: 'https://example.com/dav' }), async () => { attempts++; throw new Error('offline'); });
+    const auto = new AutoSync(store, () => ({ url: 'git@example.com:fixture/data.git' }), async () => { attempts++; throw new Error('offline'); });
     t.after(() => auto.close());
-    auto.schedule([b.id]); await auto.flush(); assert.equal(attempts, 0);
-    auto.unlock('my-test-passphrase'); await assert.rejects(auto.flush(), /offline/);
+    auto.lock();auto.schedule([b.id]); await auto.flush(); assert.equal(attempts, 0);
+    auto.unlock(); await assert.rejects(auto.flush(), /offline/);
     assert.equal(auto.status().phase, 'retrying'); assert.deepEqual(store.local('uploadQueue'), [b.id]);
     auto.lock(); assert.equal(auto.status().phase, 'locked');
 });

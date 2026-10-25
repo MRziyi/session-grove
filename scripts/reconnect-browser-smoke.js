@@ -1,8 +1,9 @@
+import {listenForTests} from './test-server.js';
 // First-run browser regression with empty native folders; no personal data or network sync.
 import fs from 'node:fs';import os from 'node:os';import path from 'node:path';import {spawn} from 'node:child_process';import {once} from 'node:events';import assert from 'node:assert/strict';
 import {createApp} from '../src/server.js';import {codexSample} from '../src/demo.js';import {browserBinary,browserPort,closeBrowser} from './browser-runtime.js';
 const root=fs.mkdtempSync(path.join(os.tmpdir(),'grove-reconnect-')),app=createApp({root:path.join(root,'data'),roots:{codex:path.join(root,'codex'),claude:path.join(root,'claude')},guard:()=>{}});
-app.server.listen(0,'127.0.0.1');await once(app.server,'listening');const baseURL='http://127.0.0.1:'+app.server.address().port;
+await listenForTests(app.server);const baseURL='http://127.0.0.1:'+app.server.address().port;
 const chrome=spawn(browserBinary(),['--headless=new','--no-first-run','--no-default-browser-check','--remote-debugging-port=0','--user-data-dir='+path.join(root,'chrome'),'about:blank'],{stdio:'ignore',windowsHide:true});let ws;
 try{
  const port=await browserPort(chrome,path.join(root,'chrome')),page=await fetch('http://127.0.0.1:'+port+'/json/new?'+baseURL,{method:'PUT'}).then(r=>r.json());ws=new WebSocket(page.webSocketDebuggerUrl);await once(ws,'open');let serial=0;const pending=new Map(),errors=[];

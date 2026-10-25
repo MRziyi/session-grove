@@ -1,3 +1,4 @@
+import {listenForTests} from '../scripts/test-server.js';
 import { INBOX_ID } from '../src/inbox.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -8,14 +9,12 @@ import os from 'node:os';
 import { once } from 'node:events';
 import { createApp } from '../src/server.js';
 import { Store } from '../src/store.js';
-import { sync } from '../src/sync.js';
 import { codexSample, codexTurn } from '../src/demo.js';
 test('HTTP protects local API and implements project to activation lifecycle', async (t) => {
     const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'grove-http-'))), cwd = path.join(root, 'work');
     fs.mkdirSync(cwd);
     const app = createApp({ root: path.join(root, 'data'), roots: { codex: path.join(root, 'codex'), claude: path.join(root, 'claude') }, guard: () => { } });
-    app.server.listen(0, '127.0.0.1');
-    await once(app.server, 'listening');
+    await listenForTests(app.server);
     t.after(async () => { app.server.close(); await once(app.server, 'close'); fs.rmSync(root, { recursive: true, force: true }); });
     const base = `http://127.0.0.1:${app.server.address().port}`;
     const boot = await (await fetch(base + '/api/bootstrap')).json();
@@ -37,71 +36,12 @@ test('HTTP protects local API and implements project to activation lifecycle', a
     assert.equal(page.status, 200);
     assert.match(page.headers.get('content-security-policy'), /frame-ancestors 'none'/);
 });
-test('encrypted WebDAV push/pull is idempotent, preserves no Active state, rejects wrong key', async (t) => {
-    const files = new Map();
-    let puts = 0;
-    const server = http.createServer(async (req, res) => {
-        const key = decodeURIComponent(req.url);
-        const chunks = [];
-        for await (const c of req)
-            chunks.push(c);
-        if (req.method === 'MKCOL') {
-            res.writeHead(201);
-            return res.end();
-        }
-        if (req.method === 'PUT') {
-            if (req.headers['if-none-match'] === '*' && files.has(key)) {
-                res.writeHead(412);
-                return res.end();
-            }
-            files.set(key, Buffer.concat(chunks));
-            puts++;
-            res.writeHead(201);
-            return res.end();
-        }
-        if (req.method === 'PROPFIND') {
-            res.writeHead(207, { 'Content-Type': 'application/xml' });
-            return res.end(`<D:multistatus xmlns:D="DAV:">${[...files.keys()].filter(k => k.includes('/commits/')).map(k => `<D:response><D:href>${k}</D:href></D:response>`).join('')}</D:multistatus>`);
-        }
-        if (files.has(key)) {
-            res.writeHead(200);
-            return res.end(req.method === 'HEAD' ? undefined : files.get(key));
-        }
-        res.writeHead(404);
-        res.end();
-    });
-    server.listen(0, '127.0.0.1');
-    await once(server, 'listening');
-    const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'grove-sync-'))), a = new Store(path.join(root, 'a')), b = new Store(path.join(root, 'b'));
-    t.after(async () => { a.close(); b.close(); server.close(); await once(server, 'close'); fs.rmSync(root, { recursive: true, force: true }); });
-    const config = { url: `http://127.0.0.1:${server.address().port}/dav`, username: 'u', password: 'p' }, key = 'correct-horse-context';
-    const project = a.project('Chrono'), branch = a.branch(project.id, 'Main', 'codex', codexSample('/work', [['private text', 'private answer']]));
-    const tree = a.treeGraph(branch.id);
-    a.organize(branch.id, { version: tree.version, pathId: branch.id, chatIds: tree.paths[0].messages.map(m => m.id), action: 'combine', name: 'Encrypted logical node' });
-    const first = await sync(a, config, key, 'push');
-    assert.ok(first.uploaded > 0);
-    for (const [name, body] of files)
-        if (name.endsWith('.bin'))
-            assert.ok(!body.toString().includes('private text'));
-    const count = puts;
-    await sync(a, config, key, 'push');
-    assert.equal(puts, count);
-    assert.equal((await sync(b, config, key, 'pull')).pulled, 1);
-    assert.equal(b.raw(b.get('branch', branch.id).head), a.raw(branch.head));
-    assert.equal(b.instances().length, 0);
-    assert.equal(b.treeGraph(branch.id).nodes[0].name, 'Encrypted logical node');
-    assert.equal((await sync(b, config, key, 'pull')).pulled, 0);
-    await assert.rejects(sync(b, config, 'a-different-password', 'pull'), /解密/);
-    a.fork(branch.id, { name: 'Child', end: a.detail(branch.id).checkpoints[0].end });
-    assert.equal((await sync(a, config, key, 'push')).uploaded, 0);
-    await sync(b, config, key, 'pull');
-    assert.equal(b.all('branch').length, 2);
-});
+
 test('workspace HTTP actions archive atomically, restore without activation, reject empty projects, and persist layout conflict choices', async t => {
     const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'grove-actions-'))), cwd = path.join(root, 'work'); fs.mkdirSync(cwd);
     let busy = false, remote;
     const app = createApp({ root: path.join(root, 'data'), roots: { codex: path.join(root, 'codex'), claude: path.join(root, 'claude') }, guard: () => { if (busy) throw new Error('native busy'); } });
-    app.server.listen(0, '127.0.0.1'); await once(app.server, 'listening');
+    await listenForTests(app.server);
     t.after(async () => { remote?.close(); await new Promise(resolve=>app.close(resolve)); fs.rmSync(root, { force: true, recursive: true }); });
     const base = `http://127.0.0.1:${app.server.address().port}`, boot = await (await fetch(base + '/api/bootstrap')).json();
     const request = async (path, data) => { const r = await fetch(base + '/api' + path, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Grove-Token': boot.token }, body: JSON.stringify(data) }); return { status: r.status, data: await r.json() }; };

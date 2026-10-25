@@ -1,10 +1,11 @@
+import {listenForTests} from '../scripts/test-server.js';
 import test from 'node:test';import assert from 'node:assert/strict';import fs from 'node:fs';import os from 'node:os';import path from 'node:path';import {DatabaseSync} from 'node:sqlite';import {once} from 'node:events';
 import {Store} from '../src/store.js';import {Native} from '../src/native.js';import {createApp} from '../src/server.js';import {codexSample,codexTurn} from '../src/demo.js';import {savePreferences} from '../src/preferences.js';import {parse,renderNative} from '../src/transcript.js';import {recordPreview} from '../src/record-preview.js';
 const lines=rows=>rows.map(r=>JSON.stringify(r)+'\n').join('');
 function fixture(t){const root=fs.mkdtempSync(path.join(os.tmpdir(),'grove-quick-')),store=new Store(path.join(root,'library')),roots={codex:path.join(root,'codex'),claude:path.join(root,'claude')},apps=[];fs.mkdirSync(path.join(roots.codex,'sessions'),{recursive:true});t.after(async()=>{for(const app of apps)if(app.server.listening)await new Promise(resolve=>app.close(resolve));store.close();fs.rmSync(root,{recursive:true,force:true});});return{root,store,roots,apps};}
 test('local renames work during sync and Trash rejects active paths', async t => {
  const f=fixture(t),app=createApp({root:path.join(f.root,'app'),roots:f.roots,guard:()=>{}});
- f.apps.push(app);app.server.listen(0,'127.0.0.1');await once(app.server,'listening');
+ f.apps.push(app);await listenForTests(app.server);
  const base='http://127.0.0.1:'+app.server.address().port,headers={'X-Grove-Token':app.token,'Content-Type':'application/json'};
  const request=(route,method,body)=>fetch(base+'/api/'+route,{method,headers,body:JSON.stringify(body)});
  const parent=app.store.branch(null,'Parent','codex',codexSample(f.root,[['Setup','Ready'],['More','Done']]));
@@ -31,7 +32,7 @@ test('local renames work during sync and Trash rejects active paths', async t =>
 });
 test('fresh startup stays empty until Update, streams actual completion, and enables the local timer afterward',async t=>{
  const f=fixture(t),file=path.join(f.roots.codex,'sessions','sample.jsonl');fs.writeFileSync(file,codexSample(f.root,[['Question','Answer']]));
- const app=createApp({root:path.join(f.root,'app'),roots:f.roots,guard:()=>{}});app.server.listen(0,'127.0.0.1');await once(app.server,'listening');t.after(async()=>{if(app.server.listening)await new Promise(resolve=>app.close(resolve));});
+ const app=createApp({root:path.join(f.root,'app'),roots:f.roots,guard:()=>{}});await listenForTests(app.server);t.after(async()=>{if(app.server.listening)await new Promise(resolve=>app.close(resolve));});
  const base='http://127.0.0.1:'+app.server.address().port,boot=await(await fetch(base+'/api/bootstrap')).json();assert.equal(boot.items.length,0);assert.equal(boot.update.nextRunAt,null);assert.equal(boot.cloud.started,false);
  const headers={'X-Grove-Token':boot.token,'Content-Type':'application/json'},controller=new AbortController();const stream=await fetch(base+'/api/events',{headers,signal:controller.signal});const reader=stream.body.getReader();let events='';const consume=(async()=>{try{for(;;){const r=await reader.read();if(r.done)break;events+=Buffer.from(r.value).toString();}}catch{}})();
  const r=await(await fetch(base+'/api/collect',{method:'POST',headers,body:'{}'})).json();assert.equal(r.discovered,1);await new Promise(r=>setTimeout(r,10));controller.abort();await consume;assert.match(events,/"state":"running"/);assert.match(events,/"state":"success"/);

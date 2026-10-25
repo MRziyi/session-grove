@@ -1,9 +1,10 @@
+import {listenForTests} from '../scripts/test-server.js';
 import test from 'node:test';import assert from 'node:assert/strict';import fs from 'node:fs';import os from 'node:os';import path from 'node:path';import {once} from 'node:events';
 import {metadata} from '../src/organization.js';
 import {createApp} from '../src/server.js';import {codexSample} from '../src/demo.js';
 test('manual transcription API checks versions and client availability, preserves Session and rolls back failed refresh',async t=>{
  const root=fs.mkdtempSync(path.join(os.tmpdir(),'grove-title-api-')),app=createApp({root:path.join(root,'data'),roots:{codex:path.join(root,'codex'),claude:path.join(root,'claude')},guard:()=>{}}),s=app.store;
- app.server.listen(0,'127.0.0.1');await once(app.server,'listening');t.after(async()=>{await new Promise(r=>app.close(r));fs.rmSync(root,{recursive:true,force:true,maxRetries:5,retryDelay:100});});
+ await listenForTests(app.server);t.after(async()=>{await new Promise(r=>app.close(r));fs.rmSync(root,{recursive:true,force:true,maxRetries:5,retryDelay:100});});
  const b=s.branch(null,'Separate Session','codex',codexSample(root,[['Question','Answer']]));s.local('instances',[{id:'copy',branchId:b.id,nativeId:'native',agent:'codex',applied:true,title:'Original',observedTitle:'Original'}]);
  let title='Original',available=false,refresh=true,writes=0;const manager=app.intelligence.transcriptions;
  manager.ready=()=>available;manager.binary=()=>'/fixture';manager.refresh=async()=>({status:refresh?'sent':'unavailable'});manager.clientFactory=()=>({init:async()=>{},close:async()=>{},request:async(method,p)=>{if(method==='thread/read')return{thread:{name:title}};assert.equal(method,'thread/name/set');writes++;title=p.name;return{};}});

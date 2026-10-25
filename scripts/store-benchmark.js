@@ -2,7 +2,7 @@
 import fs from 'node:fs';import os from 'node:os';import path from 'node:path';import {pathToFileURL,fileURLToPath} from 'node:url';
 const source=path.resolve(process.argv[2]||fileURLToPath(new URL('..',import.meta.url)));
 const {Store}=await import(pathToFileURL(path.join(source,'src/store.js')));
-const {Cloud}=await import(pathToFileURL(path.join(source,'src/cloud.js')));
+const {CloudView:Cloud}=await import(pathToFileURL(path.join(source,'src/cloud-view.js')));
 const {codexSample}=await import(pathToFileURL(path.join(source,'src/demo.js')));
 const root=fs.mkdtempSync(path.join(os.tmpdir(),'grove-store-bench-')),a=new Store(path.join(root,'a')),b=new Store(path.join(root,'b')),result={sessions:400};
 const measure=(name,fn)=>{global.gc?.();const cpu=process.cpuUsage(),start=performance.now();fn();result[name]={wallMs:Math.round(performance.now()-start),cpuMs:Math.round(Object.values(process.cpuUsage(cpu)).reduce((a,b)=>a+b)/1000),rssMiB:Math.round(process.memoryUsage().rss/1048576)};};

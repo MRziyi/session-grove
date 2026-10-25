@@ -1,3 +1,4 @@
+import {listenForTests} from './test-server.js';
 // Synthetic shared-compaction and observable-loading regression. No personal data.
 import fs from 'node:fs';import os from 'node:os';import path from 'node:path';import {spawn} from 'node:child_process';import {once} from 'node:events';import assert from 'node:assert/strict';
 import {createApp} from '../src/server.js';import {codexSample,codexTurn} from '../src/demo.js';import {browserBinary,browserPort,closeBrowser} from './browser-runtime.js';
@@ -11,7 +12,7 @@ store.put('branch',{...legacyPath,contextPolicy:{disabled:[legacyEvent.legacyId]
 const original=store.treeGraphAsync.bind(store);let release,waiting;
 function pause(){waiting=new Promise(r=>release=r);}pause();
 store.treeGraphAsync=async(...args)=>{await waiting;return original(...args);};
-app.server.listen(0,'127.0.0.1');await once(app.server,'listening');const baseURL='http://127.0.0.1:'+app.server.address().port;
+await listenForTests(app.server);const baseURL='http://127.0.0.1:'+app.server.address().port;
 const chrome=spawn(browserBinary(),['--headless=new','--no-first-run','--no-default-browser-check','--remote-debugging-port=0','--user-data-dir='+path.join(root,'chrome'),'about:blank'],{stdio:'ignore',windowsHide:true});let ws;
 try{
  const port=await browserPort(chrome,path.join(root,'chrome')),page=await fetch('http://127.0.0.1:'+port+'/json/new?'+baseURL,{method:'PUT'}).then(r=>r.json());ws=new WebSocket(page.webSocketDebuggerUrl);await once(ws,'open');let serial=0;const pending=new Map(),errors=[];

@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+## 1.1.10
+
+- Remove the retired WebDAV transport, credentials workflow, migration tools and provider-only tests. Keep Git snapshots, local recovery and their regression coverage; existing legacy files on disk remain untouched.
+- Restrict Windows private staging files with native ACL tools before writing secrets, avoiding a PowerShell startup for every write. Cache pnpm dependencies and split browser CI into two complete, nonoverlapping groups.
+- Fix browser reload checks that read DOM nodes before they exist, and report the correct failing browser source location.
+- Allocate test HTTP listeners above Fetch's blocked-port range and retry occupied ports without closing application resources.
+- Preserve Unicode line and paragraph separators inside Git JSONL records; these are valid string content, not record delimiters.
+- Add project category collapse/expand controls, including green drop targets for collapsed categories, while preserving double-click name editing.
+- Add date/sorting modes for conversation activity, manual edits (default) and automatic organization; retain separate synchronization clocks.
+- Preserve completed imported names and legacy naming provenance, avoid first-observation title rewrites, and pause smart organization while sync reconciles incoming metadata.
+- Remove a stray closing brace from Information.
+- Keep completed discard feedback stable when delayed progress events arrive after the HTTP response; show settings saves as pending until persisted.
 - Centralize Projects visibility, item counts and session counts in a backend projection consumed by both navigation and listing. Retain durable project identities; distinguish empty, filtered, archived and unloaded directories.
 - Native file availability only affects Active membership, never the presence of saved project history.
 - Verify decoded compressed histories during native archive and preserve compression on active-session rewrites.

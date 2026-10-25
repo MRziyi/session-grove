@@ -1,5 +1,9 @@
 let language = localStorage.getItem('grove-language') === 'zh' ? 'zh' : 'en';
 const dictionary = {
+"Date and sorting":"日期与排序",
+"Recent conversation":"最近对话",
+"Include manual edits":"包含手动编辑",
+"Include automatic organization":"包含自动整理",
 "Some project indexes are unavailable locally. Use Sync to refresh the directory.":"部分项目目录尚未在本机载入，请使用 Sync 更新目录。",
 "{count} chats selected":"已选 {count} 条消息",
 "Clear {count} selected chats":"取消选择 {count} 条消息",
@@ -460,7 +464,7 @@ const dictionary = {
 "Download updates": "下载更新",
 "Download failed": "下载失败",
 "Upload failed": "上传失败",
-"Cloud vault is empty": "云端资料库为空",
+
 "Reading local changes": "读取本地修改",
 "Payload counters include attempted uploads; record counts confirm verified transfers.": "载荷计数包含已发起的上传；记录进度仅计入校验通过的传输。",
 "Upload payload": "上传请求载荷",
@@ -598,15 +602,15 @@ const dictionary = {
     'Save preferences': '保存设置',
     'Sync failed': '同步失败',
     "Already up to date": "已经是最新版本",
-    "Unlock vault": "解锁资料库",
+
     "Loading…": "加载中…",
     "Previous": "上一页",
     "Next": "下一页",
     "Ready · click Download": "已就绪 · 点击 Download",
     "Ready. Click Download once to load the cloud directory and enable automatic sync.": "已就绪。请首次手动点击 Download，读取云端目录并启用自动同步。",
     "Ready. Close Settings and click Download once to load the cloud directory and enable automatic sync.": "配置已完成。关闭设置后，请首次手动点击 Download，读取云端目录并启用自动同步。",
-    "Click Update to read local sessions, or configure WebDAV and click Download to load the cloud directory.": "点击上方 Update 读取本地会话；或配置 WebDAV 后点击 Download 读取云端目录。",
-    "This cloud vault is encrypted. Enter its existing passphrase to connect. Encryption can be changed afterward.": "此云端资料库已加密。输入它现有的口令以连接，连接后可修改加密设置。",
+
+
     "Show scheduled and background sessions": "显示定时任务和后台会话",
     "Fork from the last completed turn. {count} chats from the unfinished turn will stay on the original path.": "将从最近的完整轮次创建分支。未完成轮次中的 {count} 条对话会留在原路径。",
     "Encrypted reasoning · no readable summary. Original preserved.": "加密推理记录 · 无可读摘要，原始内容已保留。",
@@ -631,7 +635,7 @@ const dictionary = {
     'The complete native history is unavailable. Update before changing context.': '尚未取得完整原生历史，请先更新再修改上下文。',
     'Native history prefix is missing. Keep the earlier rollout segments available.': '缺少原生历史前缀，请保留早期历史段文件并重新更新。',
 
-    "Use at least 12 characters, or leave empty for no content encryption. Other devices need the same passphrase.": "请输入至少 12 个字符，或留空不加密内容。其他设备需使用相同口令。",
+
     'Updating settings…': '正在更新设置…',
     "About": "关于",
     "Information": "使用说明",
@@ -640,15 +644,15 @@ const dictionary = {
     "Modify": "修改",
     "Password": "密码",
     "Verify connection": "验证连接",
-    "Encryption": "内容加密",
+
     "Encrypted": "已加密",
     "Not encrypted": "未加密",
-    "Current passphrase": "当前加密口令",
-    "Passphrase (optional)": "加密口令（可选）",
-    "Keep encryption": "保留加密",
-    "Continue without encryption": "不加密并继续",
-    "Set encryption": "设置加密",
-    "Leave empty to store without content encryption. Use the same passphrase on your other devices.": "留空则不加密云端内容。其他设备需使用相同的加密口令。",
+
+
+
+
+
+
     "Automatic updates": "自动更新",
     "Read local sessions": "读取本地会话",
     "Upload changed projects": "上传已修改项目",
@@ -685,11 +689,11 @@ const dictionary = {
     "settings": "运行设置",
     "attachment": "附件",
     "other": "其他",
-    "Use at least 12 characters, or leave encryption off.": "请输入至少 12 个字符，或留空关闭内容加密。",
-    "Verify WebDAV first.": "请先验证 WebDAV。",
-    "Cloud encryption settings changed. Reconnect in Settings.": "云端加密设置已改变，请在设置中重新连接。",
+
+
+
     "Settings migration in progress.": "设置正在迁移，请等待完成。",
-    "Pause sync on other devices while changing the vault. Other devices must reconnect afterward.": "变更资料库时请暂停其他设备的同步，完成后在其他设备重新连接。",
+
 
     'Open the active continuation from your agent’s session list.': '请从原生 Agent 的会话列表打开已激活的续接记录。',
     'The native agent may compact again during later work.': '后续对话中，原生 Agent 仍可能再次自动压缩。',
@@ -786,11 +790,11 @@ const dictionary = {
     'Recover interrupted operation': '恢复未完成的操作', 'Archive': '归档', 'Restore': '恢复',
     'History and child branches are retained. Archiving also queues removal from this device’s Active set.': '历史和子分支都会保留。归档也会将本机实例标记为待收起。',
     'Restoring does not automatically activate the session.': '恢复不会自动激活会话。', 'Session updated': '会话已更新',
-    'Project details': '项目信息', 'Settings': '设置', 'WebDAV URL': 'WebDAV 地址', 'Username': '用户名',
-    'Password': '密码', 'Password (blank keeps existing)': '密码（留空保留）', 'Encryption passphrase': '加密口令',
+    'Project details': '项目信息', 'Settings': '设置',  'Username': '用户名',
+    'Password': '密码', 'Password (blank keeps existing)': '密码（留空保留）',
     'At least 12 characters; same on every device': '至少 12 字符，每台设备使用相同口令',
     'Unlock automatic project sync': '解锁项目自动同步', 'Sync now': '立即同步', 'Lock sync': '锁定同步', 'Save connection': '保存连接',
-    'Organization changes upload automatically while unlocked. New Pending stays local until you organize it or click Upload. The passphrase stays in memory only.': '解锁后自动检查云端目录；项目归类和节点整理触发上传。新增 Pending 先保存在本机，也可手动上传。未归类会话与 Active 选择不上传，口令仅留在内存。',
+
     'Connection saved': '连接已保存', 'Sync complete': '同步完成', 'Never': '从未', 'Last sync': '上次同步',
     'Configure sync': '配置同步', 'Unlock sync': '解锁同步', 'Upload queued': '待上传', 'Syncing…': '同步中…', 'Synced': '已同步', 'Retrying': '等待重试',
     'METADATA CONFLICTS': '元数据冲突', 'Keep local': '保留本地', 'Use remote': '采用远端', 'Local': '本地', 'Remote': '远端',
@@ -798,7 +802,7 @@ const dictionary = {
     'Refresh the page and try again.': '请刷新页面后重试。', 'Operation failed. Check the current session state and try again.': '操作失败，请检查会话状态后重试。',
     'Pending changed. Refresh before committing.': 'Pending 已更新，请刷新后再提交。', 'This range was already organized. Refresh before committing.': '该范围已被整理，请刷新后再提交。',
     'Choose a complete turn boundary.': '请选择完整轮次边界。', 'Choose a destination project.': '请选择目标项目。',
-    'Encryption passphrase needs at least 12 characters.': '加密口令至少需要 12 字符。', 'Configure WebDAV and unlock project sync first.': '请先配置 WebDAV 并解锁项目同步。',
+
     'Native history available on this device': '本机原生历史', 'Browse history': '浏览历史', 'Import': '收纳', 'Imported': '已收纳', 'No native sessions found.': '没有发现原生会话。',
     'Imported into project': '已收纳到项目', 'Saved locally': '已保存到本机', 'Project work is queued for sync': '项目工作已排队同步',
     'New project name': '新项目名称', 'SESSION GROVE': 'SESSION GROVE', 'Scope': '范围', 'Collection': '项目列表'
@@ -819,7 +823,7 @@ const errors = {
     '目标必须是本机存在的绝对工程目录': 'Choose an existing absolute working-directory path.',
     '同步进行中，请稍后操作': 'Project sync is in progress. Please try again shortly.',
     '请先恢复归档分支': 'Restore this archived session first.',
-    '解密或完整性校验失败，请检查加密口令': 'Decryption failed. Check the encryption passphrase.',
+
     '此会话包含外部附件引用。当前版本可浏览和分支，完整附件迁移尚未支持。': 'This session references external attachments. Full attachment migration is not supported yet.',
     '此会话含伴随目录，当前版本尚未完整收纳；拒绝移除或改写原生记录': 'This session has auxiliary files that have not been captured. Native changes are blocked.',
     '存在未完成操作，请先恢复备份': 'Recover the interrupted native operation before applying changes.',

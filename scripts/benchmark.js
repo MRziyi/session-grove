@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { performance } from 'node:perf_hooks';
-import { Cloud } from '../src/cloud.js';
+import { CloudView as Cloud } from '../src/cloud-view.js';
 import { Store } from '../src/store.js';
 import { Native } from '../src/native.js';
 import { codexSample } from '../src/demo.js';

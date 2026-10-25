@@ -1,3 +1,4 @@
+import {listenForTests} from '../scripts/test-server.js';
 import {zstdCompressSync} from 'node:zlib';
 import test from 'node:test';import assert from 'node:assert/strict';import fs from 'node:fs';import path from 'node:path';import os from 'node:os';
 import {Store} from '../src/store.js';import {Native} from '../src/native.js';import {codexSample,codexTurn,claudeSample} from '../src/demo.js';import {stageTrash,restoreTrash,cleanupLocal,expireTrash} from '../src/trash.js';import {moveNativeToRecovery,deleteRecoveryCopies,nativeTrashCandidates} from '../src/trash-actions.js';
@@ -51,7 +52,7 @@ test('SSH verification failures give actionable reasons and preserve the saved r
 test('HTTP bulk recovery restores and deletes the selected copies',async t=>{
  const {createApp}=await import('../src/server.js');const {once}=await import('node:events');
  const root=fs.mkdtempSync(path.join(os.tmpdir(),'grove-trash-http-')),app=createApp({root:path.join(root,'app'),roots:{codex:path.join(root,'codex'),claude:path.join(root,'claude')},guard:()=>{}});
- app.server.listen(0,'127.0.0.1');await once(app.server,'listening');t.after(async()=>{await new Promise(r=>app.close(r));fs.rmSync(root,{recursive:true,force:true});});
+ await listenForTests(app.server);t.after(async()=>{await new Promise(r=>app.close(r));fs.rmSync(root,{recursive:true,force:true});});
  const entries=['One','Two','Delete'].map(name=>{const b=app.store.branch(null,name,'codex',codexSample(root,[[name,'Done']]));return stageTrash(app.store,[b.id],[b.id]);});
  const call=async body=>{const r=await fetch('http://127.0.0.1:'+app.server.address().port+'/api/trash/recovery',{method:'POST',headers:{'Content-Type':'application/json','X-Grove-Token':app.token},body:JSON.stringify(body)});const result=await r.json();assert.equal(r.status,200,JSON.stringify(result));return result;};
  const restored=await call({action:'restore',ids:entries.slice(0,2).map(e=>e.id)});assert.equal(restored.restored.length,2);assert.equal(restored.failed.length,0);

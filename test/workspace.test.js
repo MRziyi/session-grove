@@ -6,6 +6,8 @@ import path from 'node:path';
 import { Store } from '../src/store.js';
 import { Native } from '../src/native.js';
 import { codexSample, codexTurn } from '../src/demo.js';
+import {savePreferences} from '../src/preferences.js';
+import {metadata} from '../src/organization.js';
 const fixture = t => {
     const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'grove-workspace-')));
     const store = new Store(path.join(root, 'library')), cwd = path.join(root, 'work'); fs.mkdirSync(cwd);
@@ -21,15 +23,29 @@ const edit = (store, branch, positions, action, name) => {
     const g = store.treeGraph(branch.id), p = g.paths.find(p => p.branchId === branch.id);
     return store.organize(branch.id, { version: g.version, pathId: branch.id, chatIds: positions.map(i => p.messages[i].id), action, name });
 };
-test('session and shared node edits reorder lists without changing transcript timestamps', t => {
+
+test('date modes distinguish content, manual edits and automatic organization without changing sync clocks',t=>{
+ const {store,cwd}=fixture(t),b=store.branch(null,'Original','codex',codexSample(cwd,pairs(2))),content='2025-01-01T00:00:00.000Z';
+ store.put('branch',{...b,createdAt:content,updatedAt:content,contentUpdatedAt:content});
+ const shown=()=>store.collections().items.find(i=>i.id===b.id).updatedAt;
+ assert.equal(shown(),content);store.edit(b.id,{name:'Manual'});const manual=shown();assert.ok(manual>content);
+ store.put('branch',metadata(store.get('branch',b.id),{sessionName:'Automatic',sessionNameOrigin:'automatic'},{automatic:true}));const complete=store.get('branch',b.id).metadataUpdatedAt;
+ assert.equal(shown(),manual);savePreferences(store,{activityDateMode:'conversation'});assert.equal(shown(),content);
+ savePreferences(store,{activityDateMode:'automatic'});assert.equal(shown(),complete);
+ savePreferences(store,{activityDateMode:'manual'});assert.equal(shown(),manual);
+ assert.equal(store.get('branch',b.id).metadataUpdatedAt,complete);assert.throws(()=>savePreferences(store,{activityDateMode:'invalid'}));
+});
+test('session and shared node edits preserve conversation dates while syncing their modification clocks', t => {
     const { store, cwd } = fixture(t);
+    savePreferences(store,{activityDateMode:'conversation'});
     const first = store.branch(null, 'Older', 'codex', codexSample(cwd, pairs(2)));
     const child = store.fork(first.id, { name: 'Child', end: store.detail(first.id).checkpoints[0].end });
     const other = store.branch(null, 'Recent', 'codex', codexSample(cwd, [['Other', 'Reply']]));
     for (const b of [first, child, other]) store.put('branch', { ...b, contentUpdatedAt: b.id === other.id ? '2026-01-02' : '2026-01-01' });
     assert.equal(store.collections().items.find(i => i.id === first.id).updatedAt, '2026-01-01');
     store.edit(first.id, { name: 'Renamed session' });
-    assert.ok(store.collections().items.find(i => i.id === first.id).updatedAt > '2026-01-02');
+    assert.equal(store.collections().items.find(i => i.id === first.id).updatedAt, '2026-01-01');
+    assert.ok(store.get('branch',first.id).metadataUpdatedAt > '2026-01-02');
     const version = store.version;
     store.edit(first.id, { name: 'Renamed session' }); assert.equal(store.version, version);
     const graph = store.treeGraph(first.id), node = graph.nodes.find(n => n.branchIds.includes(first.id) && n.branchIds.includes(child.id));
@@ -43,7 +59,8 @@ test('session and shared node edits reorder lists without changing transcript ti
     store.organize(first.id, { version: current.version, pathId: first.id, nodeId: current.nodes.find(n => n.name === 'Shared setup').id, action: 'rename', name: 'Shared setup' });
     assert.equal(store.get('branch', child.id).metadataUpdatedAt, timestamp);
     const remote = new Store(path.join(cwd, 'remote')); try { copy(store, remote);
-    assert.equal(remote.get('branch', child.id).metadataUpdatedAt, timestamp); } finally { remote.close(); }
+    assert.equal(remote.get('branch', child.id).metadataUpdatedAt, timestamp);savePreferences(remote,{activityDateMode:'conversation'});
+    assert.equal(remote.collections().items.find(i=>i.id===first.id).updatedAt,'2026-01-01'); } finally { remote.close(); }
 });
 test('logical nodes support arbitrary chat boundaries, internal Pending and neighboring repartition without native changes', t => {
     const { store, cwd } = fixture(t), b = store.branch(null, 'Draft', 'codex', codexSample(cwd, pairs(5))), raw = store.raw(b.head);

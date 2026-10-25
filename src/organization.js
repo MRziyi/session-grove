@@ -1,11 +1,11 @@
 import {isTrashed} from './trash.js';
 import { id, now, hash, assert, text } from './util.js';
 import { parse } from './transcript.js';
-import { nextModifiedAt } from './session-time.js';
-export function metadata(value, patch) {
+import { nextModifiedAt,editTimes } from './session-time.js';
+export function metadata(value, patch, {automatic=false}={}) {
     const previous = value.metaVersion || hash(JSON.stringify([value.name, value.description, value.projectId, value.group, value.archived]));
     const updatedAt = nextModifiedAt(value);
-    return { ...value, ...patch, updatedAt, metadataUpdatedAt: updatedAt, metaVersion: id(), metaAncestors: [...new Set([...(value.metaAncestors || []), previous])] };
+    return { ...value, ...patch, ...editTimes(value,updatedAt,automatic), metaVersion: id(), metaAncestors: [...new Set([...(value.metaAncestors || []), previous])] };
 }
 export function initializeOrganization(store) {
     for (const kind of ['project', 'branch'])
@@ -62,7 +62,7 @@ export function commitPending(store, branchId, { name, end, revisionId, expected
         assert(pending.checkpoints.some(c => c.end === Number(end)), 'Choose a complete turn boundary.');
         const node = { id: id(), branchId, revisionId: branch.head, name: text(name, 'Node name'), start: pending.start, end: Number(end), previousId: branch.nodeHead || null, createdAt: nextModifiedAt(branch) };
         store.put('node', node);
-        store.put('branch', { ...branch, nodeHead: node.id, updatedAt: node.createdAt, metadataUpdatedAt: node.createdAt });
+        store.put('branch', { ...branch, nodeHead: node.id, ...editTimes(branch,node.createdAt) });
         return node;
     });
 }

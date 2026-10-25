@@ -1,3 +1,4 @@
+import {listenForTests} from './test-server.js';
 // Browser acceptance using real library metadata, graph histories and recovery copies.
 import fs from 'node:fs';import path from 'node:path';import assert from 'node:assert/strict';import {spawn} from 'node:child_process';import {once} from 'node:events';
 import {Store} from '../src/store.js';import {createApp} from '../src/server.js';import {browserBinary,browserPort,closeBrowser} from './browser-runtime.js';
@@ -10,7 +11,7 @@ const graph=store.treeGraph(chosen.id),p=graph.paths.find(p=>p.agent==='codex'&&
 const destination=live.find(i=>i.projectId&&i.projectId!==chosen.projectId).projectId;
 const archives=live.filter(i=>i.projectId&&i.projectId!==chosen.projectId&&i.id!==chosen.id).filter((i,index,all)=>all.findIndex(v=>v.projectId===i.projectId)===index).slice(0,2);
 for(const item of archives)for(const id of item.sessionIds)store.edit(id,{archived:true});
-app.server.listen(0,'127.0.0.1');await once(app.server,'listening');const base='http://127.0.0.1:'+app.server.address().port;
+await listenForTests(app.server);const base='http://127.0.0.1:'+app.server.address().port;
 const chrome=spawn(browserBinary(),['--headless=new','--no-first-run','--no-default-browser-check','--remote-debugging-port=0','--user-data-dir='+path.join(root,'chrome'),'about:blank'],{stdio:'ignore'});let ws;const report={checks:[],errors:[]};
 try{
  const port=await browserPort(chrome,path.join(root,'chrome'));const page=await(await fetch('http://127.0.0.1:'+port+'/json/new?'+base,{method:'PUT'})).json();ws=new WebSocket(page.webSocketDebuggerUrl);await once(ws,'open');let id=0;const pending=new Map();

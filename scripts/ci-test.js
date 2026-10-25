@@ -6,7 +6,7 @@ const tests=fs.readdirSync('test').filter(file=>file.endsWith('.test.js')).flatM
     const source=fs.readFileSync('test/'+file,'utf8');
     return [...source.matchAll(/\btest\(\s*(['"])([^\r\n]+?)\1/g)].map(match=>({name:match[2],file:'test/'+file,line:source.slice(0,match.index).split('\n').length}));
 });
-const suite=process.argv.find(v=>v.startsWith('--suite='))?.slice(8)||(process.argv.includes('--browser')?'browser':'all'),browser=suite==='browser';
+const suite=process.argv.find(v=>v.startsWith('--suite='))?.slice(8)||(process.argv.includes('--browser')?'browser':'all'),browser=suite==='browser'||suite.startsWith('browser-');
 const plan=testPlan(fs.readdirSync('test').filter(file=>file.endsWith('.test.js')).map(file=>'test/'+file),tests,suite);
 let cursor=0,failedFiles=0;const results=[];
 function run({file,names}){return new Promise(resolve=>{
@@ -33,7 +33,7 @@ function run({file,names}){return new Promise(resolve=>{
         for(const test of failed)console.error(`::error file=${test.file},line=${test.line},title=Regression test failure::${test.name.replaceAll('%','%25')}`);
         for(const [label,pattern] of [['Windows ACL helper',/private-file\.js/],['PowerShell module mismatch',/Could not load file or assembly|requires PowerShell/],['Access denied',/Access is denied|UnauthorizedAccessException/],['Command unavailable',/is not recognized/],['Assertion failed',/ERR_ASSERTION/],['PowerShell type unavailable',/Cannot find type|Method invocation failed/]])if(pattern.test(tail))console.error(`::error file=${file},title=Failure category::${label}`);
         if(!failed.length&&!timedOut){
-            const positions=[...tail.matchAll(/(?:node-browser-smoke|sync-browser-smoke)\.js:(\d+):/g)];
+            const positions=[...tail.matchAll(new RegExp(file.split('/').at(-1).replaceAll('.','\\.')+':(\\d+):','g'))];
             const line=browser&&positions.length?Number(positions.at(-1)[1]):1;
             const category=/EPERM|EBUSY/.test(tail)?'Temporary file access failed':/Timeout/.test(tail)?'UI wait timed out':/ERR_ASSERTION/.test(tail)?'Assertion failed':'Execution failed';
             console.error(`::error file=${file},line=${line},title=Regression test failure::${category}. See this public source location.`);

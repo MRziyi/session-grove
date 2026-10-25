@@ -3,7 +3,7 @@ import path from 'node:path';
 import {gunzipSync} from 'node:zlib';
 import {assert,hash} from './util.js';
 import {rootOf,treeMembers} from './organization.js';
-import {treeSnapshot} from './cloud.js';
+import {treeSnapshot} from './cloud-view.js';
 import {changeSnapshot} from './session-changes.js';
 import {INBOX_ID} from './inbox.js';
 import {isActive} from './workspace.js';

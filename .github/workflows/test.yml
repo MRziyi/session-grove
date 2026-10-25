@@ -17,15 +17,19 @@ jobs:
           - { os: windows-latest, suite: native }
           - { os: windows-latest, suite: git-1 }
           - { os: windows-latest, suite: git-2 }
-          - { os: windows-latest, suite: browser }
+          - { os: windows-latest, suite: browser-1 }
+          - { os: windows-latest, suite: browser-2 }
     runs-on: ${{ matrix.os }}
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.13.1
       - uses: actions/setup-node@v4
         with:
           node-version: '24'
-      - run: npm install --global pnpm@10.13.1
+          cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: node scripts/ci-test.js --suite=${{ matrix.suite }}
       - uses: actions/upload-artifact@v4

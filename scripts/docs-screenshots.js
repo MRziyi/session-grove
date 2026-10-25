@@ -1,3 +1,4 @@
+import {listenForTests} from './test-server.js';
 // Render public documentation images from synthetic sessions in the real UI.
 import fs from 'node:fs';import os from 'node:os';import path from 'node:path';import {spawn} from 'node:child_process';import {once} from 'node:events';
 import {createApp} from '../src/server.js';import {codexSample,codexTurn,claudeSample} from '../src/demo.js';import {browserBinary,closeBrowser} from './browser-runtime.js';
@@ -23,7 +24,7 @@ for(const b of [base,canvas,outline,annotation,prototype]){
     if(node&&!node.name)store.organize(base.id,{version:graph.version,pathId:b.id,nodeId:node.id,action:'rename',name:b.id===base.id?'Project brief':b.name});
 }
 app.native.setActive(annotation.id,work,true);app.native.apply([annotation.id]);
-app.server.listen(0,'127.0.0.1');await once(app.server,'listening');
+await listenForTests(app.server);
 const chrome=spawn(browserBinary(),['--headless=new','--no-first-run','--no-default-browser-check','--remote-debugging-port=0','--user-data-dir='+path.join(root,'browser'),'about:blank'],{stdio:'ignore',windowsHide:true});let ws;
 try{
     let port;for(let i=0;i<100;i++){try{port=fs.readFileSync(path.join(root,'browser','DevToolsActivePort'),'utf8').split('\n')[0];break;}catch{}await new Promise(r=>setTimeout(r,100));}

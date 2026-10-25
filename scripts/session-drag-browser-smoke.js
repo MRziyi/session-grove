@@ -1,3 +1,4 @@
+import {listenForTests} from './test-server.js';
 import {browserBinary,closeBrowser,browserPort} from './browser-runtime.js';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -12,7 +13,7 @@ const app=createApp({root:path.join(root,'app'),roots:{codex:path.join(root,'cod
 const store=app.store;store.local('preferences',{projectFoldMode:'none'});
 for(let i=0;i<30;i++){const p=store.project('Project '+i);store.branch(p.id,'Session '+i,'codex',codexSample(root,[['Question '+i,'Answer']]));}
 const empty=store.project('Empty destination');
-app.server.listen(0,'127.0.0.1');await once(app.server,'listening');
+await listenForTests(app.server);
 const chrome=spawn(browserBinary(),['--headless=new','--no-first-run','--no-default-browser-check','--remote-debugging-port=0','--user-data-dir='+path.join(root,'chrome'),'about:blank'],{stdio:'ignore'});let ws;
 try{
  const port=await browserPort(chrome,path.join(root,'chrome'));
@@ -42,6 +43,18 @@ try{
  await evaluate(`(()=>{const source=document.querySelector('[data-item="${single}"]');source.scrollIntoView({behavior:'instant',block:'center'});window.__drag=new DataTransfer();source.dispatchEvent(new DragEvent('dragstart',{bubbles:true,dataTransfer:window.__drag}));const el=document.querySelector('[data-project-group="${target.id}"]');el.scrollIntoView({behavior:'instant',block:'center'});const r=el.getBoundingClientRect();window.__dropDebug={x:r.x,y:r.y,hit:document.elementFromPoint(r.x+20,r.y+20)?.outerHTML.slice(0,300),dragging:document.body.classList.contains('session-dragging')};el.dispatchEvent(new DragEvent('drop',{bubbles:true,cancelable:true,dataTransfer:window.__drag,clientX:r.x+20,clientY:r.y+20}));})()`);
  await wait(`document.querySelector('[data-project-group="${target.id}"] [data-item="${single}"]')`);
  assert.equal(store.get('branch',ids[0]).projectId,target.id);assert.equal(store.get('branch',ids[1]).projectId,empty.id);
+ // A collapsed category is still a drop target and retains its folded state.
+ const targetGroup=`[data-project-group="${target.id}"]`,toggle=`[data-toggle-project="${target.id}"]`;
+ const previousCount=await evaluate(`Number(document.querySelector('${targetGroup} .group-actions span').textContent)`);
+ await evaluate(`document.querySelector('${toggle}').click()`);
+ assert.equal(await evaluate(`document.querySelectorAll('${targetGroup} [data-item]').length`),0);
+ await evaluate(`(()=>{const source=document.querySelector('[data-item="${ids[1]}"]');source.scrollIntoView({behavior:'instant',block:'center'});window.__drag=new DataTransfer();source.dispatchEvent(new DragEvent('dragstart',{bubbles:true,dataTransfer:window.__drag}));const target=document.querySelector('${targetGroup}');target.scrollIntoView({behavior:'instant',block:'center'});const r=target.getBoundingClientRect();window.__dropPoint={clientX:r.x+20,clientY:r.y+15};target.dispatchEvent(new DragEvent('dragover',{bubbles:true,cancelable:true,dataTransfer:window.__drag,...window.__dropPoint}));})()`);
+ assert.equal(await evaluate(`document.querySelector('${targetGroup}').classList.contains('project-drop-target')`),true);
+ await evaluate(`document.querySelector('${targetGroup}').dispatchEvent(new DragEvent('drop',{bubbles:true,cancelable:true,dataTransfer:window.__drag,...window.__dropPoint}))`);
+ await wait(`Number(document.querySelector('${targetGroup} .group-actions span')?.textContent)===${previousCount+1}`);
+ assert.equal(store.get('branch',ids[1]).projectId,target.id);
+ assert.equal(await evaluate(`document.querySelector('${toggle}').getAttribute('aria-expanded')`),'false');
+ await evaluate(`document.querySelector('${toggle}').click()`);await wait(`document.querySelector('${targetGroup} [data-item="${ids[1]}"]')`);
  const oldProject=store.project('Older project'),oldSession=store.branch(oldProject.id,'Old visible on expansion','codex',codexSample(root,[['Old','Answer']]));
  const stamp=new Date(Date.now()-20*86400000).toISOString();store.put('branch',{...oldSession,updatedAt:stamp,contentUpdatedAt:stamp,createdAt:stamp});store.local('preferences',{projectFoldMode:'time',projectFoldDays:7});
  await call('Page.reload');await wait('document.querySelector(".project-directory [data-scope]")');await evaluate('document.querySelector(".project-directory [data-scope]").click()');await wait('document.querySelector("#session-list [data-older-projects]")');

@@ -1,3 +1,4 @@
+import {listenForTests} from './test-server.js';
 // Synthetic conflict review UI; no credentials, native user files or real remotes.
 import fs from 'node:fs';import os from 'node:os';import path from 'node:path';import {spawn} from 'node:child_process';import {once} from 'node:events';import assert from 'node:assert/strict';
 import {createApp} from '../src/server.js';import {codexSample} from '../src/demo.js';import {metadata} from '../src/organization.js';import {browserBinary,browserPort,closeBrowser} from './browser-runtime.js';
@@ -6,7 +7,7 @@ const project=s.project('Current project'),b=s.branch(project.id,'Current local 
 s.local('conflicts',[{kind:'branch',local:b,remote:previous},{kind:'project',local:project,remote:remoteProject}]);
 app.autoSync.readConfig=()=>({url:'https://example.invalid/conflict-fixture'});app.autoSync.lastManualOperation=app.autoSync.lastFailure=app.autoSync.operation={id:'conflict-fixture',state:'error',error:'Resolve sync conflicts before uploading.',direction:'push',finishedAt:Date.now()};app.autoSync.needsReview={retry:true};
 const eventsConnected=Promise.withResolvers();app.server.on('request',req=>{if(req.url==='/api/events')eventsConnected.resolve();});
-app.server.listen(0,'127.0.0.1');await once(app.server,'listening');
+await listenForTests(app.server);
 const chrome=spawn(browserBinary(),['--headless=new','--no-first-run','--no-default-browser-check','--remote-debugging-port=0','--user-data-dir='+path.join(root,'chrome'),'about:blank'],{stdio:'ignore',windowsHide:true});let ws;
 try{
  const port=await browserPort(chrome,path.join(root,'chrome')),page=await fetch('http://127.0.0.1:'+port+'/json/new?http://127.0.0.1:'+app.server.address().port,{method:'PUT'}).then(r=>r.json());ws=new WebSocket(page.webSocketDebuggerUrl);await once(ws,'open');let serial=0;const requests=new Map(),errors=[];

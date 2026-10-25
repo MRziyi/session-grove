@@ -71,14 +71,10 @@ export class Intelligence {
         for(const item of families){
             let root=this.store.get('branch',item.id);
             const sourceId=item.sessionIds.find(id=>nameable(this.store,this.store.find('branch',id))),source=this.store.get('branch',sourceId);
-            if(!root.sessionAutomaticName){
-                const legacy=root.automaticName||source.automaticName;
-                if(legacy){
-                    const manual=root.sessionNameOrigin==='manual'||source.nameOrigin==='manual'||source.groveNamed&&!source.nameOrigin;
-                    root=this.store.put('branch',metadata(root,{sessionAutomaticName:legacy,sessionName:root.sessionName||item.name,sessionNameOrigin:root.sessionNameOrigin||(manual?'manual':'automatic')}));
-                }
-            }
-            if(root.sessionAutomaticName)continue;
+            // Completion belongs to the synced tree, not this device's queue.
+            // Existing titles and older naming provenance are already complete;
+            // observing them must not stamp a new edit or request a new name.
+            if(root.sessionName||root.sessionAutomaticName||root.automaticName||source.automaticName)continue;
             this.data.waiting.push(root.id);
             if(!c.classify||this.data.jobs.some(j=>j.id===root.id&&['classify','session'].includes(j.kind)))continue;
             const evidence=sessionEvidence(this.store.parsed(source.head,source.agent).records,source.agent);
@@ -114,18 +110,19 @@ export class Intelligence {
     syncFirstTitles(roots){
         const cache=this.data.firstTitles||={};
         for(const [rootId,members] of roots){
-            const root=this.store.get('branch',rootId);if(!root.layoutHead)continue;
+            const root=this.store.get('branch',rootId);
+            if(!root.layoutHead){cache[rootId]={signature:null,firstName:null};continue;}
             const signature=hash(JSON.stringify([root.layoutHead,members.map(b=>[b.id,b.nameOrigin,b.automaticName?.at])]));
-            if(cache[rootId]===signature)continue;
+            const previous=cache[rootId];if(previous?.signature===signature||previous===signature)continue;
             const graph=this.store.treeGraph(rootId,'all');
             const first=graph.paths[0]&&graph.nodes.find(n=>n.id===graph.paths[0].nodeIds[0]);
-            if(first?.name&&root.sessionNameOrigin!=='manual'&&!(!root.sessionNameOrigin&&(root.nameOrigin==='manual'||root.groveNamed&&!root.nameOrigin))){
+            if(previous&&typeof previous==='object'&&previous.firstName!==first?.name&&first?.name&&root.sessionNameOrigin!=='manual'&&!(!root.sessionNameOrigin&&(root.nameOrigin==='manual'||root.groveNamed&&!root.nameOrigin))){
                 if(root.sessionName!==first.name){
-                    this.store.put('branch',metadata(root,{sessionName:first.name,sessionNameOrigin:'automatic',sessionAutomaticName:root.sessionAutomaticName||{name:first.name,basis:'first-node',nodeId:first.id,at:now(),model:graph.assignments[first.chatIds[0]]?.nameOrigin==='automatic'?MODEL:null}}));
+                    this.store.put('branch',metadata(root,{sessionName:first.name,sessionNameOrigin:'automatic',sessionAutomaticName:root.sessionAutomaticName||{name:first.name,basis:'first-node',nodeId:first.id,at:now(),model:graph.assignments[first.chatIds[0]]?.nameOrigin==='automatic'?MODEL:null}},{automatic:true}));
                     this.onChange(rootId);
                 }
             }
-            cache[rootId]=signature;
+            cache[rootId]={signature,firstName:first?.name||null};
         }
     }
     observeTranscriptions(branches,enqueue){
@@ -176,7 +173,7 @@ export class Intelligence {
         if(!b)return null;
         if(job.kind!=='node'){
             const source=this.store.find('branch',job.sourceId||job.id);
-            if(!nameable(this.store,source)||b.sessionAutomaticName||(b.sessionName||b.name)!==job.name||b.metaVersion!==job.metaVersion)return null;
+            if(!nameable(this.store,source)||b.sessionName||b.sessionAutomaticName||b.automaticName||source.automaticName||(b.sessionName||b.name)!==job.name||b.metaVersion!==job.metaVersion)return null;
             if(job.kind==='classify'&&!ungrouped(b))return null;
             const parsed=this.store.parsed(source.head,source.agent),evidence=sessionEvidence(parsed.records,source.agent);
             if(!evidence||hash(evidence.user)!==job.userHash)return null;
@@ -243,9 +240,9 @@ export class Intelligence {
             }else if(job.kind!=='node'){
                 if(job.kind==='classify'&&result.project_id&&!latest.projects.some(p=>p.id===result.project_id)){this.finish(job);return;}
                 // Keep names established manually; classification changes Grove metadata only.
-                if(job.kind==='classify'&&result.project_id)this.store.moveItems({itemIds:[job.id],projectId:result.project_id});
-                else if(job.kind==='classify'&&result.new_project){const existing=latest.projects.find(p=>p.name.normalize('NFKC').toLocaleLowerCase()===result.new_project.trim().normalize('NFKC').toLocaleLowerCase());this.store.moveItems({itemIds:[job.id],...(existing?{projectId:existing.id}:{projectName:result.new_project.trim()})});}
-                if(latest.branch.sessionNameOrigin!=='manual'&&(!latest.branch.groveNamed||latest.branch.nameOrigin==='automatic'))this.store.put('branch',metadata(this.store.get('branch',job.id),{sessionName:result.name,sessionNameOrigin:'automatic'}));
+                if(job.kind==='classify'&&result.project_id)this.store.moveItems({itemIds:[job.id],projectId:result.project_id,automatic:true});
+                else if(job.kind==='classify'&&result.new_project){const existing=latest.projects.find(p=>p.name.normalize('NFKC').toLocaleLowerCase()===result.new_project.trim().normalize('NFKC').toLocaleLowerCase());this.store.moveItems({itemIds:[job.id],automatic:true,...(existing?{projectId:existing.id}:{projectName:result.new_project.trim()})});}
+                if(latest.branch.sessionNameOrigin!=='manual'&&(!latest.branch.groveNamed||latest.branch.nameOrigin==='automatic'))this.store.put('branch',metadata(this.store.get('branch',job.id),{sessionName:result.name,sessionNameOrigin:'automatic'},{automatic:true}));
                 this.recordName(job.id,result,prepared.evidence);
             }else this.store.organize(job.id,{version:latest.graph.version,pathId:latest.branchId,nodeId:latest.node.id,action:'rename',name:result.name,nameOrigin:'automatic',evidenceHash:evidenceHash(prepared.evidence)});
             this.onChange(job.id);this.completed=(this.completed||0)+1;this.finish(job);this.observe();
@@ -253,7 +250,7 @@ export class Intelligence {
         finally{this.tasks.delete(job.key);this.updateActivity();this.persist();this.publish();this.kick();}
         })();return task.promise;
     }
-    recordName(id,result,evidence){const b=this.store.get('branch',id),record={name:result.name,model:MODEL,basis:'session-start',at:now(),evidenceHash:hash(JSON.stringify(evidence))};this.store.put('branch',metadata(b,{sessionAutomaticName:record}));}
+    recordName(id,result,evidence){const b=this.store.get('branch',id),record={name:result.name,model:MODEL,basis:'session-start',at:now(),evidenceHash:hash(JSON.stringify(evidence))};this.store.put('branch',metadata(b,{sessionAutomaticName:record},{automatic:true}));}
     updateActivity(){const tasks=[...this.tasks.values()];this.running=tasks.length>0;this.phase=tasks.length?(tasks.every(t=>t.job.kind==='node')?'Naming branch point':tasks.every(t=>t.job.kind==='classify')?'Classifying session':tasks.every(t=>t.job.kind==='session')?'Naming session':tasks.every(t=>t.job.kind==='transcript')?'Updating transcription title':'Smart organization'):this.data.jobs.some(j=>j.waitingForClient)?'Waiting for Codex client':null;this.current=this.error?this.errorCurrent:tasks.map(t=>t.name).join(' · ')||null;}
     finish(job){if(job.kind==='transcript'){const b=this.store.find('branch',job.id);if(b&&this.data.transcriptScans)delete this.data.transcriptScans[rootOf(this.store,b.id).id];}this.data.jobs=this.data.jobs.filter(j=>j.key!==job.key);if(!['node','transcript'].includes(job.kind))this.data.waiting=this.data.waiting.filter(id=>id!==job.id);this.persist();}
     close(){this.closed=true;this.generation++;clearTimeout(this.timer);for(const task of this.tasks.values())task.controller.abort();}

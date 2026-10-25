@@ -1,8 +1,8 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import {createInterface} from 'node:readline';
+import {jsonLines} from './jsonl.js';
 import { setImmediate as yieldToLocal } from 'node:timers/promises';
-import { Cloud, treeSnapshot } from './cloud.js';
+import { CloudView, treeSnapshot } from './cloud-view.js';
 import { GitRemote, gitRemote } from './git-remote.js';
 import { assert, hash, now, atomic } from './util.js';
 import { bodyRefs, retainedGraph } from './retention.js';
@@ -13,7 +13,7 @@ const digest = value => hash(JSON.stringify(value));
 
 // Git owns history, content deduplication, packing and atomic ref publication.
 // Grove owns graph semantics, modification clocks and local materialization.
-export class GitCloud extends Cloud {
+export class GitCloud extends CloudView {
     constructor(store, readConfig) { super(store, readConfig); this.provider = 'git';store.localArchivesOnly=true;store.invalidate(); }
     useSavedCache() {
         this.cacheKey ||= 'cloud:git:' + hash(this.readConfig().url || '');
@@ -25,7 +25,7 @@ export class GitCloud extends Cloud {
         this.useSavedCache();
         const remote = new GitRemote(path.join(this.store.root, 'git-cache', hash(url)), url, p => this.onProgress?.(p));
         await remote.init();
-        this.connection = { remote, dav: { controller: remote.controller, metrics: this.metrics } };
+        this.connection = { remote, controller: remote.controller };
         return this.connection;
     }
     lock() { this.connection?.remote.controller.abort(); super.lock(); }
@@ -68,8 +68,8 @@ export class GitCloud extends Cloud {
         for(const name of fs.readdirSync(directory).filter(n=>/^[0-9]{6}\.jsonl$/.test(n)).sort()){
             const file=this.file(this.folder(id)+'/records/'+name);
             assert(fs.statSync(file).size<95*1024*1024,'Git record file exceeds size limit.');
-            const stream=fs.createReadStream(file,{encoding:'utf8'}),lines=createInterface({input:stream,crlfDelay:Infinity});
-            try{for await(const line of lines)if(line)yield JSON.parse(line);}finally{lines.close();stream.destroy();}
+            const stream=fs.createReadStream(file,{encoding:'utf8'});
+            try{yield* jsonLines(stream);}finally{stream.destroy();}
         }
     }
     writeRecords(id, records) {
@@ -134,7 +134,7 @@ export class GitCloud extends Cloud {
         return { projects: this.summaries().length, remoteChanged };
     }
     async project(projectId) { return this.items().filter(i => i.projectId === projectId); }
-    async hydrate(treeId, passphrase, { latest = true } = {}) {
+    async hydrate(treeId, { latest = true } = {}) {
         await this.connect();
         const item = this.items().find(i => i.id === treeId);
         if (!item || (this.cache().loaded[treeId] || []).includes(item.ref)) return;
@@ -217,7 +217,7 @@ export class GitCloud extends Cloud {
         }).concat((this.store.local('trashPending') || []).map(e=>({id:e.id,name:(this.store.local('trashEntries')||[]).find(t=>t.id===e.id)?.names.join(', ') || 'Removed sessions',project:this.store.all('project').find(p=>p.id===this.store.find('branch',e.branchIds[0])?.projectId)?.name || 'Ungrouped',action:'remove',updatedAt:e.at,changes:[{kind:'session-removed',label:'Session removed'}]})));
         return items.map(item=>({...item,version:digest([this.readConfig().url||'',item.action==='remove'?(this.store.local('trashPending')||[]).find(e=>e.id===item.id):treeSnapshot(this.store,item.id),c.ack[item.id]||null])}));
     }
-    async publish(treeIds, passphrase, { catalogFresh = false } = {}) {
+    async publish(treeIds, { catalogFresh = false } = {}) {
         if (!catalogFresh) {
             await this.catalog();
             for (const item of this.items()) await this.hydrate(item.id);

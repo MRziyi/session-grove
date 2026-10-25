@@ -1,3 +1,4 @@
+import {listenForTests} from '../scripts/test-server.js';
 import {privateFile} from '../src/private-file.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -9,6 +10,19 @@ import {requestSpec,requestName} from '../src/intelligence-api.js';
 import {codexSample,codexTurn,claudeSample} from '../src/demo.js';
 import {parse} from '../src/transcript.js';
 const row=(role,text)=>({type:'response_item',payload:{type:'message',role,content:[{type:role==='user'?'input_text':'output_text',text}]}});
+
+test('a new device preserves completed session titles and naming provenance without a model call or first-node rewrite',async t=>{
+ const f=setup(t);f.smart.close();const p=f.store.project('Imported');
+ const b=f.store.branch(p.id,'Native','codex',codexSample(f.root,[['First request','Done'],['Tail','Reply']]));
+ let graph=f.store.treeGraph(b.id);f.store.organize(b.id,{version:graph.version,pathId:b.id,nodeId:graph.nodes[0].id,action:'rename',name:'First node differs from session'});
+ f.store.put('branch',{...f.store.get('branch',b.id),sessionName:'Already complete on other device',sessionNameOrigin:'automatic',sessionAutomaticName:{name:'Already complete on other device',at:'2025-01-01',basis:'session-start'}});
+ const legacy=f.store.branch(p.id,'Older named session','codex',codexSample(f.root,[['Older task','Done']]));
+ f.store.put('branch',{...legacy,automaticName:{name:'Older named session',at:'2025-01-01'},nameOrigin:'automatic'});
+ const before=JSON.stringify(f.store.exportGraph());let calls=0;
+ const observer=new Intelligence(f.store,{request:async()=>{calls++;throw Error('Completed imported naming must not run again');}});
+ try{observer.observe();await observer.run();await observer.pending;assert.equal(calls,0);assert.equal(observer.data.jobs.length,0);assert.equal(JSON.stringify(f.store.exportGraph()),before);}
+ finally{observer.close();await observer.pending;}
+});
 const waitFor=async predicate=>{for(let i=0;i<200;i++){if(predicate())return;await new Promise(r=>setTimeout(r,10));}assert.fail('Background queue did not reach the expected state');};
 function setup(t,request=async()=>({project_id:null,new_project:null,name:'New name'})){
  const root=fs.mkdtempSync(path.join(os.tmpdir(),'grove-smart-')),store=new Store(root);
@@ -112,7 +126,7 @@ test('Claude fork evidence excludes sibling replies and names only the shared se
 test('HTTP Update finishes while naming runs; status is visible and local edits remain available',async t=>{
  const {createApp}=await import('../src/server.js'),{once}=await import('node:events');
  const root=fs.mkdtempSync(path.join(os.tmpdir(),'grove-smart-http-')),app=createApp({root:path.join(root,'library'),roots:{codex:path.join(root,'codex'),claude:path.join(root,'claude')},guard:()=>{}});
- app.server.listen(0,'127.0.0.1');await once(app.server,'listening');
+ await listenForTests(app.server);
  t.after(async()=>{await new Promise(r=>app.close(r));fs.rmSync(root,{recursive:true,force:true});});
  let resolve;app.intelligence.request=async()=>new Promise(r=>resolve=r);
  fs.writeFileSync(app.intelligence.file,JSON.stringify({apiKey:'http-test-secret',classify:true,nameNodes:false}));

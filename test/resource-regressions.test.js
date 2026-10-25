@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import {Store} from '../src/store.js';
-import {Cloud,treeSnapshot,graphFingerprint} from '../src/cloud.js';
+import {CloudView as Cloud,treeSnapshot,graphFingerprint} from '../src/cloud-view.js';
 import {codexSample} from '../src/demo.js';
 import {hash} from '../src/util.js';
 function setup(t){const root=fs.mkdtempSync(path.join(os.tmpdir(),'grove-resources-')),store=new Store(root);t.after(()=>{store.close();fs.rmSync(root,{recursive:true,force:true});});return store;}
@@ -19,7 +19,7 @@ test('status fingerprints preserve sync bytes without retaining export graphs',t
     assert.ok(![...s.memoCache.keys()].some(k=>k==='exportGraph'||k==='cloud-snapshot-index'||k.startsWith('cloud-tree:')));
     const build=s.buildExportGraph;s.buildExportGraph=()=>{throw Error('Unchanged status must not export history');};assert.deepEqual(cloud.dirtyIds(),[b.id]);s.buildExportGraph=build;
     const existing=treeSnapshot(s,b.id);cloud.dirtyIds();assert.equal(treeSnapshot(s,b.id),existing,'an export owned by another operation stays cached');
-    cloud.useSavedCache();const cache=cloud.cache();cache.ack[b.id]=expected;s.local(cloud.cacheKey||'cloud:no-vault',cache);assert.deepEqual(cloud.dirtyIds(),[]);
+    cloud.useSavedCache();const cache=cloud.cache();cache.ack[b.id]=expected;s.local(cloud.cacheKey||'cloud:unconfigured',cache);assert.deepEqual(cloud.dirtyIds(),[]);
     s.put('branch',{...s.get('branch',b.id),name:'Changed'});assert.deepEqual(cloud.dirtyIds(),[b.id]);
 });
 

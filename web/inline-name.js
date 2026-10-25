@@ -31,7 +31,7 @@ export function installInlineNames({describe,saved,onError,translate=x=>x}) {
         // Keyboard/programmatic clicks keep their ordinary single-click behavior.
         if(!e.detail)return;
         e.preventDefault();e.stopImmediatePropagation();clearClick();
-        if(e.detail===1)clickTimer=setTimeout(()=>{anchor.closest('[data-open],[data-scope],[data-node],[data-rail],[data-focus-node]')?.click();},200);
+        if(e.detail===1)clickTimer=setTimeout(()=>{anchor.closest('[data-open],[data-scope],[data-node],[data-rail],[data-focus-node],[data-toggle-project]')?.click();},anchor.closest('[data-toggle-project]')?500:200);
     },true);
     document.addEventListener('dblclick',e=>{const anchor=e.target.closest?.('[data-name-kind]');if(anchor){e.preventDefault();e.stopImmediatePropagation();begin(anchor);}},true);
     document.addEventListener('keydown',e=>{if(e.key==='F2'){const anchor=e.target.closest?.('[data-name-kind]')||e.target.querySelector?.('[data-name-kind]');if(anchor){e.preventDefault();begin(anchor);}}},true);

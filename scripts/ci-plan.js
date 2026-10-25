@@ -1,8 +1,11 @@
 import assert from 'node:assert/strict';
 export const browserFiles=['scripts/node-browser-smoke.js','scripts/sync-browser-smoke.js','scripts/session-drag-browser-smoke.js','scripts/inline-name-browser-smoke.js','scripts/tree-loading-browser-smoke.js','scripts/onboarding-browser-smoke.js','scripts/conflict-browser-smoke.js','scripts/reconnect-browser-smoke.js'];
 export function testPlan(files,tests,suite='all'){
-    assert.ok(['all','core','native','git-1','git-2','browser'].includes(suite),'Unknown test suite');
+    assert.ok(['all','core','native','git-1','git-2','browser','browser-1','browser-2'].includes(suite),'Unknown test suite');
     if(suite==='browser')return browserFiles.map(file=>({file}));
+    // The main interaction smoke is about as expensive as the other seven
+    // flows together. Keep it isolated; each flow owns its server and profile.
+    if(suite.startsWith('browser-'))return (suite==='browser-1'?browserFiles.slice(0,1):browserFiles.slice(1)).map(file=>({file}));
     const native='test/autostart.test.js',git='test/git-cloud.test.js';
     if(suite.startsWith('git-')){
         // Each top-level Git case owns its disposable remote and devices.

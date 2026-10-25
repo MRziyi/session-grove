@@ -58,7 +58,7 @@ export class TranscriptionTitles {
             validatePath(validate);
             this.store.transaction(()=>{
                 const ids=new Set(instances.map(i=>i.id));this.store.local('instances',this.store.instances().map(i=>ids.has(i.id)?{...i,title,observedTitle:title}:i));
-                const b=this.store.get('branch',branchId);this.store.put('branch',metadata(b,{transcriptionTitle:title,transcriptionNameOrigin:origin,originalTitle:title}));
+                const b=this.store.get('branch',branchId);this.store.put('branch',metadata(b,{transcriptionTitle:title,transcriptionNameOrigin:origin,originalTitle:title},{automatic:origin==='automatic'}));
             });return {nativeIds:instances.map(i=>i.nativeId),refresh:refreshed.status,at:now()};
         }catch(error){
             const failed=[];for(const item of changed.reverse())try{const current=await client.request('thread/read',{threadId:item.id,includeTurns:false});if(current.thread.name===title)await client.request('thread/name/set',{threadId:item.id,name:item.name});}catch{failed.push(item.id);}

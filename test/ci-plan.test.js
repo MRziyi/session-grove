@@ -13,5 +13,6 @@ test('Windows suites cover every file and every Git case exactly once',()=>{
  for(const part of parts){const pattern=new RegExp('^(?:'+part.names.map(RegExp.escape).join('|')+')$');assert.deepEqual(tests.filter(t=>pattern.test(t.name)).map(t=>t.name),part.names);}
  assert.deepEqual(testPlan(files,tests,'all').map(t=>t.file),files);
  assert.deepEqual(testPlan(files,tests,'browser').map(t=>t.file),browserFiles);
+ assert.deepEqual(['browser-1','browser-2'].flatMap(s=>testPlan(files,tests,s)).map(t=>t.file),browserFiles);
  assert.throws(()=>testPlan(files,tests,'typo'));
 });

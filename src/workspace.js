@@ -1,6 +1,6 @@
 import {compactionDisabled,compactionPaths} from './compaction-identity.js';
 import {isTrashed} from './trash.js';
-import { modifiedAt as modified, nextModifiedAt } from './session-time.js';
+import { displayTime, nextModifiedAt,editTimes } from './session-time.js';
 import { preferences } from './preferences.js';
 import { INBOX_ID, inboxProject, cloudProjectId } from './inbox.js';
 import { contentOrigin } from './device.js';
@@ -24,6 +24,7 @@ export function visibleSession(store, b, forSync = false) {
 }
 export function collections(store, forSync = false) {
     const branches = store.all('branch'), instances = store.instances(), buckets = new Map();
+    const mode=forSync?'automatic':preferences(store).activityDateMode,modified=value=>displayTime(value,mode);
     for (const b of branches) {
         const root = rootOf(store, b.id);
         if (!buckets.has(root.id)) buckets.set(root.id, { root, members: [] });
@@ -292,16 +293,16 @@ export function organize(store, branchId, { version, pathId, chatIds, action, na
         for (const id of selected) assignments[id] = annotation;
         const layout = { id: newId(), rootId: root.id, parent: root.layoutHead || null, assignments, createdAt: nextModifiedAt(...treeMembers(store, root.id)) };
         store.put('layout', layout);
-        store.put('branch', { ...root, layoutHead: layout.id, updatedAt: layout.createdAt, metadataUpdatedAt: layout.createdAt });
+        store.put('branch', { ...root, layoutHead: layout.id, ...editTimes(root,layout.createdAt,nameOrigin==='automatic') });
         for (const affected of graph.paths.filter(p => p.messages.some(m => selected.has(m.id)))) {
             const branch = store.get('branch', affected.branchId);
-            store.put('branch', { ...branch, updatedAt: layout.createdAt, metadataUpdatedAt: layout.createdAt });
+            store.put('branch', { ...branch, ...editTimes(branch,layout.createdAt,nameOrigin==='automatic') });
         }
         return { layoutHead: layout.id };
     });
 }
 
-export function moveItems(store, { itemIds, projectId, projectName }) {
+export function moveItems(store, { itemIds, projectId, projectName, automatic=false }) {
     assert(Array.isArray(itemIds) && itemIds.length, 'Select sessions to move.');
     return store.transaction(() => {
         const roots = [...new Set(itemIds.map(id => rootOf(store, id).id))];
@@ -311,7 +312,7 @@ export function moveItems(store, { itemIds, projectId, projectName }) {
         for (const id of roots) {
             for (const b of treeMembers(store, id)) {
                 // Written directly here to keep project creation and all moves atomic.
-                store.put('branch', metadata(b, { projectId: project.id === INBOX_ID ? null : project.id, group: '' }));
+                store.put('branch', metadata(b, { projectId: project.id === INBOX_ID ? null : project.id, group: '' },{automatic}));
             }
         }
         return { projectId: project.id, moved: roots.length };

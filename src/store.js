@@ -212,7 +212,7 @@ export class Store {
         if ('archived' in patch && b.background) b.backgroundManaged = true;
         if (JSON.stringify(b) === JSON.stringify(previous)) return b;
         b.updatedAt = now();
-        return this.put('branch', metadata(previous, b));
+        return this.put('branch', metadata(previous, b,{automatic}));
     }
     ancestor(older, newer) {
         const seen = new Set();

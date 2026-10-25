@@ -38,7 +38,7 @@ export class GitSettings {
             this.autoSync.lock();
             atomic(this.file, JSON.stringify({ ...config, verified: true }));
             this.autoSync.cloud.cacheKey = undefined;
-            this.autoSync.unlock('');
+            this.autoSync.unlock();
             this.autoSync.error = null; this.autoSync.needsReview = null;
             this.autoSync.lastFailure = null; this.autoSync.lastManualOperation = null; this.autoSync.operation = null;
             this.store.local('lastSyncFailure', null); this.store.local('lastManualSync', null);
@@ -50,7 +50,6 @@ export class GitSettings {
         } finally { cloud.lock(); this.job = null; }
     }
     async start(body) { return this.verify(body); }
-    async recover() { throw new Error('Reconnect the Git repository in Settings.'); }
     timers(body) {
         const saved = savePreferences(this.store, body);
         if (body.autoUploadEnabled === true) this.store.local('syncStarted', true);

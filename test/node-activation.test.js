@@ -1,3 +1,4 @@
+import {listenForTests} from '../scripts/test-server.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -14,7 +15,7 @@ import { estimateTokens } from '../src/context.js';
 async function setup(t) {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'grove-node-activate-'));
     const app = createApp({ root: path.join(root, 'library'), roots: { codex: path.join(root, 'codex'), claude: path.join(root, 'claude') }, guard: () => {} });
-    app.server.listen(0, '127.0.0.1'); await once(app.server, 'listening');
+    await listenForTests(app.server);
     t.after(async () => { await new Promise(r => app.close(r)); fs.rmSync(root, { recursive: true, force: true }); });
     const api = async (route, body, method = 'POST') => { const response = await fetch('http://127.0.0.1:' + app.server.address().port + '/api/' + route, { method, headers: { 'X-Grove-Token': app.token, 'Content-Type': 'application/json' }, ...(body ? { body: JSON.stringify(body) } : {}) }); return { status: response.status, value: await response.json() }; };
     return { app, root, api };
@@ -199,7 +200,7 @@ test('unused mid-turn continuation with a settings-only append deactivates throu
  assert.equal(store.instances().find(i=>i.id===instance.id).applied,false);assert.ok(!store.treeGraph(source.id).nodes.some(n=>n.id==='empty-'+child.id));assert.equal((store.local('trashEntries')||[]).length,0);
 });
 test('discard previews native deactivation and the confirmed request completes all remaining work',async t=>{
- const {app,root,api}=await setup(t),store=app.store,{treeSnapshot}=await import('../src/cloud.js'),{hash}=await import('../src/util.js');
+ const {app,root,api}=await setup(t),store=app.store,{treeSnapshot}=await import('../src/cloud-view.js'),{hash}=await import('../src/util.js');
  const source=store.branch(null,'Keep source','codex',codexSample(root,[['Keep','Original']]));app.native.setActive(source.id,root,true);app.native.apply([source.id]);
  const baseline=treeSnapshot(store,source.id),cloud=app.autoSync.cloud;cloud.useSavedCache();const c=cloud.cache();c.ack[source.id]=hash(JSON.stringify(baseline));cloud.save(c);cloud.rememberBaseline(source.id,baseline);
  const graph=store.treeGraph(source.id),target={branchId:source.id,nodeId:graph.nodes[0].id,version:graph.version,cwd:root},check=(await api('node-activation/check',target)).value;

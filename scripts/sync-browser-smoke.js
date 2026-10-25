@@ -1,21 +1,27 @@
+import {listenForTests} from './test-server.js';
 import {browserBinary,closeBrowser,browserPort} from './browser-runtime.js';
 // Synthetic white-box sync UI regression. No real cloud or native sessions are touched.
 import fs from 'node:fs';import os from 'node:os';import path from 'node:path';import {spawn} from 'node:child_process';import {once} from 'node:events';import assert from 'node:assert/strict';
-import {createApp} from '../src/server.js';import {codexSample} from '../src/demo.js';import {treeSnapshot} from '../src/cloud.js';import {hash} from '../src/util.js';
+import {createApp} from '../src/server.js';import {codexSample} from '../src/demo.js';import {treeSnapshot} from '../src/cloud-view.js';import {hash} from '../src/util.js';
 const root=fs.mkdtempSync(path.join(os.tmpdir(),'grove-sync-browser-')),app=createApp({root:path.join(root,'app'),roots:{codex:path.join(root,'codex'),claude:path.join(root,'claude')},guard:()=>{}});
 const b=app.store.branch(null,'Active local session','codex',codexSample(root,[['Context','Ready']])),queued=app.store.branch(null,'Waiting upload','codex',codexSample(root,[['Other context','Other answer']]));app.native.setActive(b.id,root,true);app.native.apply([b.id]);
-app.autoSync.readConfig=()=>({url:'https://example.invalid/isolated-test'});app.autoSync.unlock('isolated-browser-key');
+app.autoSync.readConfig=()=>({url:'git@example.invalid:fixture/data.git'});app.autoSync.unlock();
+let delayDiscardEvents=false;const delayedEvents=[];
+app.server.prependListener('request',(req,res)=>{
+ if(req.url!=='/api/events')return;const write=res.write.bind(res);
+ res.write=(chunk,...args)=>{if(delayDiscardEvents&&String(chunk).includes('"kind":"discard"')){delayedEvents.push(new Promise(resolve=>setTimeout(()=>{if(!res.destroyed)write(chunk,...args);resolve();},200)));return true;}return write(chunk,...args);};
+});
 const mistake=app.store.branch(null,'Discard this accidental session','codex',codexSample(root,[['Accidental','Draft']]));
 const activeMistake=app.store.branch(null,'Active accidental session','codex',codexSample(root,[['Test activation','Draft']]));app.native.setActive(activeMistake.id,root,true);app.native.apply([activeMistake.id]);
 const pull=Promise.withResolvers(),push=Promise.withResolvers();let failPull=false,unchangedPull=false;
-app.autoSync.run=async(store,config,key,direction,ids)=>{
+app.autoSync.run=async(store,config,direction,ids)=>{
  const metrics=app.autoSync.cloud.metrics;metrics.requests+=3;metrics.bytesReceived+=4096;
  if(direction==='pull'){app.autoSync.operation.stageProgress={completed:4,total:10};app.autoSync.progress({phase:'Receiving objects',completed:4,total:10,detail:'Cloud session A'});if(failPull)throw Error('Synthetic provider failure: '+('VeryLongUnbrokenDiagnostic'.repeat(200)));await pull.promise;return {downloaded:1,unchanged:unchangedPull};}
  const fingerprints=new Map(ids.map(id=>[id,hash(JSON.stringify(treeSnapshot(store,id)))]));
  app.autoSync.progress({phase:'Writing objects',completed:6,total:12});metrics.bytesSent+=8192;await push.promise;
  app.autoSync.cloud.cacheKey='cloud:ui-benchmark';const cache=app.autoSync.cloud.cache();for(const[id,value]of fingerprints)cache.ack[id]=value;app.autoSync.cloud.save(cache);return {published:ids.length};
 };
-app.server.listen(0,'127.0.0.1');await once(app.server,'listening');
+await listenForTests(app.server);
 const chrome=spawn(browserBinary(),['--headless=new','--no-first-run','--no-default-browser-check','--remote-debugging-port=0','--user-data-dir='+path.join(root,'chrome'),'about:blank'],{stdio:'ignore',windowsHide:true});let ws;
 try{
  const port=await browserPort(chrome,path.join(root,'chrome'));
@@ -53,7 +59,10 @@ try{
  assert.ok(app.store.instances().some(i=>i.branchId===activeMistake.id&&i.applied),'preview does not deactivate');
  assert.ok(await evaluate('document.querySelector("#pending-progress").textContent.includes("Active accidental session")&&document.querySelector("#confirm-discard").textContent==="Confirm"'));
  fs.mkdirSync('test-results',{recursive:true});fs.writeFileSync('test-results/pending-discard-confirmation.png',Buffer.from((await call('Page.captureScreenshot',{format:'png'})).data,'base64'));
+ delayDiscardEvents=true;
  await evaluate('document.querySelector("#confirm-discard").click()');await wait('document.querySelector("#pending-progress").textContent.includes("Changes discarded")&&!document.querySelector("#confirm-discard")');
+ await Promise.all(delayedEvents);await new Promise(r=>setTimeout(r,100));
+ assert.ok(await evaluate('document.querySelector("#pending-progress").textContent.includes("Changes discarded")'),'late progress events cannot replace a completed discard');delayDiscardEvents=false;
  assert.ok(!app.store.find('branch',activeMistake.id));assert.ok(app.store.instances().some(i=>i.branchId===b.id&&i.applied));
  assert.ok(await evaluate('document.querySelector("#pending-progress").textContent.includes("Changes discarded")'));
 
@@ -81,7 +90,7 @@ try{
  await evaluate('window.__trashFetch=window.fetch;window.fetch=async(url,...args)=>{if(String(url).endsWith("/api/trash")&&args[0]?.method==="POST")await new Promise(r=>setTimeout(r,180));return window.__trashFetch(url,...args)};document.querySelector("#archive-path").click();document.querySelector("#dialog-form").requestSubmit()');
  assert.equal(await evaluate('document.querySelector("#trash-progress").hidden'),false);assert.ok(await evaluate('!!document.querySelector("#trash-progress progress")'));await fits('#trash-progress');await wait('!document.querySelector("#dialog").open&&document.querySelector("#detail-page").hidden');assert.equal(app.store.local('trashPending').length,1);
  // The backend read/write guards are exercised by tests; avoid mock cloud cleanup here.
- app.autoSync.syncTrash=async()=>{};pull.resolve();await wait('document.querySelector("#upload").dataset.operation==="running"');assert.notEqual(await evaluate('document.querySelector("#sync").dataset.operation'),'running');
+ pull.resolve();await wait('document.querySelector("#upload").dataset.operation==="running"');assert.notEqual(await evaluate('document.querySelector("#sync").dataset.operation'),'running');
  await evaluate('document.querySelector("#sync-details").dispatchEvent(new MouseEvent("mouseenter"))');
  assert.equal(await evaluate('document.querySelector("#sync").dataset.operation'),'success');assert.equal(await evaluate('document.querySelector("#upload").dataset.operation'),'running');
  assert.equal(await evaluate('getComputedStyle(document.querySelector("#upload .transfer-arrow")).animationName'),'push-arrow');

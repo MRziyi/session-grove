@@ -43,7 +43,7 @@ export function createApp({ root, roots, guard, demo = false, startupOptions = {
     const configFile = path.join(root, 'git-sync.json');
     const diagnostics = new Diagnostics(root);
     if(lineageRepair.repaired.length||lineageRepair.skipped.length)diagnostics.record('recovery-lineage-repair',lineageRepair);
-    const autoSync = new AutoSync(store, () => ({ ...json(configFile, {}), provider: 'git' }), null, { provider: 'git' });
+    const autoSync = new AutoSync(store, () => ({ ...json(configFile, {}), provider: 'git' }), null);
     autoSync.diagnostics = diagnostics;
     clearConflictFailure(autoSync);
     if(repairedConflicts)diagnostics.record('conflict-repair',{count:repairedConflicts});
@@ -64,8 +64,8 @@ export function createApp({ root, roots, guard, demo = false, startupOptions = {
     const instance = id(),clientLinks=installedClientLinks();
     const autostart=new Autostart({...startupOptions,root,roots:native.roots,demo,port:()=>server.address()?.port||7421});
     const operation = (kind, value) => { for (const res of streams) res.write('event: operation\ndata: ' + JSON.stringify({kind, ...value}) + '\n\n'); };
-    autoSync.onOperation = value => operation('sync', {...value, status:autoSync.status()});
-    const intelligence = new Intelligence(store, { transcriptions:new TranscriptionTitles(store,native,demo?{support:()=>({supported:false,reason:'Transcription updates are unavailable in demo mode.'})}:{}), onChange: id => autoSync.schedule([id]), onStatus: value => operation('intelligence', value), canApply: () => !capturePromise && !trashPromise && !discardPromise && !transcriptionPromise && !stopping });
+    autoSync.onOperation = value => {operation('sync', {...value, status:autoSync.status()});if(value.state!=='running')intelligence.observe();};
+    const intelligence = new Intelligence(store, { transcriptions:new TranscriptionTitles(store,native,demo?{support:()=>({supported:false,reason:'Transcription updates are unavailable in demo mode.'})}:{}), onChange: id => autoSync.schedule([id]), onStatus: value => operation('intelligence', value), canApply: () => !autoSync.running && !capturePromise && !trashPromise && !discardPromise && !transcriptionPromise && !stopping });
     const timing = () => ({ discardOperation, intelligence: intelligence.status(), trashOperation, appVersion: VERSION, serverNow: Date.now(), stateVersion: diagnostics.startedAt + ':' + store.version + ':' + store.cloudVersion, update: { nextRunAt: nextCaptureAt, lastRunAt: lastCaptureAt, started: !!store.local('localUpdateStarted'), operation: updateOperation } });
     let expiryTimer;const configureExpiry=()=>{clearTimeout(expiryTimer);const entries=expireTrash(store),next=entries.filter(e=>!e.expired).map(e=>Date.parse(e.expiresAt)).sort((a,b)=>a-b)[0];if(next){expiryTimer=setTimeout(configureExpiry,Math.max(1000,Math.min(2147483647,next-Date.now())));expiryTimer.unref();}};configureExpiry();
     const trashSnapshot = () => ({ trashEntries:(store.local('trashEntries')||[]).filter(e=>!e.expired&&!e.restoredAt).map(e=>({...e,projectIds:e.projectIds||[...new Set(e.branchIds.map(id=>store.find('branch',id)?.projectId||INBOX_ID))]})), trashNative:nativeTrashCandidates(store) });
@@ -73,7 +73,7 @@ export function createApp({ root, roots, guard, demo = false, startupOptions = {
     const server = http.createServer(async (req, res) => {
         const started = performance.now(), requestId = id().slice(0, 8);
         const beforeManagement = req.method !== 'GET' && /^\/api\/(trees|move|manage|projects|branches|conflicts)(?:\/|$)/.test(req.url) ? management() : null;
-        const send = (status, value, type = 'application/json') => { let output = type === 'application/json' ? JSON.stringify(value) : value; const compressed = Buffer.byteLength(output) > 262144 && /\bgzip\b/.test(req.headers['accept-encoding'] || ''); if (compressed) output = gzipSync(output, { level: 1 }); diagnostics.request(req.method, req.url.split('?')[0], status, performance.now() - started, requestId); res.writeHead(status, { ...(compressed ? { 'Content-Encoding': 'gzip', Vary: 'Accept-Encoding' } : {}), 'Content-Type': type, 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff', 'Referrer-Policy': 'no-referrer', 'Content-Security-Policy': "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'" }); res.end(output); if (beforeManagement && status < 400 && !req.url.startsWith('/api/sync') && !['/api/collect', '/api/webdav'].includes(req.url)) {
+        const send = (status, value, type = 'application/json') => { let output = type === 'application/json' ? JSON.stringify(value) : value; const compressed = Buffer.byteLength(output) > 262144 && /\bgzip\b/.test(req.headers['accept-encoding'] || ''); if (compressed) output = gzipSync(output, { level: 1 }); diagnostics.request(req.method, req.url.split('?')[0], status, performance.now() - started, requestId); res.writeHead(status, { ...(compressed ? { 'Content-Encoding': 'gzip', Vary: 'Accept-Encoding' } : {}), 'Content-Type': type, 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff', 'Referrer-Policy': 'no-referrer', 'Content-Security-Policy': "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'" }); res.end(output); if (beforeManagement && status < 400 && !req.url.startsWith('/api/sync') && !['/api/collect', '/api/settings/verify'].includes(req.url)) {
             const changed = [...management()].filter(([id, value]) => beforeManagement.get(id) !== value).map(([id]) => id);
             if (changed.length) { autoSync.schedule(changed); intelligence.observe(); }
         } };
@@ -119,7 +119,7 @@ export function createApp({ root, roots, guard, demo = false, startupOptions = {
                 assert(!trashPromise, 'A Trash operation is in progress.', 409);
                 assert(!transcriptionPromise,'A transcription title is being updated.',409);
                 assert(!capturePromise || route==='/api/collect', 'Local update in progress.', 409);
-                assert(settings.job?.state !== 'running' || !/^\/api\/(sync|synchronize|settings|webdav)/.test(route), 'Settings migration in progress.', 409);
+                assert(settings.job?.state !== 'running' || !/^\/api\/(sync|synchronize|settings)/.test(route), 'Settings migration in progress.', 409);
             }
             if (req.method === 'GET' && route === '/api/events') {
                 res.writeHead(200, {'Content-Type':'text/event-stream','Cache-Control':'no-store','X-Content-Type-Options':'nosniff'}); res.write(': connected\n\n'); streams.add(res); req.on('close',()=>streams.delete(res)); return;
@@ -167,21 +167,18 @@ export function createApp({ root, roots, guard, demo = false, startupOptions = {
 
             if (req.method === 'POST' && route === '/api/synchronize/transfer') return send(202, autoSync.startTransfer(body.direction));
             if (req.method === 'GET' && route === '/api/trash') return send(200, {...trashSnapshot(),stateVersion:timing().stateVersion});
-            if (req.method === 'POST' && route === '/api/synchronize/plan') return send(200, await autoSync.prepareSync());
-            if (req.method === 'POST' && route === '/api/synchronize/start') return send(202, autoSync.startSync(body.planId, body.confirmed));
             if (req.method === 'GET' && route === '/api/state')
                 return send(200, { ...snapshot(), ...timing(), cloud: autoSync.status(), discoveryError: store.local('discoveryError'), lastSync: store.local('lastSync'), plan: native.plan() });
             if (req.method === 'GET' && route === '/api/diagnostics') return send(200, { ...diagnostics.report(), git: { commit: autoSync.cloud.connection?.remote.head || null, progress: autoSync.status().operation?.progress || null }, fallbackMinutes: autoSync.status().fallbackMinutes });
             if (req.method === 'GET' && route === '/api/discover')
                 return send(200, native.discover());
-            if (req.method === 'GET' && ['/api/webdav', '/api/settings'].includes(route)) return send(200, { ...settings.status(), intelligence: intelligence.status(), context:contextSettings.status(),autostart:await autostart.status() });
+            if (req.method === 'GET' && route === '/api/settings') return send(200, { ...settings.status(), intelligence: intelligence.status(), context:contextSettings.status(),autostart:await autostart.status() });
             if (req.method === 'POST' && route === '/api/settings/autostart') return send(200,await autostart.set(body.enabled));
             if (req.method === 'POST' && route === '/api/settings/context') return send(200,contextSettings.save(body));
             if (req.method === 'POST' && route === '/api/settings/intelligence') return send(200, await intelligence.save(body));
             if (req.method === 'POST' && route === '/api/intelligence/retry') return send(200, intelligence.retry());
             if (req.method === 'POST' && route === '/api/settings/verify') return send(200, await settings.verify(body));
             if (req.method === 'POST' && route === '/api/settings/confirm') return send(200, await settings.start(body));
-            if (req.method === 'POST' && route === '/api/settings/recover') return send(200, await settings.recover());
             if (req.method === 'POST' && route === '/api/settings/timers') { const previous = preferences(store).showScheduledSessions, saved = settings.timers(body); if (saved.showScheduledSessions && !previous) await captureLocal(); return send(200, saved); }
             if (req.method === 'GET' && route === '/api/list') {
                 const scope = url.searchParams.get('scope') || 'active:codex', query = url.searchParams.get('q') || '';
@@ -303,7 +300,7 @@ export function createApp({ root, roots, guard, demo = false, startupOptions = {
                 assert(['activate', 'deactivate', 'archive', 'restore'].includes(body.action), 'Unknown session action.');
                 const managed=await runTrash(body.action,async report=>{
                 await report({phase:'Checking selected sessions',completed:0,total:null});
-                if (body.projectId && autoSync.passphrase !== null) {
+                if (body.projectId && autoSync.unlocked) {
                     await autoSync.openProject(body.projectId);
                     for (const i of autoSync.cloud.items().filter(i => i.projectId === body.projectId)) await autoSync.openTree(i.id);
                 }
@@ -432,15 +429,11 @@ export function createApp({ root, roots, guard, demo = false, startupOptions = {
                 return send(200, native.apply());
             if (req.method === 'POST' && route === '/api/recover')
                 return send(200, native.recover(body.id));
-            if (req.method === 'POST' && route === '/api/webdav') return send(200, await settings.verify(body));
-            if (req.method === 'POST' && route === '/api/cloud/check') { await autoSync.checkCatalog(5 * 60 * 1000); return send(200, autoSync.status()); }
             if (req.method === 'POST' && route === '/api/sync/lock') {
                 autoSync.lock();
                 return send(200, autoSync.status());
             }
             if (req.method === 'POST' && route === '/api/sync') {
-                if (body.passphrase)
-                    autoSync.unlock(body.passphrase);
                 return send(200, await autoSync.flush(body.direction || 'both', true));
             }
             if(req.method==='POST'&&route==='/api/conflicts/resolve'){
@@ -511,7 +504,7 @@ export function createApp({ root, roots, guard, demo = false, startupOptions = {
     const app = { server, store, native, autoSync, diagnostics, settings, intelligence, autostart, token, instance, quiesce() {
         stopping = true; intelligence.close(); clearTimeout(interval);clearTimeout(expiryTimer); autoSync.closed = true;
         clearTimeout(autoSync.timer); clearTimeout(autoSync.retryTimer); clearTimeout(autoSync.interval);
-        if (settings.job?.state !== 'running') autoSync.cloud.connection?.dav.controller?.abort(new Error('Server is stopping.'));
+        if (settings.job?.state !== 'running') autoSync.cloud.connection?.controller?.abort(new Error('Server is stopping.'));
     }, close(callback) {
         app.quiesce();
         for(const res of streams)res.end(); streams.clear();

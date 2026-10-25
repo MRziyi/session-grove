@@ -1,41 +1,19 @@
-# 实现与设计的对应
+# Implementation map
 
-当前实现对应[设计基线](design.md)中的项目控制端模型。具体实现采用 Node.js 24 内置 HTTP、SQLite、加密、压缩和文件系统能力；浏览器使用原生 ES Modules 与 SVG / DOM 图，无构建步骤和第三方运行依赖。
+The service runs on Node.js 24+, with native Git and a browser UI. Run `pnpm install` before starting it.
 
-## 核心约束
+| Area | Implementation |
+| --- | --- |
+| Local HTTP API and lifecycle | `src/server.js`, `src/service.js` |
+| SQLite records, revisions and caches | `src/store.js` |
+| Native discovery and materialization | `src/native.js`, agent adapters |
+| Graph and project projections | `src/workspace.js`, `src/project-view.js` |
+| Shared sync snapshots and local views | `src/cloud-view.js` |
+| Git transport and snapshots | `src/git-remote.js`, `src/git-cloud.js` |
+| Transfer scheduling and settings | `src/auto-sync.js`, `src/git-settings.js` |
+| Local recovery and deletion identities | `src/trash.js`, `src/trash-actions.js` |
+| Smart Organization | `src/intelligence.js`, `src/transcription-titles.js` |
 
-- 项目身份独立于目录，分支身份独立于原生 session ID。
-- 逻辑分支保存固定版本和完整轮次边界。分支、导入、拉取不隐式激活。
-- 原始记录逐行按 SHA-256 保存。版本引用片段，复用前缀不复制内容对象。
-- 原生实例及期望 Active 集合仅保存在本机，不随远端 graph 合并。
-- 物化基线与原始版本分别保留。精确匹配基线后只回收新增后缀，日志重写作为新快照保留。
-- 冲突会话保留为分支，不按时间戳交错合并。
-- API 不接受任意路径读取；原生导入由扫描产生的目录内候选决定。
+Use `node scripts/ci-test.js` for unit/integration checks and `node scripts/ci-test.js --browser` for isolated browser flows. Timing files contain public filenames and durations, not fixture contents. Git tests use disposable local repositories.
 
-## 原生写入
-
-用户选择工程目录；适配器计算原生位置。Codex 协调 rollout、session_index 和已存在的 state_5 数据库；Claude 使用项目路径编码和会话 / history 文件。当前依赖原生客户端重新发现记录，不尝试控制运行中的 IDE。
-
-按操作记录文件备份、实例状态和待应用列表。文件采用临时文件 + rename，数据库使用事务；跨存储失败由日志补偿。CLI 通过资料库 PID 锁阻止同库多服务，原生写入前还检查运行中的 Agent。
-
-## 下一步的明确缺口
-
-1. 用真实 Claude Code CLI / VS Code 验证归档、恢复、路径迁移和压缩历史；建立版本矩阵。
-2. 为 Claude 子 Agent 目录、计划文件、图片等补齐附件清单与原生引用迁移；目前只保留主 transcript，含可识别外部附件时拒绝激活。
-3. 为更多 Codex history_mode / 数据库版本增加适配，优先采用版本化官方接口。
-4. 元数据已包含版本祖先关系，单向修改自动快进；并发元数据与逻辑节点整理保持显式冲突选择。后续可完善细粒度三方合并。
-5. 对大资料库增加流式解析、消息分页和收纳缓存；当前单会话上限 100MB。
-6. 对实际 WebDAV 服务增加兼容性测试；当前同步在服务解锁后自动执行、对象永久保留。
-7. 校验并包装 macOS 分发流程，确定公开仓库与包注册标识。
-
-这些缺口不改变项目中心的数据模型，也不把同步或客户端升级为组织会话的主结构。
-
-## 0.2 的组织层
-
-`Branch` 代表可持续写入的原生 thread；`node` 代表用户命名的连续消息范围，引用固定 revision 与开始 / 结束边界，并通过 `previousId` 连接。`branch.nodeHead` 指向当前整理链，`head` 独立指向最新原始记录。Pending 是整理链末尾之后的未提交范围，不是自动生成的永久节点。
-
-已有资料库启动时迁移为初始命名节点。刷新和后台采集都只增长 Pending；提交一段后，剩余内容仍留在 Pending。提交携带原版本和起点，以拒绝过期界面或重复提交。
-
-未归类会话使用 `projectId: null`，自动观察保持原生 Active 状态。共享前缀仅在未归类区推断，匹配连续消息与工具事件，忽略原生 ID / 时间等易变元数据。用户命名过的逻辑节点不会被自动改组。移入项目按整棵树执行。
-
-云端 schema 2 导出只包含已归类项目及其依赖对象、逻辑节点。Active 与未归类记录是设备私有状态。并发整理保留两条节点链，在冲突解决前只展示本机选择的那一条，不把重叠区间串联。未提供 WebDAV 配置或未解锁时，队列保留在本机；解锁后自动重试和拉取远端更新。
+See [operations](operations.md), [Git sync](git-sync.md) and [sync policy](sync-policy.md).
