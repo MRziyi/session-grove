@@ -66,18 +66,22 @@ try{
   fs.mkdirSync('test-results',{recursive:true});fs.writeFileSync('test-results/discard-error-card.png',Buffer.from((await call('Page.captureScreenshot',{format:'png'})).data,'base64'));
   await evaluate('document.querySelector("#trash-progress [data-dismiss-task]").click()');assert.equal(await evaluate('document.querySelector("#trash-progress").hidden'),true);
  }finally{app.autoSync.cloud.undoBaseline=undoBaseline;}
+ // A terminal progress event can arrive before the pending list refresh finishes.
+ await evaluate('window.__discardStateFetch=window.fetch;window.__delayDiscardState=true;window.fetch=async(...args)=>{if(String(args[0])==="/api/state"&&window.__delayDiscardState){window.__delayDiscardState=false;await new Promise(r=>setTimeout(r,500));}return window.__discardStateFetch(...args)}');
  await hover('#push-zone');await wait('!document.querySelector("#pending-uploads").hidden');
  await evaluate('document.querySelector("#discard-pending").click()');
- await wait(`document.querySelector('[data-pending-select="${mistake.id}"]')?.disabled&&document.querySelector('#pending-progress').textContent.includes('Organization changes discarded')`);
+ await wait(`document.querySelector('[data-pending-select="${mistake.id}"]')?.disabled&&document.querySelector('#pending-progress').textContent.includes('Organization changes discarded')&&document.querySelector('#discard-pending').hidden`);
  assert.equal(app.store.get('branch',mistake.id).name,'Original session label');assert.equal(app.store.get('branch',mistake.id).head,mistake.head);assert.equal((app.store.local('trashEntries')||[]).length,0);
  const activeBefore=JSON.stringify(app.store.instances()),activeCopy=app.store.instances().find(i=>i.branchId===activeMistake.id),activeBytes=fs.readFileSync(activeCopy.file);
  delayDiscardEvents=true;
  await evaluate(`document.querySelector('[data-pending-select="${activeMistake.id}"]').click();document.querySelector('#discard-pending').click()`);
- await wait(`document.querySelector('[data-pending-select="${activeMistake.id}"]')?.disabled&&document.querySelector('#pending-progress').textContent.includes('Organization changes discarded')`);
+ await wait(`document.querySelector('[data-pending-select="${activeMistake.id}"]')?.disabled&&document.querySelector('#pending-progress').textContent.includes('Organization changes discarded')&&document.querySelector('#discard-pending').hidden`);
  assert.equal(await evaluate('!!document.querySelector("#confirm-discard")'),false);
  await Promise.all(delayedEvents);await new Promise(r=>setTimeout(r,100));
  assert.ok(await evaluate('document.querySelector("#pending-progress").textContent.includes("Organization changes discarded")'),'late progress events cannot replace a completed discard');delayDiscardEvents=false;
- assert.equal(app.store.get('branch',activeMistake.id).name,'Original active label');assert.equal(JSON.stringify(app.store.instances()),activeBefore);assert.deepEqual(fs.readFileSync(activeCopy.file),activeBytes);
+ assert.equal(app.store.get('branch',activeMistake.id).name,'Original active label','the second discard has completed');
+ assert.equal(JSON.stringify(app.store.instances()),activeBefore,'discard preserves every activation instance');
+ assert.deepEqual(fs.readFileSync(activeCopy.file),activeBytes,'discard never rewrites native conversation bytes');
 
 
  await evaluate('document.querySelector("#upload").click()');await wait('document.querySelector("#sync").dataset.operation==="running"');

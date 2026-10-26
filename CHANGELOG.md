@@ -2,8 +2,9 @@
 
 ## Unreleased
 
-## 1.2.0
+## 1.2.1
 
+- Wait for the refreshed pending list before starting another Discard in browser checks; reproduce slow refresh explicitly and retain all native-file and activation invariants.
 - Avoid exporting and hashing trees that have never been uploaded; they remain pending until an acknowledgement exists. Keep acknowledged-history fingerprint checks intact.
 - Reuse unchanged graph ancestor overlays during transcript scrolling, retain existing SVG paths, and release ancestor DOM and scroll handlers when closing a tree.
 - Anchor Trash at the navigation bottom, preserve list/sidebar scroll positions and keyboard focus when toggling Older projects, and slightly enlarge the main list's Show and Older projects text.
