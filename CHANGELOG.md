@@ -2,9 +2,10 @@
 
 ## Unreleased
 
+- Restore right-aligned user messages and left-aligned agent replies while keeping selection checkboxes on the right. Present project categories as rounded containers around their session cards, with matching expanded and collapsed headers.
 - Move list search into the title row; add whole-tree detail search with path-aware results and direct message navigation. Put tree-wide counts in the detail title row and transcription token/context counts below it; align message checkboxes on the right.
 - Preview and apply one replaceable prefix to all active client session titles in a tree, synchronize supported clients, and report progress with verified writes and conditional failure rollback. Keep logical Session and node names independent.
-- Pin the previewed branch's offscreen ancestors at graph edges with connecting lines and compact navigation for long chains; fix detail-column sizing in narrow windows.
+- Pin the previewed branch's offscreen ancestors at the opposite graph edge with connecting lines and a complete scrollable list; fix detail-column sizing in narrow windows.
 - Keep the surviving tree open after removing a transcription path. Move retained-history reclamation into a read-only worker, reject stale cleanup plans, reuse unaffected sync fingerprints and skip disabled automatic-upload scans; expose each remaining Trash phase in the progress card.
 - Restrict Discard to Grove organization edits: names, project assignment, node labels/grouping and context preferences. Preserve all messages, new sessions/forks, native files and active instances; no deactivation confirmation is involved.
 - Record lightweight organization checkpoints for new sessions, keep content-only changes queued, and pause discarded smart-organization work until explicitly resumed through the existing attention indicator and Continue action, including after refresh or new messages.

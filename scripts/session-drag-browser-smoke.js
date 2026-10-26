@@ -25,6 +25,8 @@ try{
  await call('Runtime.enable');await call('Emulation.setFocusEmulationEnabled',{enabled:true});await call('Page.bringToFront');await call('Emulation.setDeviceMetricsOverride',{width:1100,height:720,deviceScaleFactor:1,mobile:false});
  await wait('document.querySelector(".project-directory [data-scope]")');
  await evaluate('document.querySelector(".project-directory [data-scope]").click()');await wait('document.querySelectorAll("#session-list [data-item]").length===30');
+ assert.ok(await evaluate(`(()=>{const g=document.querySelector('.project-group'),r=g.querySelector('.session-row'),a=g.getBoundingClientRect(),b=r.getBoundingClientRect();return parseFloat(getComputedStyle(g).borderTopLeftRadius)>=10&&getComputedStyle(g).backgroundColor!==getComputedStyle(r).backgroundColor&&b.left>a.left&&b.right<a.right&&b.bottom<a.bottom})()`),'project categories wrap their session cards');
+ fs.mkdirSync('test-results',{recursive:true});fs.writeFileSync('test-results/project-category-cards.png',Buffer.from((await call('Page.captureScreenshot',{format:'png'})).data,'base64'));
  // Disclosure takes its own space; the global rename editor extends 7px left of the title.
  assert.deepEqual(await evaluate(`(()=>{const h=document.querySelector('#session-list .project-group>h2'),arrow=h.querySelector('[data-toggle-project]').getBoundingClientRect(),title=h.querySelector('[data-name-kind]'),range=document.createRange();range.selectNodeContents(title);return {space:range.getBoundingClientRect().left-arrow.right>=8,direct:title.parentElement===h,compact:h.getBoundingClientRect().height<=32};})()`),{space:true,direct:true,compact:true});
  assert.equal(await evaluate(`!!document.querySelector('.project-directory [data-scope="${empty.id}"]')`),false,'empty destinations stay hidden during normal browsing');
@@ -49,6 +51,8 @@ try{
  const targetGroup=`[data-project-group="${target.id}"]`,toggle=`[data-toggle-project="${target.id}"]`;
  const previousCount=await evaluate(`Number(document.querySelector('${targetGroup} .group-actions span').textContent)`);
  await evaluate(`document.querySelector('${toggle}').click()`);
+ await evaluate(`document.querySelector('${targetGroup}').scrollIntoView({behavior:'instant',block:'center'})`);
+ fs.writeFileSync('test-results/project-category-collapsed.png',Buffer.from((await call('Page.captureScreenshot',{format:'png'})).data,'base64'));
  assert.equal(await evaluate(`document.querySelectorAll('${targetGroup} [data-item]').length`),0);
  await evaluate(`(()=>{const source=document.querySelector('[data-item="${ids[1]}"]');source.scrollIntoView({behavior:'instant',block:'center'});window.__drag=new DataTransfer();source.dispatchEvent(new DragEvent('dragstart',{bubbles:true,dataTransfer:window.__drag}));const target=document.querySelector('${targetGroup}');target.scrollIntoView({behavior:'instant',block:'center'});const r=target.getBoundingClientRect();window.__dropPoint={clientX:r.x+20,clientY:r.y+15};target.dispatchEvent(new DragEvent('dragover',{bubbles:true,cancelable:true,dataTransfer:window.__drag,...window.__dropPoint}));})()`);
  assert.equal(await evaluate(`document.querySelector('${targetGroup}').classList.contains('project-drop-target')`),true);

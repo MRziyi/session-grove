@@ -2,7 +2,7 @@ let language = localStorage.getItem('grove-language') === 'zh' ? 'zh' : 'en';
 const dictionary = {
 "Search in the detail header covers the whole Session tree. Choose a result to open its transcription and matching message.":"详情页标题栏的搜索覆盖整棵 Session 树。选择结果即可打开所属 Transcription 并定位到匹配消息。",
 "The prefix action previews names for active client sessions. It replaces its previous prefix and synchronizes client titles; Session and node labels stay independent.":"批量前缀操作会预览已激活客户端会话的名称，替换此前由此功能添加的前缀并同步客户端标题；Session 和节点名称保持独立。",
-"Offscreen ancestors stay connected at the graph edge. Select an ancestor card to return to it; a grouped card opens the hidden chain.":"视窗外的祖先节点会保留在图的边缘并继续连线。点击祖先卡片可返回该节点，点击汇总卡片可查看隐藏的祖先链。",
+"Offscreen ancestors are listed at the opposite graph edge. Select a card to return to its node; scroll the chain when it exceeds the view.":"视窗外的祖先节点会逐一列在图的另一侧边缘并继续连线。点击卡片可返回对应节点，祖先链超出视窗时可滚动查看。",
 "Checking retained history":"正在检查保留历史",
 "Storage cleanup deferred":"空间清理已排队",
 "Updating sync status":"正在更新同步状态",
@@ -21,8 +21,6 @@ const dictionary = {
 "Enter a prefix (1–40 characters, without brackets).":"请输入 1–40 字符的前缀，不包含方括号。",
 "A prefixed title exceeds 200 characters. Use a shorter prefix.":"添加前缀后的名称超过 200 字符，请缩短前缀。",
 
-"Ancestors":"祖先节点",
-"{count} ancestors":"{count} 个祖先节点",
 "Search this session":"搜索此 Session",
 "Search this session…":"搜索此 Session…",
 "{count} results":"{count} 个结果",

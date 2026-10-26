@@ -13,11 +13,10 @@ export function pinnedAncestors(tree,layout,camera,width,height,branchId,nodeId)
     const ancestors=path.nodeIds.slice(0,path.nodeIds.indexOf(focus.id)).filter(id=>{const r=rect(id);return r&&(r.x<0||r.x+r.width>width||r.y<0||r.y+r.height>height);});
     if(!ancestors.length)return null;
     const focusRect=rect(focus.id),lastIndex=path.nodeIds.indexOf(ancestors.at(-1)),connectionId=path.nodeIds.slice(lastIndex+1).find(id=>intersects(rect(id)))||focus.id,connection=rect(connectionId);
-    const first=rect(ancestors[0]),side=first.x+first.width/2<=connection.x+connection.width/2?'left':'right',cardWidth=Math.min(132,width*.42),slots=Math.max(2,Math.min(6,Math.floor((connection.y-8)/40)));
-    const ids=ancestors.length<=slots?ancestors:[ancestors[0],'more',...(slots>2?ancestors.slice(-(slots-2)):[])];
-    // With two slots, one root card and one aggregate preserve the whole chain.
-    if(ancestors.length>slots&&slots===2)ids.splice(0,ids.length,'more',ancestors.at(-1));
-    const omitted=ancestors.length>slots?(slots===2?ancestors.slice(0,-1):ancestors.slice(1,ancestors.length-(slots-2))):[];
-    const items=ids.map((id,index)=>({id,node:nodes.get(id),members:id==='more'?omitted:undefined,x:side==='left'?6:width-cardWidth-6,y:6+index*40,width:cardWidth,height:34}));
-    return {branchId:path.branchId,focusId:focus.id,focus:focusRect,connectionId,connection,side,items};
+    // Keep the chain away from the cropped side, where other branches remain.
+    const side=ancestors.some(id=>rect(id).x<0)?'right':ancestors.some(id=>rect(id).x+rect(id).width>width)?'left':connection.x+connection.width/2<width/2?'right':'left';
+    const cardWidth=Math.min(148,width*.42),x=side==='left'?6:width-cardWidth-6;
+    const items=ancestors.map((id,index)=>({id,node:nodes.get(id),x,y:6+index*36,width:cardWidth,height:30}));
+    const rail={x,y:6,width:cardWidth,height:Math.min(height-12,items.length*36-6)};
+    return {branchId:path.branchId,focusId:focus.id,focus:focusRect,connectionId,connection,side,items,rail};
 }

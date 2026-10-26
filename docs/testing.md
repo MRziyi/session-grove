@@ -29,7 +29,7 @@ The Git and browser partitions are complete and nonoverlapping; `test/ci-plan.te
 | Discard | Synced and never-synced organization edits; single/batch trees; stale selection and concurrent metadata; new messages/forks; unrelated project edits; no native writes or deactivation; retained client titles; incompatible project baselines. |
 | Trash/recovery | Path/tree removal; shared ancestry; compressed source/index paths; backup verification; partial failures; expiry; repeat restore; no accidental activation; remain in a surviving tree; stale background reclamation plans. |
 | Git | Initial/no-op Pull/Push; multiple devices; Unicode and byte fidelity; edits during transfer; offline verified baselines; cancellation/errors; archive/deletion propagation; conflicts. |
-| UI/service | First use; optional sync; narrow/desktop layout; whole-tree search and result navigation; right-side message selection; pinned ancestor chain and aggregate navigation; drag targets; actual progress; failure dismissal; initialization/reconnect; terminal-independent service; startup setting rollback. |
+| UI/service | First use; optional sync; narrow/desktop layout; whole-tree search and result navigation; right-side message selection; opposite-edge ancestor chain, complete listing and scroll navigation; drag targets; actual progress; failure dismissal; initialization/reconnect; terminal-independent service; startup setting rollback. |
 
 ## Real-library checks
 
