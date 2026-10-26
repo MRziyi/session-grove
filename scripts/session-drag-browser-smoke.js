@@ -67,8 +67,17 @@ try{
  assert.equal(await evaluate(`!!document.querySelector('[data-project-group="${oldProject.id}"]')`),false);
  await evaluate('document.querySelector("#session-list [data-older-projects]").scrollIntoView({behavior:"instant",block:"center"});document.querySelector(".project-directory-scroll").scrollTop=100000');
  fs.writeFileSync('test-results/older-projects-divider.png',Buffer.from((await call('Page.captureScreenshot',{format:'png'})).data,'base64'));
+ const scrollBeforeOlder=await evaluate('({main:document.querySelector("#session-list").scrollTop,sidebar:document.querySelector(".project-directory-scroll").scrollTop})');
  await evaluate('document.querySelector("#session-list [data-older-projects]").click()');
  await wait(`document.querySelector('[data-project-group="${oldProject.id}"] [data-item="${oldSession.id}"]')`);
+ await evaluate('new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)))');
+ assert.deepEqual(await evaluate('({main:document.querySelector("#session-list").scrollTop,sidebar:document.querySelector(".project-directory-scroll").scrollTop})'),scrollBeforeOlder,'expanding from the main list preserves both reading positions');
+ await evaluate('document.querySelector("#session-list [data-older-projects]").click();new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)))');
+ assert.deepEqual(await evaluate('({main:document.querySelector("#session-list").scrollTop,sidebar:document.querySelector(".project-directory-scroll").scrollTop})'),scrollBeforeOlder,'collapsing from the main list preserves both reading positions');
+ await evaluate('document.querySelector(".project-directory [data-older-projects]").focus({preventScroll:true});document.querySelector(".project-directory [data-older-projects]").click();new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)))');
+ assert.deepEqual(await evaluate('({main:document.querySelector("#session-list").scrollTop,sidebar:document.querySelector(".project-directory-scroll").scrollTop})'),scrollBeforeOlder,'expanding from the sidebar does not jump to the selected project');
+ assert.ok(await evaluate('document.activeElement.matches(".project-directory [data-older-projects]")'),'keyboard focus stays on the replaced toggle');
+
  assert.equal(await evaluate(`!!document.querySelector('[data-project-group="${oldProject.id}"] [data-expand-project]')`),false,'older project contents expand with their section');
  await evaluate('document.querySelector("#session-list [data-older-projects]").scrollIntoView({behavior:"instant",block:"center"})');
  fs.writeFileSync('test-results/older-projects-expanded.png',Buffer.from((await call('Page.captureScreenshot',{format:'png'})).data,'base64'));
@@ -77,10 +86,13 @@ try{
  const compactProject=store.project('Recent work');
  for(let i=0;i<3;i++){const b=store.branch(compactProject.id,'Work '+i,'codex',codexSample(root,[['Question','Answer']]));if(i<2)store.put('branch',{...b,updatedAt:stamp,contentUpdatedAt:stamp,createdAt:stamp});}
  await call('Page.reload');await wait(`document.querySelector('.project-directory [data-scope="${compactProject.id}"]')`);await evaluate(`document.querySelector('.project-directory [data-scope="${compactProject.id}"]').click()`);await wait(`document.querySelector('[data-expand-project="${compactProject.id}"]')`);
- const directoryHeight=await evaluate('document.querySelector(".project-directory-scroll").getBoundingClientRect().height');
+ const directoryHeight=await evaluate('document.querySelector(".project-directory-scroll").getBoundingClientRect().height');const trashBottom=await evaluate('document.querySelector(".recovery-navigation").getBoundingClientRect().bottom');
+ assert.ok(await evaluate('(()=>{const n=document.querySelector("#navigation").getBoundingClientRect(),t=document.querySelector(".recovery-navigation").getBoundingClientRect();return n.bottom-t.bottom<=20})()'),'Trash stays at the navigation bottom for a short directory');
+
  assert.ok(await evaluate(`(()=>{const box=document.querySelector('.project-directory-scroll').getBoundingClientRect(),tag=document.querySelector('.project-directory .older-projects-pill').getBoundingClientRect(),button=document.querySelector('.project-directory [data-older-projects]').getBoundingClientRect();return Math.abs(tag.left+tag.width/2-box.left-box.width/2)<2&&box.bottom-button.bottom<12})()`),'the centered pill is followed immediately by the outline bottom');
  fs.writeFileSync('test-results/project-sidebar-compact.png',Buffer.from((await call('Page.captureScreenshot',{format:'png'})).data,'base64'));
  await evaluate('document.querySelector(".project-directory [data-older-projects]").click()');assert.ok(await evaluate('document.querySelector(".project-directory-scroll").getBoundingClientRect().height')>directoryHeight+20,'opening older projects grows a short directory');
+ assert.equal(await evaluate('document.querySelector(".recovery-navigation").getBoundingClientRect().bottom'),trashBottom,'Trash stays fixed when Projects grows');
  fs.writeFileSync('test-results/project-sidebar-expanded.png',Buffer.from((await call('Page.captureScreenshot',{format:'png'})).data,'base64'));
  await evaluate('document.querySelector(".project-directory [data-older-projects]").click()');assert.ok(Math.abs(await evaluate('document.querySelector(".project-directory-scroll").getBoundingClientRect().height')-directoryHeight)<2,'closing older projects shrinks the outline again');
  await evaluate(`document.querySelector('[data-expand-project="${compactProject.id}"]').click()`);assert.equal(await evaluate(`document.querySelectorAll('[data-project-group="${compactProject.id}"] [data-item]').length`),3);

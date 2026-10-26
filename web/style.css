@@ -1439,6 +1439,7 @@ body{height:100dvh;display:flex;flex-direction:column;overflow:hidden}
 .layout .navigation{padding:0 10px;min-height:0}.layout.detail .navigation{padding-bottom:0}
 #navigation{padding:var(--nav-gap) 0;gap:var(--nav-gap)}#navigation>.nav-group{margin:0;min-height:0}
 #navigation>.project-directory{flex:0 1 auto;min-height:0}.project-directory-scroll{border:1px solid #cbd7e080;border-radius:9px;padding:5px 3px;flex:0 1 auto;min-height:0;scrollbar-gutter:auto}.project-directory>.nav-label{flex-shrink:0}
+#navigation>.recovery-navigation{margin-top:auto}
 .nav-footer{margin:0 -10px;padding:5px 6px;min-height:0;flex-shrink:0}
 #list-page>h1{font-size:20px;margin:0;padding:12px 18px}.detail-heading{min-height:46px;padding:9px 18px}.detail-heading h1{font-size:18px}
 .pending-heading{gap:8px;align-items:center}.pending-heading strong{font-size:12px;flex:1;min-width:0;margin:0}.pending-heading .actions{display:flex;flex-shrink:0;gap:5px}.pending-heading .actions button{font-size:12px;padding:5px 7px;white-space:nowrap}#pending-progress:empty{display:none}
@@ -1593,5 +1594,7 @@ body{height:100dvh;display:flex;flex-direction:column;overflow:hidden}
 .project-group.project-collapsed>h2{border-radius:11px}
 #session-list .project-group>h2{gap:2px}
 .project-group>h2>.editable-name{padding:2px 1px;margin:-2px -1px}
-.project-group>.show-project{margin:2px auto 0;padding:3px 6px;font-size:11px;line-height:16px}
+.project-group>.show-project{margin:2px auto 0;padding:3px 6px;font-size:12px;line-height:16px}
 .project-group:has(>.show-project){padding-bottom:4px}
+#session-list .older-projects-toggle{font-size:12px}
+#session-list .older-projects-count{font-size:11px}

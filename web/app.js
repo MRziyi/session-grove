@@ -168,7 +168,7 @@ function renderNavigation() {
     const clientArchiveCount=new Set([...(d.trashNative||[]).filter(i=>i.clientArchived&&(!i.background||d.preferences?.showScheduledSessions)).map(i=>i.branchId),...d.items.flatMap(i=>i.sessions.filter(s=>s.archived||archivedProjects.some(p=>p.id===i.projectId)).map(s=>s.id))]).size;
     const directory = rows => rows.sort((a,b) => (projectTimes.get(b.id)||'').localeCompare(projectTimes.get(a.id)||'') || a.name.localeCompare(b.name)).map(p => entry(p.id, p.builtin ? t('Ungrouped') : p.name==='Scheduled & background'?t(p.name):p.name, p.itemCount)).join('');
     const recent = projects.filter(p=>!olderIds.has(p.id)), older = projects.filter(p=>olderIds.has(p.id));
-    $('#navigation').innerHTML = `<section class="nav-group"><h2 class="nav-label">${t('Current Active')}</h2>${entry('active:codex', 'Codex', d.activeCounts.codex, 'codex')}${entry('active:claude', 'Claude', d.activeCounts.claude, 'claude')}</section><section class="nav-group project-directory"><h2 class="nav-label">${t('Projects')}</h2><div class="project-directory-scroll">${directory(recent)}${older.length?olderToggle(older.length)+(state.olderProjects?directory(older):''):''}</div></section><section class="nav-group"><h2 class="nav-label">${t('Trash')}</h2>${clientArchiveCount?entry('archived',t('Client archive'),clientArchiveCount):''}${entry('trash',t('Trash'),(d.trashEntries||[]).filter(e=>!e.restoredAt&&!e.expired).length)}</section>`;
+    $('#navigation').innerHTML = `<section class="nav-group"><h2 class="nav-label">${t('Current Active')}</h2>${entry('active:codex', 'Codex', d.activeCounts.codex, 'codex')}${entry('active:claude', 'Claude', d.activeCounts.claude, 'claude')}</section><section class="nav-group project-directory"><h2 class="nav-label">${t('Projects')}</h2><div class="project-directory-scroll">${directory(recent)}${older.length?olderToggle(older.length)+(state.olderProjects?directory(older):''):''}</div></section><section class="nav-group recovery-navigation"><h2 class="nav-label">${t('Trash')}</h2>${clientArchiveCount?entry('archived',t('Client archive'),clientArchiveCount):''}${entry('trash',t('Trash'),(d.trashEntries||[]).filter(e=>!e.restoredAt&&!e.expired).length)}</section>`;
     $('.project-directory-scroll').scrollTop = directoryScroll;
     $$('[data-scope]').forEach(el => el.onclick = () => navigate(el.dataset.scope));
     bindOlderProjects();
@@ -352,8 +352,16 @@ function sourceTags(item) {
 function isOlder(items) { return olderProject(items,state.data.preferences); }
 function disclosureTriangle(expanded){return `<svg class="disclosure-triangle" viewBox="0 0 16 16" aria-hidden="true"><path d="${expanded?'M3 11h10L8 5Z':'M3 5h10l-5 6Z'}"/></svg>`;}
 function olderToggle(count) { return `<button type="button" class="older-projects-toggle" data-older-projects aria-expanded="${!!state.olderProjects}"><span class="older-projects-pill"><span class="older-projects-label">${t('Older projects')}</span><span class="older-projects-count">${count}</span>${disclosureTriangle(!!state.olderProjects)}</span></button>`; }
-function bindOlderProjects() { $$('[data-older-projects]').forEach(el=>el.onclick=()=>{state.olderProjects=!state.olderProjects;renderNavigation();renderList();if(state.tree)renderRail();}); }
-let projectObserver, listView = null, viewAnimation;
+function bindOlderProjects() { $$('[data-older-projects]').forEach(el=>el.onclick=()=>{
+    const containers=['.project-directory-scroll','#session-list','#session-rail'];
+    const positions=containers.map(selector=>({selector,top:$(selector).scrollTop,left:$(selector).scrollLeft}));
+    const focus=document.activeElement===el,source=containers.find(selector=>$(selector).contains(el));
+    holdProjectNavigation=true;state.olderProjects=!state.olderProjects;
+    renderNavigation();renderList();if(state.tree)renderRail();
+    for(const {selector,top,left}of positions)$(selector).scrollTo({top,left,behavior:'instant'});
+    if(focus)$(source+' [data-older-projects]')?.focus({preventScroll:true});
+}); }
+let projectObserver, listView = null, viewAnimation, holdProjectNavigation=false;
 function animateView(element) {
     viewAnimation?.cancel();
     if (matchMedia('(prefers-reduced-motion: reduce)').matches) return;
@@ -373,10 +381,11 @@ function bindProjectFolds() {
 }
 
 function focusProject(id, scroll = true) {
+    if(scroll)holdProjectNavigation=false;
     state.projectFocus = id;
     $$('[data-scope]').forEach(el=>{const on=el.dataset.scope===id;el.classList.toggle('selected',on);if(on)el.setAttribute('aria-current','location');else el.removeAttribute('aria-current');});
     if(scroll){state.projectScrollTarget=id;document.querySelector('[data-project-group="'+id+'"]')?.scrollIntoView({block:'start',behavior:'instant'});}
-    const tab=$$('[data-scope]').find(el=>el.dataset.scope===id); if(tab && !scroll) tab.scrollIntoView({block:'nearest'});
+    const tab=$$('[data-scope]').find(el=>el.dataset.scope===id); if(tab && !scroll&&!holdProjectNavigation) tab.scrollIntoView({block:'nearest'});
 }
 async function navigate(scope) {
     const project = !scope.startsWith('active:') && scope !== 'archived' && scope !== 'trash';
@@ -1287,4 +1296,4 @@ installSessionDrag({
     move:(itemIds,projectId)=>run(async()=>{await api('/move','POST',{itemIds,projectId});state.selected.clear();state.projectFocus=projectId;state.expandedProjects.add(projectId);})
 });
 
-for(const event of ['wheel','touchstart','pointerdown','keydown'])$('#session-list').addEventListener(event,()=>{state.projectScrollTarget=null;},{passive:true});
+for(const event of ['wheel','touchstart','pointerdown','keydown'])$('#session-list').addEventListener(event,()=>{state.projectScrollTarget=null;holdProjectNavigation=false;},{passive:true});

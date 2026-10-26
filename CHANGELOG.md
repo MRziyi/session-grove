@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Anchor Trash at the navigation bottom, preserve list/sidebar scroll positions and keyboard focus when toggling Older projects, and slightly enlarge the main list's Show and Older projects text.
 - Further tighten category title and Show-control spacing, center the sidebar's Older projects toggle in a pill, and let the Projects outline grow with its visible contents instead of filling unused navigation space.
 - Enlarge category disclosure triangles and tighten title spacing; present Older projects as an expandable divider above its project cards in lists and navigation.
 - Restore right-aligned user messages and left-aligned agent replies while keeping selection checkboxes on the right. Present project categories as rounded containers around their session cards, with matching expanded and collapsed headers.
