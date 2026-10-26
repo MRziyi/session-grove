@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 1.2.0
+
+- Avoid exporting and hashing trees that have never been uploaded; they remain pending until an acknowledgement exists. Keep acknowledged-history fingerprint checks intact.
+- Reuse unchanged graph ancestor overlays during transcript scrolling, retain existing SVG paths, and release ancestor DOM and scroll handlers when closing a tree.
 - Anchor Trash at the navigation bottom, preserve list/sidebar scroll positions and keyboard focus when toggling Older projects, and slightly enlarge the main list's Show and Older projects text.
 - Further tighten category title and Show-control spacing, center the sidebar's Older projects toggle in a pill, and let the Projects outline grow with its visible contents instead of filling unused navigation space.
 - Enlarge category disclosure triangles and tighten title spacing; present Older projects as an expandable divider above its project cards in lists and navigation.

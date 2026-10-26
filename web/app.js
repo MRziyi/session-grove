@@ -497,7 +497,7 @@ function render({keepDetail=false} = {}) {
     else {
         // Drop the last transcript's object graph as well as its DOM. These caches
         // and delegated handlers otherwise retain message bodies on the list page.
-        $('#graph-ancestors').hidden=true;closeDetailSearch(true);drawnTree=null;currentGraphLayout=null;labeledTree=null;nodeLabels=null;activityGroups=[];
+        clearPinnedAncestors();closeDetailSearch(true);drawnTree=null;currentGraphLayout=null;labeledTree=null;nodeLabels=null;activityGroups=[];
         $('#branch-picker').replaceChildren();$('#detail-actions').replaceChildren();
         $('#transcripts').onclick=null;$('#transcripts').replaceChildren();$('#graph').replaceChildren();$('#ribbons').replaceChildren();
     }
@@ -710,7 +710,7 @@ function selectNode(id, scrollTranscript = true) {
     }else revealNode(id);
     scheduleRibbons();
 }
-let ribbonFrame = 0;
+let ribbonFrame = 0,pinnedView=null,pinnedMarkup='';
 function scheduleRibbons() { if (!ribbonFrame) ribbonFrame = requestAnimationFrame(() => { ribbonFrame = 0; drawRibbons();renderPinnedAncestors(); }); }
 function drawRibbons() {
     if (!state.tree || !route() || $('#ribbon-lane').offsetWidth === 0) return;
@@ -727,24 +727,31 @@ function drawRibbons() {
         return `<path data-ribbon="${esc(id)}" d="M${left} ${top} C${mid} ${top},${mid} ${nt},${right} ${nt} L${right} ${nb} C${mid} ${nb},${mid} ${bottom},${left} ${bottom} Z" fill="${mutedNode(n, route()) ? '#aeb8c1' : palette[n.color][0]}" opacity=".19"/>`;
     }).join('');
 }
+function clearPinnedAncestors(){
+    pinnedView=null;pinnedMarkup='';const box=$('#graph-ancestors');box.hidden=true;delete box.dataset.branchId;
+    const cards=box.querySelector('.ancestor-cards');cards.onscroll=null;cards.replaceChildren();box.querySelector('svg').replaceChildren();
+}
 function renderPinnedAncestors(){
-    const box=$('#graph-ancestors'),view=$('#graph-scroll');if(!state.tree||!currentGraphLayout){box.hidden=true;return;}
-    const pin=pinnedAncestors(state.tree,currentGraphLayout,{...camera,x:camera.x-view.scrollLeft,y:camera.y-view.scrollTop},view.clientWidth,view.clientHeight,state.branchId,state.nodeId);
-    box.hidden=!pin;if(!pin){delete box.dataset.branchId;return;}box.dataset.branchId=pin.branchId;
+    const box=$('#graph-ancestors'),view=$('#graph-scroll');if(!state.tree||!currentGraphLayout){clearPinnedAncestors();return;}
+    const x=camera.x-view.scrollLeft,y=camera.y-view.scrollTop,width=view.clientWidth,height=view.clientHeight;
+    const key=[state.tree,currentGraphLayout,state.branchId,state.nodeId,x,y,camera.zoom,width,height];
+    if(pinnedView&&key.every((value,index)=>value===pinnedView[index]))return;
+    pinnedView=key;const pin=pinnedAncestors(state.tree,currentGraphLayout,{x,y,zoom:camera.zoom},width,height,state.branchId,state.nodeId);
+    box.hidden=!pin;if(!pin){clearPinnedAncestors();pinnedView=key;return;}box.dataset.branchId=pin.branchId;
     const markup=pin.items.map(item=>`<button type="button" class="pinned-ancestor" data-pinned-node="${esc(item.id)}" style="top:${item.y-pin.rail.y}px;height:${item.height}px;${style(item.node)}" aria-label="${esc(nodeName(item.node))}">${esc(nodeName(item.node))}</button>`).join('');
-    const cards=box.querySelector('.ancestor-cards');if(cards.innerHTML!==markup)cards.innerHTML=markup;
+    const cards=box.querySelector('.ancestor-cards');if(pinnedMarkup!==markup){cards.innerHTML=markup;pinnedMarkup=markup;}
     Object.assign(cards.style,{left:pin.rail.x+'px',top:pin.rail.y+'px',width:pin.rail.width+'px',height:pin.rail.height+'px'});
     cards.style.setProperty('--chain-length',(pin.items.length-1)*36+'px');
-    const svg=box.querySelector('svg');svg.setAttribute('width',view.clientWidth);svg.setAttribute('height',view.clientHeight);
+    const svg=box.querySelector('svg');svg.setAttribute('width',width);svg.setAttribute('height',height);
+    let edge=svg.firstElementChild;if(!edge){edge=document.createElementNS('http://www.w3.org/2000/svg','path');svg.append(edge);}
     const connect=()=>{
         const last=pin.items.at(-1),a={x:pin.side==='right'?pin.rail.x:pin.rail.x+pin.rail.width,y:Math.max(pin.rail.y+15,Math.min(pin.rail.y+pin.rail.height-15,last.y+last.height/2-cards.scrollTop))},b={x:pin.side==='right'?pin.connection.x+pin.connection.width:pin.connection.x,y:pin.connection.y+pin.connection.height/2},mid=(a.x+b.x)/2;
-        svg.innerHTML=`<path d="M${a.x},${a.y} C${mid},${a.y} ${mid},${b.y} ${b.x},${b.y}"/>`;
+        const d=`M${a.x},${a.y} C${mid},${a.y} ${mid},${b.y} ${b.x},${b.y}`;if(edge.getAttribute('d')!==d)edge.setAttribute('d',d);
     };connect();cards.onscroll=connect;
-    cards.onwheel=e=>e.stopPropagation();
-    cards.onpointerdown=e=>e.stopPropagation();
-    const jump=id=>{if(state.branchId!==pin.branchId){state.branchId=pin.branchId;renderDetail();}selectNode(id,false);};
-    for(const button of cards.querySelectorAll('[data-pinned-node]'))button.onclick=()=>jump(button.dataset.pinnedNode);
 }
+$('#graph-ancestors .ancestor-cards').onwheel=e=>e.stopPropagation();
+$('#graph-ancestors .ancestor-cards').onpointerdown=e=>e.stopPropagation();
+$('#graph-ancestors .ancestor-cards').onclick=e=>{const button=e.target.closest('[data-pinned-node]'),branchId=$('#graph-ancestors').dataset.branchId;if(!button||!state.tree||!branchId)return;if(state.branchId!==branchId){state.branchId=branchId;renderDetail();}selectNode(button.dataset.pinnedNode,false);};
 function applyCamera() {
     if (!state.tree) return;
     $('#graph').style.transform = `translate(${camera.x}px, ${camera.y}px) scale(${camera.zoom})`;

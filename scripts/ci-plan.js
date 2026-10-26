@@ -3,7 +3,7 @@ export const browserFiles=['scripts/node-browser-smoke.js','scripts/sync-browser
 export function testPlan(files,tests,suite='all'){
     assert.ok(['all','core','native','git-1','git-2','browser','browser-1','browser-2'].includes(suite),'Unknown test suite');
     if(suite==='browser')return browserFiles.map(file=>({file}));
-    // The main interaction smoke is about as expensive as the other seven
+    // The main interaction smoke is about as expensive as the other eight
     // flows together. Keep it isolated; each flow owns its server and profile.
     if(suite.startsWith('browser-'))return (suite==='browser-1'?browserFiles.slice(0,1):browserFiles.slice(1)).map(file=>({file}));
     const native='test/autostart.test.js',git='test/git-cloud.test.js';

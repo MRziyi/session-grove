@@ -112,7 +112,12 @@ try{
  await hover('#push-zone');await wait('document.querySelector("#pending-uploads").textContent.includes("Edited after upload snapshot")');await fits('#pending-uploads');
  assert.equal(await evaluate('document.querySelector("#upload").classList.contains("has-pending")'),true);
  assert.notEqual(await evaluate('document.querySelector("#upload").dataset.operation'),'success');
- failPull=true;await evaluate('document.querySelector("#sync").click()');await wait('!document.querySelector("#sync-error").hidden');assert.equal(await evaluate('!!document.querySelector("#sync-control progress")'),false);assert.equal(await evaluate('document.querySelector("#sync").dataset.operation'),'error');await fits('#sync-control');await fits('#cloud-status');
+ failPull=true;await evaluate('document.querySelector("#sync").click()');
+ await wait('!document.querySelector("#sync-error").hidden');
+ assert.equal(await evaluate('!!document.querySelector("#sync-control progress")'),false,'a failed sync clears running progress');
+ assert.equal(await evaluate('document.querySelector("#sync").dataset.operation'),'error','Pull shows its failed state');
+ await fits('#sync-control');
+ await fits('#cloud-status');
  fs.mkdirSync('test-results',{recursive:true});let screenshot=await call('Page.captureScreenshot',{format:'png'});fs.writeFileSync('test-results/sync-desktop.png',Buffer.from(screenshot.data,'base64'));
  await call('Emulation.setDeviceMetricsOverride',{width:390,height:844,deviceScaleFactor:1,mobile:true});await evaluate('new Promise(r=>requestAnimationFrame(r))');await fits('#sync-control');await fits('#cloud-status');
  screenshot=await call('Page.captureScreenshot',{format:'png'});fs.writeFileSync('test-results/sync-mobile-error.png',Buffer.from(screenshot.data,'base64'));

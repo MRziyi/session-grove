@@ -16,7 +16,7 @@ A project can span many conversations: an initial brief, competing approaches, a
 
 - **Organize by project.** Keep Claude and Codex conversations in one library, with search and editable titles. Collapse project groups and drag sessions onto open or collapsed groups.
 - **Choose what counts as recent.** Sort by conversation activity, include manual edits (the default), or include automatic organization in Settings.
-- **Explore conversation trees.** See where paths share history and where they diverge. Select a node to read its conversation.
+- **Explore conversation trees.** See where paths share history and where they diverge. Search the whole tree to jump to a message, or follow pinned ancestors while browsing a large branch.
 - **Name meaningful stretches of work.** Turn a long transcript into recognizable sections such as “Research questions”, “Compare approaches” or “First prototype”.
 
 ![A project library containing Claude and Codex conversations](docs/images/library.png)
@@ -34,6 +34,8 @@ Grove manages conversation history. You continue chatting and working on files i
 ## Spend less time organizing
 
 Optional **Smart Organization** helps name sessions and branch points and sort new conversations into projects. You can edit names yourself, and supported Codex clients can share transcription titles with Grove.
+
+Give active client sessions in a tree a shared title prefix, with a preview before applying it. Session and node names stay independent.
 
 Connect your own OpenAI API key in Settings to enable these features. Naming sends selected conversation text to OpenAI; an API key is not required to browse or organize your library manually.
 

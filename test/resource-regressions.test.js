@@ -8,13 +8,14 @@ import {CloudView as Cloud,treeSnapshot,graphFingerprint} from '../src/cloud-vie
 import {codexSample} from '../src/demo.js';
 import {hash} from '../src/util.js';
 function setup(t){const root=fs.mkdtempSync(path.join(os.tmpdir(),'grove-resources-')),store=new Store(root);t.after(()=>{store.close();fs.rmSync(root,{recursive:true,force:true});});return store;}
+function requireFingerprints(s,cloud){cloud.useSavedCache();const cache=cloud.cache();for(const item of s.syncCollections().items)cache.ack[item.id]='0'.repeat(64);s.local(cloud.cacheKey,cache);}
 
 test('status fingerprints preserve sync bytes without retaining export graphs',t=>{
     const s=setup(t),b=s.branch(null,'Unicode 测试','codex',codexSample('/fixture',[['Question','Answer']])),cloud=new Cloud(s,()=>({}));
     const graph=treeSnapshot(s,b.id),expected=hash(JSON.stringify(graph));
     assert.equal(graphFingerprint(graph),expected);
     assert.equal(graphFingerprint({...graph,optional:undefined,retention:{schema:1,ranges:{},extras:{}}}),hash(JSON.stringify({...graph,optional:undefined,retention:{schema:1,ranges:{},extras:{}}})));
-    s.invalidate();assert.deepEqual(cloud.dirtyIds(),[b.id]);
+    requireFingerprints(s,cloud);s.invalidate();assert.deepEqual(cloud.dirtyIds(),[b.id]);
     assert.equal(s.memoCache.get('fingerprint:'+b.id),expected);
     assert.ok(![...s.memoCache.keys()].some(k=>k==='exportGraph'||k==='cloud-snapshot-index'||k.startsWith('cloud-tree:')));
     const build=s.buildExportGraph;s.buildExportGraph=()=>{throw Error('Unchanged status must not export history');};assert.deepEqual(cloud.dirtyIds(),[b.id]);s.buildExportGraph=build;
@@ -90,7 +91,7 @@ test('sync fingerprint reuse stays equivalent to a cold calculation across mutat
  const s=setup(t),{GitCloud}=await import('../src/git-cloud.js'),{stageTrash,cleanupLocal}=await import('../src/trash.js'),p=s.project('P'),q=s.project('Q');
  const a=s.branch(p.id,'A','codex',codexSample('/fixture',[['A','Ready'],['Next','Done']])),b=s.branch(q.id,'B','codex',codexSample('/fixture',[['B','Ready']])),cloud=new GitCloud(s,()=>({url:'git@example.invalid:test/data.git'}));
  const check=()=>{const warm=cloud.dirtyIds().sort(),values=s.syncCollections().items.map(i=>[i.id,s.memoCache.get('fingerprint:'+i.id)]);s.invalidate();assert.deepEqual(cloud.dirtyIds().sort(),warm);assert.deepEqual(s.syncCollections().items.map(i=>[i.id,s.memoCache.get('fingerprint:'+i.id)]),values);};
- cloud.dirtyIds();const cache=cloud.cache();for(const root of s.syncCollections().items)cache.ack[root.id]=hash(JSON.stringify(treeSnapshot(s,root.id)));cloud.save(cache);
+ requireFingerprints(s,cloud);cloud.dirtyIds();const cache=cloud.cache();for(const root of s.syncCollections().items)cache.ack[root.id]=hash(JSON.stringify(treeSnapshot(s,root.id)));cloud.save(cache);
  s.edit(a.id,{name:'A renamed'});assert.ok(s.memoCache.has('fingerprint:'+b.id),'an unrelated tree keeps its small fingerprint');check();
  s.fork(a.id,{name:'New fork',end:s.detail(a.id).checkpoints[0].end});check();
  s.put('project',{...q,name:'Q renamed'});check();
@@ -102,7 +103,7 @@ test('sync fingerprint reuse stays equivalent to a cold calculation across mutat
 test('native availability changes and cleanup do not rebuild unaffected sync graphs',async t=>{
  const s=setup(t),{GitCloud}=await import('../src/git-cloud.js'),{stageTrash,cleanupLocal}=await import('../src/trash.js'),a=s.branch(null,'A','codex',codexSample('/fixture',[['A','Ready']])),b=s.branch(null,'B','codex',codexSample('/fixture',[['B','Ready']])),cloud=new GitCloud(s,()=>({url:'git@example.invalid:test/data.git'}));
  const retired=s.branch(null,'Earlier trash','codex',codexSample('/fixture',[['Old','Ready']]));stageTrash(s,[retired.id]);cleanupLocal(s);
- cloud.dirtyIds();s.local('instances',[{id:'native',branchId:b.id,applied:true}]);const build=s.buildExportGraph;s.buildExportGraph=()=>{throw Error('No unchanged export should be rebuilt');};assert.ok(cloud.dirtyIds().includes(b.id));s.buildExportGraph=build;
+ requireFingerprints(s,cloud);cloud.dirtyIds();s.local('instances',[{id:'native',branchId:b.id,applied:true}]);const build=s.buildExportGraph;s.buildExportGraph=()=>{throw Error('No unchanged export should be rebuilt');};assert.ok(cloud.dirtyIds().includes(b.id));s.buildExportGraph=build;
  stageTrash(s,[a.id]);cleanupLocal(s);s.buildExportGraph=()=>{throw Error('The remaining tree is unchanged');};assert.deepEqual(cloud.dirtyIds(),[b.id]);s.buildExportGraph=build;
 });
 
@@ -115,7 +116,15 @@ test('async cleanup keeps the event loop alive and discards a stale reclamation 
 
 test('shared revisions invalidate every dependent tree fingerprint',t=>{
  const s=setup(t),a=s.branch(null,'A','codex',codexSample('/fixture',[['Shared','Ready']])),b=s.branch(null,'B','codex',codexSample('/fixture',[['Other','Ready']]));
- s.put('branch',{...b,head:a.head});const cloud=new Cloud(s,()=>({}));cloud.dirtyIds();
+ s.put('branch',{...b,head:a.head});const cloud=new Cloud(s,()=>({}));requireFingerprints(s,cloud);cloud.dirtyIds();
  const revision=s.get('revision',a.head);s.put('revision',{...revision,source:{...revision.source,marker:'changed'}});cloud.dirtyIds();
  const values=[a,b].map(b=>s.memoCache.get('fingerprint:'+b.id));s.invalidate();cloud.dirtyIds();assert.deepEqual([a,b].map(b=>s.memoCache.get('fingerprint:'+b.id)),values);
+});
+
+test('never-uploaded trees stay pending without exporting or hashing their histories',t=>{
+ const s=setup(t),b=s.branch(null,'New tree','codex',codexSample('/fixture',[['New conversation','Ready']])),cloud=new Cloud(s,()=>({}));
+ const build=s.buildExportGraph;s.buildExportGraph=()=>assert.fail('An unacknowledged tree needs no export');
+ assert.deepEqual(cloud.dirtyIds(),[b.id]);s.edit(b.id,{name:'Renamed before the first upload'});assert.deepEqual(cloud.dirtyIds(),[b.id]);
+ s.buildExportGraph=build;const cache=cloud.cache();cache.ack[b.id]=hash(JSON.stringify(treeSnapshot(s,b.id)));s.local(cloud.cacheKey,cache);assert.deepEqual(cloud.dirtyIds(),[]);
+ s.edit(b.id,{name:'A real change after acknowledgement'});assert.deepEqual(cloud.dirtyIds(),[b.id]);
 });

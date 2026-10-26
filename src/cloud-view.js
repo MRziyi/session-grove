@@ -104,7 +104,9 @@ export class CloudView {
         const transient = key => key==='exportGraph'||key==='cloud-snapshot-index'||key.startsWith('cloud-tree:');
         const existing = new Set([...this.store.memoCache.keys()].filter(transient));
         try {
-            return this.store.syncCollections().items.filter(i => this.store.memo('fingerprint:' + i.id, () => {
+            // A tree without a remote acknowledgement is dirty by definition.
+            // Do not construct or hash its conversation graph just to prove it.
+            return this.store.syncCollections().items.filter(i => !ack[i.id] || this.store.memo('fingerprint:' + i.id, () => {
                 const graph=treeSnapshot(this.store,i.id),entities=new Set(),revisions=new Set();
                 for(const [kind,key]of [['project','projects'],['branch','branches'],['node','nodes'],['layout','layouts'],['revision','revisions']])for(const value of graph[key]||[]){const id=JSON.parse(JSON.stringify(value.id));entities.add(kind+':'+id);if(kind==='revision')revisions.add(id);}
                 this.store.syncFingerprintDeps.set(i.id,{entities,revisions,retention:!!graph.retention});return graphFingerprint(graph);

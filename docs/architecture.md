@@ -37,7 +37,9 @@ SQLite, native activation choices, credentials, context-configuration backups an
 
 Parsing and record caches are bounded; immutable summaries and graph inputs are reused while valid. Reconstructable Git cache writes avoid a forced disk flush per file. Authoritative library writes and credential writes retain durability. Windows credential staging restricts an empty file's ACL before writing secrets, and permission checks read the current ACL.
 
-Sync status retains small per-tree digests and dependency IDs, rather than export graphs. Entity changes invalidate affected trees, shared revision dependencies and retention-mode transitions; instance availability alone does not change sync bytes. Disabled automatic upload avoids an unnecessary all-library fingerprint pass.
+Sync status retains small per-tree digests and dependency IDs, rather than export graphs. Trees without a remote acknowledgement are pending without an export/hash pass. Entity changes invalidate affected trees, shared revision dependencies and retention-mode transitions; instance availability alone does not change sync bytes. Disabled automatic upload avoids an unnecessary all-library fingerprint pass.
+
+Ancestor overlays reuse the last tree/layout/viewport calculation while reading an unchanged graph. Camera or tree changes refresh them; leaving the detail view clears their nodes, cached view and scroll callback. Search indexes use weak tree ownership and are built only when a query needs them.
 
 Trash reclamation scans retained history and organization baselines in a read-only SQLite worker snapshot. The main thread applies its plan only if the store and database have not changed and no transfer reader is active; otherwise reclamation is deferred. Recovery creation and native-copy protection precede reclamation. Progress distinguishes retention analysis, local record removal and sync-status updates.
 
