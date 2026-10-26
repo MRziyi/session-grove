@@ -65,8 +65,12 @@ try{
  const stamp=new Date(Date.now()-20*86400000).toISOString();store.put('branch',{...oldSession,updatedAt:stamp,contentUpdatedAt:stamp,createdAt:stamp});store.local('preferences',{projectFoldMode:'time',projectFoldDays:7});
  await call('Page.reload');await wait('document.querySelector(".project-directory [data-scope]")');await evaluate('document.querySelector(".project-directory [data-scope]").click()');await wait('document.querySelector("#session-list [data-older-projects]")');
  assert.equal(await evaluate(`!!document.querySelector('[data-project-group="${oldProject.id}"]')`),false);
+ await evaluate('document.querySelector("#session-list [data-older-projects]").scrollIntoView({behavior:"instant",block:"center"});document.querySelector(".project-directory-scroll").scrollTop=100000');
+ fs.writeFileSync('test-results/older-projects-divider.png',Buffer.from((await call('Page.captureScreenshot',{format:'png'})).data,'base64'));
  await evaluate('document.querySelector("#session-list [data-older-projects]").click()');
  await wait(`document.querySelector('[data-project-group="${oldProject.id}"] [data-item="${oldSession.id}"]')`);
  assert.equal(await evaluate(`!!document.querySelector('[data-project-group="${oldProject.id}"] [data-expand-project]')`),false,'older project contents expand with their section');
+ await evaluate('document.querySelector("#session-list [data-older-projects]").scrollIntoView({behavior:"instant",block:"center"})');
+ fs.writeFileSync('test-results/older-projects-expanded.png',Buffer.from((await call('Page.captureScreenshot',{format:'png'})).data,'base64'));
  assert.deepEqual(errors,[]);console.log('Browser passed: drag to project groups and empty sidebar projects, multi-selection, edge auto-scroll.');
 }finally{ws?.close();await closeBrowser(chrome);await new Promise(r=>app.close(r));fs.rmSync(root,{recursive:true,force:true});}

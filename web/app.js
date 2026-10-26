@@ -350,7 +350,8 @@ function sourceTags(item) {
 }
 
 function isOlder(items) { return olderProject(items,state.data.preferences); }
-function olderToggle(count) { return `<button type="button" class="older-projects-toggle" data-older-projects aria-expanded="${!!state.olderProjects}">${state.olderProjects?'▾':'▸'} ${t('Older projects')} <span>${count}</span></button>`; }
+function disclosureTriangle(expanded){return `<svg class="disclosure-triangle" viewBox="0 0 16 16" aria-hidden="true"><path d="${expanded?'M3 11h10L8 5Z':'M3 5h10l-5 6Z'}"/></svg>`;}
+function olderToggle(count) { return `<button type="button" class="older-projects-toggle" data-older-projects aria-expanded="${!!state.olderProjects}"><span class="older-projects-label">${t('Older projects')}</span><span class="older-projects-count">${count}</span>${disclosureTriangle(!!state.olderProjects)}</button>`; }
 function bindOlderProjects() { $$('[data-older-projects]').forEach(el=>el.onclick=()=>{state.olderProjects=!state.olderProjects;renderNavigation();renderList();if(state.tree)renderRail();}); }
 let projectObserver, listView = null, viewAnimation;
 function animateView(element) {
@@ -364,7 +365,7 @@ function projectRows(g) {
     return {limited,expanded,shown:limited&&!expanded?initial:g.items};
 }
 function foldButton(g,limited,expanded) {return limited?`<button class="show-project" data-expand-project="${esc(g.id)}">${t(expanded?'Show fewer':'Show all {count}',{count:g.items.length})}</button>`:'';}
-function projectHeading(g){const collapsed=state.collapsedProjects.has(g.id);return `<button type="button" class="project-chevron" data-toggle-project="${esc(g.id)}" aria-label="${esc(t(collapsed?'Expand':'Collapse')+' '+g.name)}" aria-expanded="${!collapsed}">${collapsed?'▾':'▴'}</button>${projectName(g.id,g.name==='Scheduled & background'?t(g.name):g.name)}`;}
+function projectHeading(g){const collapsed=state.collapsedProjects.has(g.id);return `<button type="button" class="project-chevron" data-toggle-project="${esc(g.id)}" aria-label="${esc(t(collapsed?'Expand':'Collapse')+' '+g.name)}" aria-expanded="${!collapsed}">${disclosureTriangle(!collapsed)}</button>${projectName(g.id,g.name==='Scheduled & background'?t(g.name):g.name)}`;}
 function bindProjectFolds() {
     $$('[data-expand-project]').forEach(el=>el.onclick=()=>{const id=el.dataset.expandProject;state.expandedProjects.has(id)?state.expandedProjects.delete(id):state.expandedProjects.add(id);renderList();if(state.tree)renderRail();});
     $$('[data-toggle-project]').forEach(el=>el.onclick=()=>{const id=el.dataset.toggleProject;state.collapsedProjects.has(id)?state.collapsedProjects.delete(id):state.collapsedProjects.add(id);renderList();if(state.tree)renderRail();});

@@ -1280,8 +1280,15 @@ dialog::backdrop {
 #session-list { padding-top:0; }
 .project-group { scroll-margin-top:0; }
 .project-group>h2 { border-radius:0; background:var(--surface,#fff); padding:6px 12px; gap:10px; }
-.older-projects-toggle { width:100%; display:flex; gap:8px; align-items:center; border:0; background:#e3eaf1; color:#516a80; text-align:left; padding:11px; border-radius:6px; font-size:12px; }
-.older-projects-toggle span { margin-left:auto; }
+.older-projects-toggle{width:100%;display:flex;gap:7px;align-items:center;min-width:0;border:0;background:transparent;color:#637b8d;padding:9px 0;border-radius:0;font-size:11px}
+.older-projects-toggle::before,.older-projects-toggle::after{content:'';height:1px;background:#ccd8e1;flex:1;min-width:8px}
+.older-projects-label{min-width:0;overflow:hidden;text-overflow:ellipsis}
+.older-projects-count{color:#8193a0;font-size:10px}
+.older-projects-toggle:hover{background:transparent;color:#315e7e}
+.older-projects-toggle:hover::before,.older-projects-toggle:hover::after{background:#9db2c2}
+.older-projects-toggle .disclosure-triangle{width:12px;height:12px}
+.project-directory .older-projects-toggle,.session-rail .older-projects-toggle{gap:4px;font-size:10px}
+.project-directory .older-projects-toggle::before,.session-rail .older-projects-toggle::before{display:none}
 .older-projects { margin-top:18px; }
 #dialog-content>details { margin:10px 0; padding:12px; border:1px solid var(--border); border-radius:8px; }
 #dialog-content>details>summary { cursor:pointer; font-weight:600; }
@@ -1528,7 +1535,8 @@ body{height:100dvh;display:flex;flex-direction:column;overflow:hidden}
 .transcription-end{pointer-events:auto}.transcription-end .editable-name{cursor:text;padding:0;margin:0;border:0}.transcription-end .editable-name:hover{outline:1px solid #91aaba;outline-offset:1px}
 
 #chat-selection-tag{flex-shrink:0;white-space:nowrap;margin-left:8px;padding:3px 7px;border:1px solid #d7b8e6;border-radius:12px;background:#f2e8f8;color:#743b91;font-size:11px;line-height:16px;cursor:pointer}#chat-selection-tag:hover{background:#e9d9f2}#chat-selection-tag:focus-visible{outline:2px solid #743b91;outline-offset:2px}
-.project-group>h2>.project-chevron{position:static;flex:0 0 12px;width:12px;height:14px;padding:0;border:0;border-radius:0;background:transparent;color:inherit;font-size:10px;line-height:14px;box-shadow:none}.project-chevron:focus-visible{outline:2px solid #4388b2;outline-offset:2px}
+.project-group>h2>.project-chevron{position:static;display:inline-flex;align-items:center;justify-content:center;flex:0 0 14px;width:14px;height:18px;padding:0;border:0;border-radius:0;background:transparent;color:inherit;box-shadow:none}.project-chevron:focus-visible{outline:2px solid #4388b2;outline-offset:2px}
+.disclosure-triangle{width:14px;height:14px;fill:currentColor;flex:none}
 
 /* Content headers carry search; the gray row carries counts and actions. */
 .list-heading{display:flex;align-items:center;gap:16px;min-height:46px;padding:9px 18px;background:#fff;border-bottom:1px solid #e4ebf0;min-width:0}
@@ -1571,7 +1579,7 @@ body{height:100dvh;display:flex;flex-direction:column;overflow:hidden}
 @media(max-width:760px){.layout.detail{grid-template-columns:var(--nav-width,120px) minmax(0,1fr)}.layout.detail #session-rail{display:none}.layout.detail #main{grid-column:2;min-width:0}}
 
 .project-group{margin:12px 0 16px;padding:0 10px 10px;background:#edf2f6;border:1px solid #dfe7ee;border-radius:12px}
-.project-group>h2{margin:0 -10px;padding:6px 12px;background:#edf2f6;border-radius:11px 11px 0 0}
+.project-group>h2{margin:0 -10px;padding:6px 12px;gap:7px;background:#edf2f6;border-radius:11px 11px 0 0}
 .project-group>h2::after{display:none}
 .project-group>.session-row{margin:6px 0;background:#fff}
 .project-group>.session-row.checked{background:#f2f6fa}
