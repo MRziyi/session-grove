@@ -27,8 +27,8 @@ try{
  await evaluate('document.querySelector(".project-directory [data-scope]").click()');await wait('document.querySelectorAll("#session-list [data-item]").length===30');
  assert.ok(await evaluate(`(()=>{const g=document.querySelector('.project-group'),r=g.querySelector('.session-row'),a=g.getBoundingClientRect(),b=r.getBoundingClientRect();return parseFloat(getComputedStyle(g).borderTopLeftRadius)>=10&&getComputedStyle(g).backgroundColor!==getComputedStyle(r).backgroundColor&&b.left>a.left&&b.right<a.right&&b.bottom<a.bottom})()`),'project categories wrap their session cards');
  fs.mkdirSync('test-results',{recursive:true});fs.writeFileSync('test-results/project-category-cards.png',Buffer.from((await call('Page.captureScreenshot',{format:'png'})).data,'base64'));
- // Disclosure takes its own space; the global rename editor extends 7px left of the title.
- assert.deepEqual(await evaluate(`(()=>{const h=document.querySelector('#session-list .project-group>h2'),arrow=h.querySelector('[data-toggle-project]').getBoundingClientRect(),title=h.querySelector('[data-name-kind]'),range=document.createRange();range.selectNodeContents(title);return {space:range.getBoundingClientRect().left-arrow.right>=8,direct:title.parentElement===h,compact:h.getBoundingClientRect().height<=32};})()`),{space:true,direct:true,compact:true});
+ // Compact disclosure spacing preserves a separate rename and fold target.
+ assert.deepEqual(await evaluate(`(()=>{const h=document.querySelector('#session-list .project-group>h2'),arrow=h.querySelector('[data-toggle-project]').getBoundingClientRect(),title=h.querySelector('[data-name-kind]'),range=document.createRange();range.selectNodeContents(title);return {space:range.getBoundingClientRect().left-arrow.right>=2&&range.getBoundingClientRect().left-arrow.right<=4,direct:title.parentElement===h,compact:h.getBoundingClientRect().height<=32};})()`),{space:true,direct:true,compact:true});
  assert.equal(await evaluate(`!!document.querySelector('.project-directory [data-scope="${empty.id}"]')`),false,'empty destinations stay hidden during normal browsing');
  const ids=await evaluate('[...document.querySelectorAll("#session-list [data-item]")].slice(0,2).map(e=>e.dataset.item)');
  await evaluate(`for(const id of ${JSON.stringify(ids)})document.querySelector('[data-select="'+id+'"]').click()`);
@@ -72,5 +72,17 @@ try{
  assert.equal(await evaluate(`!!document.querySelector('[data-project-group="${oldProject.id}"] [data-expand-project]')`),false,'older project contents expand with their section');
  await evaluate('document.querySelector("#session-list [data-older-projects]").scrollIntoView({behavior:"instant",block:"center"})');
  fs.writeFileSync('test-results/older-projects-expanded.png',Buffer.from((await call('Page.captureScreenshot',{format:'png'})).data,'base64'));
+ // A short directory hugs its contents and grows only when older projects open.
+ for(const project of store.all('project'))if(project.id!==oldProject.id)store.put('project',{...project,archived:true});
+ const compactProject=store.project('Recent work');
+ for(let i=0;i<3;i++){const b=store.branch(compactProject.id,'Work '+i,'codex',codexSample(root,[['Question','Answer']]));if(i<2)store.put('branch',{...b,updatedAt:stamp,contentUpdatedAt:stamp,createdAt:stamp});}
+ await call('Page.reload');await wait(`document.querySelector('.project-directory [data-scope="${compactProject.id}"]')`);await evaluate(`document.querySelector('.project-directory [data-scope="${compactProject.id}"]').click()`);await wait(`document.querySelector('[data-expand-project="${compactProject.id}"]')`);
+ const directoryHeight=await evaluate('document.querySelector(".project-directory-scroll").getBoundingClientRect().height');
+ assert.ok(await evaluate(`(()=>{const box=document.querySelector('.project-directory-scroll').getBoundingClientRect(),tag=document.querySelector('.project-directory .older-projects-pill').getBoundingClientRect(),button=document.querySelector('.project-directory [data-older-projects]').getBoundingClientRect();return Math.abs(tag.left+tag.width/2-box.left-box.width/2)<2&&box.bottom-button.bottom<12})()`),'the centered pill is followed immediately by the outline bottom');
+ fs.writeFileSync('test-results/project-sidebar-compact.png',Buffer.from((await call('Page.captureScreenshot',{format:'png'})).data,'base64'));
+ await evaluate('document.querySelector(".project-directory [data-older-projects]").click()');assert.ok(await evaluate('document.querySelector(".project-directory-scroll").getBoundingClientRect().height')>directoryHeight+20,'opening older projects grows a short directory');
+ fs.writeFileSync('test-results/project-sidebar-expanded.png',Buffer.from((await call('Page.captureScreenshot',{format:'png'})).data,'base64'));
+ await evaluate('document.querySelector(".project-directory [data-older-projects]").click()');assert.ok(Math.abs(await evaluate('document.querySelector(".project-directory-scroll").getBoundingClientRect().height')-directoryHeight)<2,'closing older projects shrinks the outline again');
+ await evaluate(`document.querySelector('[data-expand-project="${compactProject.id}"]').click()`);assert.equal(await evaluate(`document.querySelectorAll('[data-project-group="${compactProject.id}"] [data-item]').length`),3);
  assert.deepEqual(errors,[]);console.log('Browser passed: drag to project groups and empty sidebar projects, multi-selection, edge auto-scroll.');
 }finally{ws?.close();await closeBrowser(chrome);await new Promise(r=>app.close(r));fs.rmSync(root,{recursive:true,force:true});}

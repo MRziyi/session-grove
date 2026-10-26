@@ -7,8 +7,10 @@ export function installInlineNames({describe,saved,onError,translate=x=>x}) {
     const position=()=>{
         if(!current)return;if(!current.anchor.isConnected){close();return;}
         const range=document.createRange();range.selectNodeContents(current.anchor);const r=range.getBoundingClientRect(),style=getComputedStyle(current.anchor),width=Math.min(Math.max(r.width+42,150),innerWidth-16);
-        current.input.style.font=style.font;current.input.style.letterSpacing=style.letterSpacing;current.input.style.lineHeight=r.height+'px';
-        Object.assign(current.box.style,{left:Math.max(8,Math.min(r.left-7,innerWidth-width-8))+'px',top:Math.max(4,r.top-4)+'px',width:width+'px',height:(r.height+8)+'px',boxSizing:'border-box'});
+        const disclosure=current.anchor.closest('.project-group>h2')?.querySelector('[data-toggle-project]');
+        const inset=disclosure?Math.max(0,Math.min(6,r.left-disclosure.getBoundingClientRect().right-2)):6;
+        current.input.style.font=style.font;current.input.style.letterSpacing=style.letterSpacing;current.input.style.lineHeight=r.height+'px';current.input.style.paddingLeft=inset+'px';
+        Object.assign(current.box.style,{left:Math.max(8,Math.min(r.left-inset-1,innerWidth-width-8))+'px',top:Math.max(4,r.top-4)+'px',width:width+'px',height:(r.height+8)+'px',boxSizing:'border-box'});
     };
     const begin=anchor=>{
         clearClick();if(current?.saving)return;close();const edit=describe(anchor);if(!edit)return;

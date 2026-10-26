@@ -351,7 +351,7 @@ function sourceTags(item) {
 
 function isOlder(items) { return olderProject(items,state.data.preferences); }
 function disclosureTriangle(expanded){return `<svg class="disclosure-triangle" viewBox="0 0 16 16" aria-hidden="true"><path d="${expanded?'M3 11h10L8 5Z':'M3 5h10l-5 6Z'}"/></svg>`;}
-function olderToggle(count) { return `<button type="button" class="older-projects-toggle" data-older-projects aria-expanded="${!!state.olderProjects}"><span class="older-projects-label">${t('Older projects')}</span><span class="older-projects-count">${count}</span>${disclosureTriangle(!!state.olderProjects)}</button>`; }
+function olderToggle(count) { return `<button type="button" class="older-projects-toggle" data-older-projects aria-expanded="${!!state.olderProjects}"><span class="older-projects-pill"><span class="older-projects-label">${t('Older projects')}</span><span class="older-projects-count">${count}</span>${disclosureTriangle(!!state.olderProjects)}</span></button>`; }
 function bindOlderProjects() { $$('[data-older-projects]').forEach(el=>el.onclick=()=>{state.olderProjects=!state.olderProjects;renderNavigation();renderList();if(state.tree)renderRail();}); }
 let projectObserver, listView = null, viewAnimation;
 function animateView(element) {

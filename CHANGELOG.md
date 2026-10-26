@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Further tighten category title and Show-control spacing, center the sidebar's Older projects toggle in a pill, and let the Projects outline grow with its visible contents instead of filling unused navigation space.
 - Enlarge category disclosure triangles and tighten title spacing; present Older projects as an expandable divider above its project cards in lists and navigation.
 - Restore right-aligned user messages and left-aligned agent replies while keeping selection checkboxes on the right. Present project categories as rounded containers around their session cards, with matching expanded and collapsed headers.
 - Move list search into the title row; add whole-tree detail search with path-aware results and direct message navigation. Put tree-wide counts in the detail title row and transcription token/context counts below it; align message checkboxes on the right.
