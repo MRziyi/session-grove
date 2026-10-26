@@ -14,18 +14,17 @@ For research, writing and software projects that outgrow a flat chat list.
 
 A project can span many conversations: an initial brief, competing approaches, a draft and several revisions. Grove brings them together so you can find the context behind an idea without piecing it together from a list of chat titles.
 
-- **Organize by project.** Keep Claude and Codex conversations in one library, with search and editable titles. Collapse project groups and drag sessions onto open or collapsed groups.
-- **Choose what counts as recent.** Sort by conversation activity, include manual edits (the default), or include automatic organization in Settings.
-- **Explore conversation trees.** See where paths share history and where they diverge. Search the whole tree to jump to a message, or follow pinned ancestors while browsing a large branch.
+- **Organize by project.** Keep Claude and Codex conversations in one library, with search and editable titles.
+- **Explore conversation trees.** See where paths share history and where they diverge. Select a node to read its conversation.
 - **Name meaningful stretches of work.** Turn a long transcript into recognizable sections such as “Research questions”, “Compare approaches” or “First prototype”.
 
 ![A project library containing Claude and Codex conversations](docs/images/library.png)
 
 ## Continue from the context you want
 
-Select a node and **Activate** it to start a continuation from that point while keeping existing branches. Preview the context size and choose a working folder before returning to your agent.
+Try a different approach from an earlier point without losing the original conversation. **Activate** brings the selected context back to your agent so you can continue working.
 
-You can also continue in another tool with **Activate as**, or choose how much recorded history to carry forward using the compaction controls.
+You can also continue in another tool with **Activate as**, and choose how much earlier context to carry into the continuation.
 
 ![Choose a starting point and preview the context before continuing](docs/images/activation.png)
 
@@ -34,8 +33,6 @@ Grove manages conversation history. You continue chatting and working on files i
 ## Spend less time organizing
 
 Optional **Smart Organization** helps name sessions and branch points and sort new conversations into projects. You can edit names yourself, and supported Codex clients can share transcription titles with Grove.
-
-Give active client sessions in a tree a shared title prefix, with a preview before applying it. Session and node names stay independent.
 
 Connect your own OpenAI API key in Settings to enable these features. Naming sends selected conversation text to OpenAI; an API key is not required to browse or organize your library manually.
 

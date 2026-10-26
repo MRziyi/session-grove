@@ -9,10 +9,15 @@ grove.json                         format and schema marker
 trash.json                         deletion identities
 trees/<hash-of-tree-id>/index.json  project/session listing metadata
 trees/<hash-of-tree-id>/graph.json  branches, nodes and revision references
+trees/<hash-of-tree-id>/graph/<content-hash>.jsonl  large graph metadata parts
 trees/<hash-of-tree-id>/records/000000.jsonl
 ```
 
 Record files contain `[contentHash, originalRecordText]` JSONL. LF separates records; Unicode line/paragraph separators inside strings remain content. Files target 8 MiB and must remain below 95 MiB. Metadata is separate so ordinary renames do not rewrite conversation bodies. Git handles compression/delta encoding.
+
+Graphs that fit the file limit retain the single-file representation. Larger graphs use a small `graph.json` manifest and content-addressed JSONL metadata parts targeting 8 MiB. Each part records field/row order, byte length, row count and a SHA-256 checksum. Reassembly preserves the original canonical graph digest and every revision reference. Parts are written before the manifest is atomically replaced; superseded working parts can then be pruned. Committed parts remain available for offline Discard even after a failed Push replaces the working cache.
+
+Repositories containing graph parts use container schema 2; the graph itself retains its existing schema. Update Grove on every device before syncing such a repository. The current reader accepts both container schemas. The per-file limit remains 95 MiB, including individual graph rows and native record lines; oversize errors identify the file or row instead of silently dropping history.
 
 The data repository uses `main`. Normal fast-forward pushes publish snapshots; Grove does not force-push or rewrite remote history. Keep the repository private because it contains readable conversation text. Native files, activation choices, API keys, SQLite and recovery copies are device-local.
 

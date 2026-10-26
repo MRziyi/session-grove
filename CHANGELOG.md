@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Split oversized Git graph metadata into verified, content-addressed JSONL parts while preserving canonical graph hashes and every history reference. Read existing single-file graphs and recover sharded baselines from committed local Git objects for offline Discard; use container schema 2 only when parts are present.
 ## 1.2.1
 
 - Wait for the refreshed pending list before starting another Discard in browser checks; reproduce slow refresh explicitly and retain all native-file and activation invariants.

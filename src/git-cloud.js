@@ -10,12 +10,13 @@ import { applyTrashState, deletedIds, trashState } from './trash.js';
 import { changeSnapshot, sessionChanges, commitMessage } from './session-changes.js';
 import { cloudProjectId } from './inbox.js';
 import {organizationUndoKey,currentOrganization,organizationSnapshot,organizationSignature,hasOrganizationChanges} from './organization-undo.js';
+import {GIT_FILE_BYTES,GRAPH_PART_BYTES,isGraphManifest,writeGraphParts,graphPartsReader} from './git-graph.js';
 const digest = value => hash(JSON.stringify(value));
 
 // Git owns history, content deduplication, packing and atomic ref publication.
 // Grove owns graph semantics, modification clocks and local materialization.
 export class GitCloud extends CloudView {
-    constructor(store, readConfig) { super(store, readConfig); this.provider = 'git';store.localArchivesOnly=true;store.invalidate(); }
+    constructor(store, readConfig, {graphSplitBytes=GIT_FILE_BYTES,graphPartBytes=GRAPH_PART_BYTES}={}) { super(store, readConfig); this.provider = 'git';this.graphSplitBytes=graphSplitBytes;this.graphPartBytes=graphPartBytes;store.localArchivesOnly=true;store.invalidate(); }
     useSavedCache() {
         this.cacheKey ||= 'cloud:git:' + hash(this.readConfig().url || '');
     }
@@ -49,15 +50,39 @@ export class GitCloud extends CloudView {
         const file = this.file(name);
         if (!fs.existsSync(file)) return fallback;
         assert(fs.statSync(file).size <= 128 * 1024 * 1024, 'Git session file exceeds size limit.');
-        return JSON.parse(fs.readFileSync(file, 'utf8'));
+        const value=JSON.parse(fs.readFileSync(file,'utf8'));
+        if(!name.endsWith('/graph.json')||!isGraphManifest(value))return value;
+        const reader=graphPartsReader(value),directory=name.slice(0,-'graph.json'.length)+'graph/';
+        for(const part of value.parts){const partFile=this.file(directory+part.hash+'.jsonl');assert(fs.existsSync(partFile),'Missing Git graph part.');assert(fs.statSync(partFile).size===part.bytes,'Git graph part size mismatch.');reader.append(part,fs.readFileSync(partFile,'utf8'));}
+        return reader.finish();
     }
     write(name, value) {
+        if(name.endsWith('/graph.json')&&value&&typeof value==='object'&&!isGraphManifest(value))return this.writeGraph(name,value);
+        return this.writeRaw(name,value);
+    }
+    writeRaw(name,value){
         const file = this.file(name); fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
         const text = typeof value === 'string' ? value : JSON.stringify(value, null, 2) + '\n';
-        assert(Buffer.byteLength(text) < 95 * 1024 * 1024, 'Git data file exceeds the 95 MiB limit.');
+        const bytes=Buffer.byteLength(text);assert(bytes<GIT_FILE_BYTES, 'Git data file exceeds the 95 MiB limit: '+name+' ('+(bytes/1048576).toFixed(2)+' MiB).');
         // This checkout is reconstructable from SQLite or the fetched commit.
         // Keep atomic replacement without forcing a disk flush for every cache file.
-        if (!fs.existsSync(file) || fs.readFileSync(file, 'utf8') !== text) atomic(file, text,{durable:false});
+        if (!fs.existsSync(file) || fs.statSync(file).size!==bytes || fs.readFileSync(file, 'utf8') !== text) atomic(file, text,{durable:false});
+    }
+    writeGraph(name,graph){
+        assert(Number.isSafeInteger(this.graphSplitBytes)&&this.graphSplitBytes>0&&this.graphSplitBytes<=GIT_FILE_BYTES,'Invalid Git graph split threshold.');
+        const compact=JSON.stringify(graph)+'\n',size=Buffer.byteLength(compact),directory=name.slice(0,-'graph.json'.length)+'graph';
+        if(size<this.graphSplitBytes){
+            const pretty=size<GRAPH_PART_BYTES?JSON.stringify(graph,null,2)+'\n':compact;
+            this.writeRaw(name,Buffer.byteLength(pretty)<GIT_FILE_BYTES?pretty:compact);
+            fs.rmSync(this.file(directory),{recursive:true,force:true});return;
+        }
+        const manifest=writeGraphParts(graph,(part,text)=>this.writeRaw(directory+'/'+part.hash+'.jsonl',text),{targetBytes:this.graphPartBytes});
+        // Parts are immutable and content addressed; replace the manifest last.
+        this.writeRaw(name,manifest);const keep=new Set(manifest.parts.map(p=>p.hash+'.jsonl'));
+        if(fs.existsSync(this.file(directory)))for(const file of fs.readdirSync(this.file(directory)))if(/^[a-f0-9]{64}\.jsonl$/.test(file)&&!keep.has(file))fs.rmSync(this.file(directory+'/'+file));
+    }
+    hasGraphParts(){
+        const directory=this.file('trees');return fs.existsSync(directory)&&fs.readdirSync(directory).some(id=>/^[a-f0-9]{64}$/.test(id)&&fs.existsSync(this.file('trees/'+id+'/graph')));
     }
     folder(id) { return 'trees/' + hash(id); }
     *records(id) {
@@ -102,7 +127,7 @@ export class GitCloud extends CloudView {
     entries(){return [...this.entryIterator()];}
     async loadDirectory() {
         const format = this.read('grove.json');
-        assert(format?.format === 'session-grove-git' && format.schema === 1, 'This repository is not a supported Grove data repository.');
+        assert(format?.format === 'session-grove-git' && [1,2].includes(format.schema), 'Unsupported Grove Git data format. Update Grove on every device.');
         const projects = new Map(), indexes = {}, archiveEntries=[];let completed=0;
         for (const entry of this.entryIterator()) {
             const { project, ...item } = entry;
@@ -191,6 +216,22 @@ export class GitCloud extends CloudView {
         if(graph&&cache.loaded?.[id]?.includes(digest(graph))&&cache.baselines?.[id]&&digest(changeSnapshot(graph))===digest(cache.baselines[id]))return graph;
         return this.undoBaseline(id);
     }
+    async committedGraph(remote,commit,folder){
+        const env={GIT_NO_LAZY_FETCH:'1'};
+        const readBlob=async file=>{
+            const tree=await remote.run(['ls-tree','-z','--full-tree',commit,'--',file],{accepted:[0,128],env});
+            if(tree.code)return null;
+            const entry=tree.stdout.split('\0').map(line=>/^100644 blob ([a-f0-9]{40,64})\t(.+)$/.exec(line)).find(row=>row?.[2]===file);
+            if(!entry)return null;
+            const result=await remote.run(['cat-file','blob',entry[1]],{accepted:[0,128],env,maxOutputBytes:128*1024*1024,trimOutput:false});
+            return result.code?null:result.stdout;
+        };
+        const text=await readBlob(folder+'/graph.json');if(text===null)return null;
+        const value=JSON.parse(text);if(!isGraphManifest(value))return value;
+        const reader=graphPartsReader(value);
+        for(const part of value.parts){const raw=await readBlob(folder+'/graph/'+part.hash+'.jsonl');assert(raw!==null,'Missing committed Git graph part.');reader.append(part,raw);}
+        return reader.finish();
+    }
     async undoBaseline(id) {
         this.useSavedCache();const ack=this.cache().ack[id];
         if(!ack)return null;
@@ -206,17 +247,10 @@ export class GitCloud extends CloudView {
         const env={GIT_NO_LAZY_FETCH:'1'},head=this.cache().gitHead;
         const history=await remote.run(['log','--all','--max-count=64','--format=%H','--',file],{accepted:[0,128],env});
         for(const commit of new Set([head,...history.stdout.split(/\s+/)].filter(v=>/^[a-f0-9]{40,64}$/.test(v||'')))){
-            // Resolve a literal tree entry before reading its blob. In particular,
-            // do not pass a commit:path argument through platform path handling.
-            const tree=await remote.run(['ls-tree','-z','--full-tree',commit,'--',file],{accepted:[0,128],env});
-            if(tree.code)continue;
-            const entry=tree.stdout.split('\0').map(line=>/^100644 blob ([a-f0-9]{40,64})\t(.+)$/.exec(line)).find(row=>row?.[2]===file);
-            if(!entry)continue;
-            // Historical graphs have the same size allowance as cached graphs;
-            // the generic command limit is too small for large session trees.
-            const result=await remote.run(['cat-file','blob',entry[1]],{accepted:[0,128],env,maxOutputBytes:128*1024*1024});
-            if(result.code)continue;
-            try{const candidate=JSON.parse(result.stdout);if(digest(candidate)===ack){this.rememberBaseline(id,candidate);return candidate;}}catch{}
+            // Resolve literal entries and all verified parts from the same
+            // commit, even if a failed Push replaced/pruned the working files.
+            try{const candidate=await this.committedGraph(remote,commit,this.folder(id));if(candidate&&digest(candidate)===ack){this.rememberBaseline(id,candidate);return candidate;}}
+            catch(error){if(error.code==='GIT_OUTPUT_LIMIT'||error.name==='AbortError'||error.gitExitCode!==undefined)throw error;}
         }
         // Old libraries can lack the acknowledged graph while a later Pull kept
         // newer local edits. Fall back only to a fully imported remote graph
@@ -252,7 +286,6 @@ export class GitCloud extends CloudView {
         const items = new Map(this.store.syncCollections().items.map(i => [i.id, i]));
         const pending = structuredClone(this.store.local('trashPending') || []);
         const state = { schema: 1, cleanupComplete: true, events: [...new Map([...trashState(this.store).events, ...pending].map(e => [e.id, e])).values()] };
-        this.write('grove.json', { format: 'session-grove-git', schema: 1 });
         this.write('trash.json', state);
         fs.mkdirSync(this.file('trees'), { recursive: true });
         // Retired roots and trashed paths disappear from HEAD; Git retains old commits.
@@ -279,6 +312,7 @@ export class GitCloud extends CloudView {
             if (!graph) continue;
             const item = items.get(id); if (!item) continue; const projectId = cloudProjectId(item.projectId);
             const entry = { ...item, projectId, sessions: item.sessions.map(s => ({ ...s, active: false })), ref: digest(graph), ancestors: [], project: graph.projects.find(p => p.id === projectId) };
+            this.report('Preparing Git commit',completed,snapshots.size,Date.now(),item.name);await yieldToLocal();
             this.write(this.folder(id) + '/graph.json', graph);
             this.write(this.folder(id) + '/index.json', entry);
             const store = this.store;
@@ -286,6 +320,7 @@ export class GitCloud extends CloudView {
             this.report('Preparing Git commit', ++completed, snapshots.size, Date.now(), item.name);
             await yieldToLocal();
         }
+        this.write('grove.json',{format:'session-grove-git',schema:this.hasGraphParts()?2:1});
         this.report('Pushing Git commit');
         await remote.commitAndPush(archivedRemovals.length&&!changes.length?'Grove: keep previous archives local':commitMessage(changes));
         // A failed/non-fast-forward push never clears pending work or acknowledges data.

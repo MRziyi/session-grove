@@ -67,6 +67,42 @@ test('Git import preserves Unicode JSON strings and original conversation dates 
 });
 const pull = async d => { d.auto.startTransfer('pull'); return d.auto.syncJob; };
 
+test('sharded graph metadata roundtrips and offline Discard reads committed parts after cache replacement',async t=>{
+ const e=fixture(t),a=e.device('parts-writer'),b=e.device('parts-reader'),session=branch(a,'Large metadata');
+ a.cloud.graphSplitBytes=4096;a.cloud.graphPartBytes=2048;
+ let raw=a.store.raw(session.head);
+ for(let i=0;i<12;i++){raw+=codexTurn('Unicode \u2028 question '+i,'Answer \u2029 '+i).map(v=>JSON.stringify(v)+'\n').join('');a.store.ingest(session.id,raw,a.store.get('branch',session.id).head,{});}
+ const {treeSnapshot}=await import('../src/cloud-view.js'),expected=treeSnapshot(a.store,session.id),ref=hash(JSON.stringify(expected));
+ await push(a);const file=a.cloud.folder(session.id)+'/graph.json',manifest=JSON.parse(fs.readFileSync(a.cloud.file(file),'utf8'));
+ assert.equal(manifest.format,'session-grove-graph-parts');assert.ok(manifest.parts.length>1);assert.equal(a.cloud.read('grove.json').schema,2);
+ execFileSync('git',['--git-dir='+e.url,'config','uploadpack.allowFilter','true']);execFileSync('git',['--git-dir='+e.url,'config','uploadpack.allowAnySHA1InWant','true']);await new GitRemote(path.join(e.root,'parts-verify'),e.url).verify();
+ assert.equal(hash(JSON.stringify(a.cloud.read(file))),ref);assert.equal(a.cloud.read(a.cloud.folder(session.id)+'/index.json').ref,ref);
+ await pull(b);assert.equal(b.store.raw(b.store.get('branch',session.id).head),raw);assert.deepEqual(b.cloud.dirtyIds(),[]);
+ a.store.local(a.cloud.undoKey(session.id),null);a.store.edit(session.id,{name:'Temporary mistake'});
+ a.cloud.write(file,{schema:3,branches:[],projects:[],revisions:[],nodes:[],layouts:[]});assert.equal(fs.existsSync(a.cloud.file(a.cloud.folder(session.id)+'/graph')),false);
+ const remote=a.cloud.connection.remote,run=remote.run.bind(remote);remote.run=(args,options)=>{assert.ok(!['fetch','push','ls-remote'].includes(args[0]),'offline recovery never fetches');return run(args,options);};
+ assert.equal(hash(JSON.stringify(await a.cloud.undoBaseline(session.id))),ref);
+ const {discardChanges}=await import('../src/discard-changes.js');await discardChanges(a.store,a.cloud,null,a.cloud.pendingItems());assert.equal(a.store.get('branch',session.id).name,'Large metadata');assert.equal(a.store.raw(a.store.get('branch',session.id).head),raw);
+ remote.run=run;a.store.edit(session.id,{name:'Compact transport again'});a.cloud.graphSplitBytes=95*1024*1024;await push(a);
+ assert.equal(a.cloud.read('grove.json').schema,1);assert.equal(fs.existsSync(a.cloud.file(a.cloud.folder(session.id)+'/graph')),false);await pull(b);assert.equal(b.store.get('branch',session.id).name,'Compact transport again');
+});
+
+test('a corrupted graph part is rejected before importing conversation history',async t=>{
+ const e=fixture(t),a=e.device('corrupt-parts-writer'),b=e.device('corrupt-parts-reader'),session=branch(a);a.cloud.graphSplitBytes=256;a.cloud.graphPartBytes=512;await push(a);
+ const manifest=JSON.parse(fs.readFileSync(a.cloud.file(a.cloud.folder(session.id)+'/graph.json'),'utf8')),file=a.cloud.file(a.cloud.folder(session.id)+'/graph/'+manifest.parts[0].hash+'.jsonl'),original=fs.readFileSync(file,'utf8');
+ fs.writeFileSync(file,original.replace('schema','schemb').replace('project','projecu'));if(fs.readFileSync(file,'utf8')===original)fs.writeFileSync(file,original.slice(0,-2)+' '+original.slice(-1));
+ await a.cloud.connection.remote.commitAndPush('Synthetic corrupted graph part');await b.cloud.catalog();
+ await assert.rejects(b.cloud.hydrate(session.id),/graph part integrity/);assert.equal(b.store.all('branch').length,0);assert.equal(b.store.db.prepare('SELECT count(*) n FROM objects').get().n,0);
+ fs.writeFileSync(file,original);await a.cloud.connection.remote.commitAndPush('Repair synthetic graph part');await b.cloud.catalog();await b.cloud.hydrate(session.id);assert.ok(b.store.find('branch',session.id));
+});
+
+test('an interrupted first graph-part write retries without losing local history',async t=>{
+ const e=fixture(t),a=e.device('interrupted-parts'),session=branch(a),raw=a.store.raw(session.head);a.cloud.graphSplitBytes=256;a.cloud.graphPartBytes=256;
+ const write=a.cloud.writeRaw.bind(a.cloud);let parts=0;a.cloud.writeRaw=(name,value)=>{if(name.includes('/graph/')&&++parts===2)throw Error('Synthetic interrupted graph write');return write(name,value);};
+ await assert.rejects(push(a),/interrupted graph write/);assert.equal(a.store.raw(session.head),raw);assert.ok(a.cloud.dirtyIds().includes(session.id));
+ a.cloud.writeRaw=write;await push(a);assert.deepEqual(a.cloud.dirtyIds(),[]);assert.equal(a.store.raw(session.head),raw);assert.equal(a.cloud.read('grove.json').schema,2);
+});
+
 test('Git roundtrip, metadata-only rename and no-op Push preserve bodies and history', async t => {
     const e = fixture(t), a = e.device('a'), b = e.device('b'), session = branch(a);
     assert.equal(a.auto.status().unlocked, true);
