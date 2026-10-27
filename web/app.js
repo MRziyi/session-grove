@@ -103,7 +103,9 @@ function renderStorageStatus(){
 }
 function focusSettingsCard(id){
     const card=document.getElementById(id);if(!card||!$('#dialog-content').contains(card))return;
-    card.scrollIntoView({block:'center',behavior:'instant'});card.classList.remove('restored-highlight');void card.offsetWidth;card.classList.add('restored-highlight');card.addEventListener('animationend',()=>card.classList.remove('restored-highlight'),{once:true});
+    card.scrollIntoView({block:'center',behavior:'instant'});card.classList.remove('restored-highlight');void card.offsetWidth;card.classList.add('restored-highlight');
+    const finish=()=>{card.classList.remove('restored-highlight');clearTimeout(timer);card.removeEventListener('animationend',finish);};
+    const timer=setTimeout(finish,1700);card.addEventListener('animationend',finish,{once:true});
 }
 async function api(path, method = 'GET', body, retried = false, options = {}) {
     let r;
@@ -1089,7 +1091,7 @@ async function settings(options = {}) {
           </section>
           <section class="settings-card" id="storage-settings"><div class="settings-section-heading"><h3>${t('Storage')}</h3><span id="storage-total" class="context-limit" role="status">${t('Scanning…')}</span><button type="button" id="refresh-storage" aria-label="${t('Refresh storage usage')}">↻</button></div><dl id="storage-usage" class="storage-breakdown"></dl><div class="storage-actions"><button type="button" id="optimize-storage">${t('Optimize storage')}</button><button type="button" id="cleanup-storage" disabled>${t('Review cleanup')}</button><span id="storage-state" role="status" class="setting-state"></span></div></section>`, null);
         $('#dialog-cancel').textContent = t('Close');
-        if(options.focusSync){focusSettingsCard('git-settings');$('#git-settings input').focus();}else if(options.focusCard)focusSettingsCard(options.focusCard);
+        if(options.focusSync){focusSettingsCard('git-settings');$('#git-settings input').focus();}else if(options.focusCard==='storage-settings')$('#storage-settings').scrollIntoView({block:'center',behavior:'instant'});else if(options.focusCard)focusSettingsCard(options.focusCard);
         const busy = async (button, fn) => { if (working) return; working = true; button.disabled = true; const original = button.textContent; button.textContent = t(['verify-connection','save-intelligence-key'].includes(button.id)?'Verifying connection…':'Working…'); const error=$(['verify-connection'].includes(button.id)?'#git-settings-error':['save-intelligence-key','remove-intelligence-key'].includes(button.id)?'#key-settings-error':'#dialog-error');error.textContent = '';
             try { await fn(); } catch(e) { error.textContent = e.message; } finally { working = false; renderCloudStatus(); if (button.isConnected) { button.disabled = false; button.textContent = original; } } };
         const saveSmart=async body=>{state.data.intelligence=await api('/settings/intelligence','POST',body);if('apiKey' in body||body.removeKey)await settings(options);else renderIntelligence();renderCloudStatus();};
@@ -1106,15 +1108,15 @@ async function settings(options = {}) {
                 catch(error){contextStatus.textContent=error.message;if(window.value===(values.window==null?'':String(values.window)))window.value=contexts[agent].window??'';if(agent==='codex'&&compact.value===(values.compactAt==null?'':String(values.compactAt)))compact.value=contexts[agent].compactAt??'';window._groveSelect?.update();compact?._groveSelect?.update();throw error;}
             });
         }
-        let usage;
+        let usage,storageFocusPending=options.focusCard==='storage-settings';
         const storageModal=modalVersion;
         const loadStorage=async()=>{
             const total=$('#storage-total'),badge=$('#storage-state'),refreshButton=$('#refresh-storage');refreshButton.disabled=true;
             try{const value=await api('/storage');if(modalVersion!==storageModal)return;usage=value;state.data.storage={needsOptimization:value.needsOptimization};renderCloudStatus();total.textContent=bytesLabel(value.totalBytes);
                 const labels={database:'Local library',git:'Git cache',backups:'Maintenance backups',temporary:'Temporary cache',trash:'Trash',other:'Other local files'};
                 $('#storage-usage').innerHTML=Object.entries(labels).filter(([key])=>value.categories[key]||key!=='other').map(([key,label])=>`<div><dt>${t(label)}</dt><dd>${bytesLabel(value.categories[key])}</dd></div>`).join('');
-                badge.textContent=t(value.needsOptimization?'Optimization available':'Up to date');badge.dataset.state=value.needsOptimization?'warning':'on';$('#cleanup-storage').disabled=!value.cleanup.bytes;if(options.focusCard==='storage-settings')$('#storage-settings').scrollIntoView({block:'nearest',behavior:'instant'});
-            }catch(error){if(modalVersion===storageModal){total.textContent=t('Unavailable');badge.textContent=error.message;badge.dataset.state='error';}}
+                badge.textContent=t(value.needsOptimization?'Optimization available':'Up to date');badge.dataset.state=value.needsOptimization?'warning':'on';$('#cleanup-storage').disabled=!value.cleanup.bytes;if(storageFocusPending){storageFocusPending=false;focusSettingsCard('storage-settings');}
+            }catch(error){if(modalVersion===storageModal){total.textContent=t('Unavailable');badge.textContent=error.message;badge.dataset.state='error';if(storageFocusPending){storageFocusPending=false;focusSettingsCard('storage-settings');}}}
             finally{if(modalVersion===storageModal)refreshButton.disabled=false;}
         };
         $('#refresh-storage').onclick=loadStorage;

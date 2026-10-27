@@ -20,7 +20,7 @@ Activity-date settings affect display ordering, not synchronization clocks. The 
 
 ## Storage maintenance
 
-Existing libraries with legacy large values show an actionable storage status in the top banner. Selecting it opens Settings at the Storage card and highlights that card twice. New writes already use compact storage; heavy migration never starts automatically at login. Settings → Storage reports local library, Git cache, maintenance backups, temporary cache, Trash and other file sizes. Scans run asynchronously only when requested, rather than during status polling. Sizes cover local file contents, not remote repository allocation.
+Existing libraries with legacy large values show an actionable storage status in the top banner. Selecting it opens Settings at the Storage card and highlights that card twice (a temporary static highlight when reduced motion is enabled). New writes already use compact storage; heavy migration never starts automatically at login. Settings → Storage reports local library, Git cache, maintenance backups, temporary cache, Trash and other file sizes. Scans run asynchronously only when requested, rather than during status polling. Sizes cover local file contents, not remote repository allocation.
 
 Settings → Storage → **Optimize storage** performs lossless library packing in a worker, reports phases in the task panel, and reclaims free SQLite pages. Browsing remains available; writes and transfers wait until maintenance finishes. Node.js 24 or later is required to read the packed library. A verified temporary database backup is retained on failure and removed after successful integrity checks. Repeating optimization does not create another full backup or repack unchanged data.
 
