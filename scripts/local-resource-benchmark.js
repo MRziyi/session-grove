@@ -7,7 +7,7 @@ import {DatabaseSync,backup} from 'node:sqlite';
 import {pathToFileURL,fileURLToPath} from 'node:url';
 const args=process.argv.slice(2),option=name=>{const i=args.indexOf(name);return i<0?null:args[i+1];};
 const library=option('--library');
-if(!library)throw Error('Usage: node --expose-gc scripts/local-resource-benchmark.js --library PATH [--source PATH]');
+if(!library)throw Error('Usage: node --expose-gc scripts/local-resource-benchmark.js --library PATH [--source PATH] [--cached-sync]');
 const source=path.resolve(option('--source')||fileURLToPath(new URL('..',import.meta.url)));
 const {Store}=await import(pathToFileURL(path.join(source,'src/store.js')));
 const {GitCloud}=await import(pathToFileURL(path.join(source,'src/git-cloud.js')));
@@ -28,7 +28,8 @@ try{
     }
     store=measure('open',()=>new Store(root));
     const database={integrity:store.db.prepare('PRAGMA quick_check').get().quick_check,pages:store.db.prepare('PRAGMA page_count').get().page_count,pageSize:store.db.prepare('PRAGMA page_size').get().page_size,freePages:store.db.prepare('PRAGMA freelist_count').get().freelist_count,branches:store.all('branch').length,revisions:store.db.prepare("SELECT count(*) n FROM entities WHERE kind='revision'").get().n,objects:store.db.prepare('SELECT count(*) n FROM objects').get().n};
-    const cloud=new GitCloud(store,()=>({}));
+    const config=args.includes('--cached-sync')?JSON.parse(fs.readFileSync(path.join(path.resolve(library),'git-sync.json'),'utf8')):{};
+    const cloud=new GitCloud(store,()=>config);
     measure('collections',()=>store.collections());
     measure('cold fingerprints',()=>cloud.dirtyIds());
     measure('200 unchanged status/list cycles',()=>{for(let i=0;i<200;i++){cloud.dirtyIds();store.snapshot();store.listing('active:codex','');}});
@@ -37,6 +38,8 @@ try{
         measure('tree '+index+' cold ('+item.sessionIds.length+' paths)',()=>store.treeGraph(item.id));
         measure('tree '+index+' warm',()=>store.treeGraph(item.id));
     }
+    for(const item of trees)measure('tree source ('+item.sessionIds.length+' paths)',()=>store.sourceInfo(item.id));
+    if(args.includes('--cached-sync'))measure('pending changes review',()=>cloud.pendingItems());
     if(trees.length){const branch=store.get('branch',trees[0].id);measure('unchanged metadata write',()=>{store.put('branch',branch);store.snapshot();cloud.dirtyIds();});measure('changed metadata refresh',()=>{store.put('branch',{...branch,name:branch.name+' [probe]'});store.snapshot();cloud.dirtyIds();});}
     // Mimic discovering one unrelated session after a large library was imported.
     store.branch(null,'Synthetic resource probe','codex',codexSample(path.join(root,'unrelated'),[['Unique probe','Synthetic answer']]));

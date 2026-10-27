@@ -287,6 +287,7 @@ export class GitCloud extends CloudView {
         assert(false,'No verified local sync snapshot is available for this session. Its current data was kept.',409);
     }
     pendingItems() {
+        return this.withTransientSnapshots(()=>{
         this.useSavedCache();
         const c = this.cache(), dirty = new Set(this.dirtyIds());
         const items=this.store.syncCollections().items.filter(i=>dirty.has(i.id)).map(i => {
@@ -299,6 +300,7 @@ export class GitCloud extends CloudView {
             return {id:i.id,name:i.name,project:graph.projects.find(p=>p.id===cloudProjectId(i.projectId))?.name || 'Ungrouped',updatedAt:i.updatedAt,action:'upload',discardable,changes};
         }).concat((this.store.local('trashPending') || []).map(e=>({id:e.id,name:(this.store.local('trashEntries')||[]).find(t=>t.id===e.id)?.names.join(', ') || 'Removed sessions',project:this.store.all('project').find(p=>p.id===this.store.find('branch',e.branchIds[0])?.projectId)?.name || 'Ungrouped',action:'remove',updatedAt:e.at,changes:[{kind:'session-removed',label:'Session removed'}]})));
         return items.map(item=>({...item,version:digest([this.readConfig().url||'',item.action==='remove'?(this.store.local('trashPending')||[]).find(e=>e.id===item.id):organizationSignature(currentOrganization(this.store,item.id)),c.ack[item.id]||null])}));
+        });
     }
     async publish(treeIds, { catalogFresh = false, rewriteStorage = false } = {}) {
         if (!catalogFresh) {

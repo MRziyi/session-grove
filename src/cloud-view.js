@@ -99,11 +99,18 @@ export class CloudView {
         c.directorySnapshot = { projects: this.summaries(), items: this.items(), at: now() };
         this.save(c);
     }
+    withTransientSnapshots(read) {
+        const transient=key=>key==='exportGraph'||key==='cloud-snapshot-index'||key.startsWith('cloud-tree:');
+        const existing=new Set([...this.store.memoCache.keys()].filter(transient));
+        try{return read();}finally{
+            // UI status/review results contain only metadata, so their expanded
+            // snapshot graphs need not survive. Preserve an enclosing transfer.
+            for(const key of this.store.memoCache.keys())if(transient(key)&&!existing.has(key))this.store.memoCache.delete(key);
+        }
+    }
     dirtyIds() {
-        this.useSavedCache(); const ack = this.cache().ack;
-        const transient = key => key==='exportGraph'||key==='cloud-snapshot-index'||key.startsWith('cloud-tree:');
-        const existing = new Set([...this.store.memoCache.keys()].filter(transient));
-        try {
+        this.useSavedCache();const ack=this.cache().ack;
+        return this.withTransientSnapshots(()=>{
             // A tree without a remote acknowledgement is dirty by definition.
             // Do not construct or hash its conversation graph just to prove it.
             return this.store.syncCollections().items.filter(i => !ack[i.id] || this.store.memo('fingerprint:' + i.id, () => {
@@ -111,12 +118,7 @@ export class CloudView {
                 for(const [kind,key]of [['project','projects'],['branch','branches'],['node','nodes'],['layout','layouts'],['revision','revisions']])for(const value of graph[key]||[]){const id=JSON.parse(JSON.stringify(value.id));entities.add(kind+':'+id);if(kind==='revision')revisions.add(id);}
                 this.store.syncFingerprintDeps.set(i.id,{entities,revisions,retention:!!graph.retention});return graphFingerprint(graph);
             }) !== ack[i.id]).map(i => i.id);
-        } finally {
-            // Status polling retains only small fingerprints. Full export graphs
-            // can contain millions of refs and are rebuilt only for changed data
-            // or an actual transfer. Leave a caller's pre-existing snapshots alone.
-            for(const key of this.store.memoCache.keys())if(transient(key)&&!existing.has(key))this.store.memoCache.delete(key);
-        }
+        });
     }
     decorate(data) {
         this.useSavedCache(); const directory = this.cache().directorySnapshot;

@@ -1,5 +1,6 @@
 let language = localStorage.getItem('grove-language') === 'zh' ? 'zh' : 'en';
 const dictionary = {
+"Storage optimization available":"可优化存储",
 "Loading source…":"正在读取来源…",
 "Client sources":"客户端来源",
 "Last captured":"最近收录",

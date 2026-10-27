@@ -829,7 +829,6 @@ dialog::backdrop {
   opacity:1;
   transform:translateX(-50%) translateY(0);
 }
-#toast.show:has(button){pointer-events:auto}
 
 .warning {
   color:#9a5823;
@@ -1437,7 +1436,7 @@ body{height:100dvh;display:flex;flex-direction:column;overflow:hidden}
 .native-context-tool{display:flex;flex-direction:column;gap:8px}.native-context-tool+.native-context-tool{border-top:1px solid #e0e6ed;padding-top:12px}.native-context-tool>button{align-self:flex-start}.context-inputs{display:flex;gap:10px}.context-inputs .field{flex:1;min-width:0;margin:0}.context-inputs input{min-width:0;width:100%}#context-settings-status:empty{display:none}#context-settings-status{font-size:12px;color:#23754c}
 @media(max-width:700px){#smart-status{max-width:100px;min-width:0;padding:0;font-size:10px;flex-shrink:1}}
 #dialog-content .compact-settings{gap:0}.compact-setting{display:flex;align-items:center;gap:10px;padding:9px 0}.compact-setting+.compact-setting{border-top:1px solid #e0e6ed}.compact-setting:first-child{padding-top:0}.compact-setting:last-child{padding-bottom:0}.compact-setting>label{flex:1;min-width:0}.compact-setting strong{display:block;font-size:13px}.compact-setting label>span>span,.compact-setting label>span:not(:has(strong)){display:block;font-size:12px;color:#637186;margin-top:3px}.compact-control{display:flex;align-items:center;justify-content:space-between;gap:12px}.compact-control .select-control{width:180px;max-width:55%;flex-shrink:0}.compact-control input[type=number]{width:68px;box-sizing:border-box}.compact-setting .setting-state{flex-shrink:0}.compact-setting input[type=checkbox]{width:16px;flex-shrink:0}
-.storage-breakdown{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:6px 18px;margin:0;font-size:12px}.storage-breakdown>div{display:flex;justify-content:space-between;gap:8px;min-width:0}.storage-breakdown dt{color:#637186;overflow-wrap:anywhere}.storage-breakdown dd{margin:0;white-space:nowrap;font-variant-numeric:tabular-nums}.storage-actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap}.storage-actions .setting-state{margin-left:auto}#storage-total{font-variant-numeric:tabular-nums}#toast button{margin-left:12px;font:inherit;padding:3px 8px;cursor:pointer}@media(max-width:450px){.storage-breakdown{grid-template-columns:minmax(0,1fr)}}
+.storage-breakdown{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:6px 18px;margin:0;font-size:12px}.storage-breakdown>div{display:flex;justify-content:space-between;gap:8px;min-width:0}.storage-breakdown dt{color:#637186;overflow-wrap:anywhere}.storage-breakdown dd{margin:0;white-space:nowrap;font-variant-numeric:tabular-nums}.storage-actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap}.storage-actions .setting-state{margin-left:auto}#storage-total{font-variant-numeric:tabular-nums}@media(max-width:450px){.storage-breakdown{grid-template-columns:minmax(0,1fr)}}
 .settings-input-action{display:flex;align-items:flex-end;gap:8px;min-width:0}.settings-input-action .field{flex:1;min-width:0;margin:0!important}.settings-input-action button{flex-shrink:0;margin:0;min-height:36px}.settings-error{color:#a54b34;font-size:12px;overflow-wrap:anywhere}.settings-error:empty{display:none}.context-inputs select{width:100%;min-width:0}
 @media(max-width:600px){.settings-input-action{gap:6px}.settings-input-action button{max-width:125px;white-space:normal}.context-inputs{flex-direction:column}}
 .session-row[draggable=true]{cursor:grab}.session-row.dragging{opacity:.45}.project-drop-target{outline:2px solid #448977;outline-offset:-2px;background:#eaf5ef!important;border-radius:8px}.session-dragging .project-directory [data-scope]{transition:none}
@@ -1611,3 +1610,7 @@ body{height:100dvh;display:flex;flex-direction:column;overflow:hidden}
 #session-list .older-projects-count{font-size:11px}
 
 .source-files ul{list-style:none;padding:0}.source-files li{padding:8px 0;border-bottom:1px solid var(--border)}.source-files li:last-child{border-bottom:0}.source-files li>strong{font-size:12px}.source-files .source-title-line{font-size:12px}.source-files .setting-warning{margin-left:8px}
+
+#smart-status,#storage-status{max-width:100%;padding:0;border:0;background:transparent;color:#c6d8e2;min-height:0;font-size:12px;line-height:14px;text-align:left;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}#smart-status.has-error,#storage-status.has-error{color:#f0d29c}#storage-status:hover{text-decoration:underline}#storage-status:focus-visible{outline:1px solid currentColor;outline-offset:3px}
+
+#sync-details #cloud-status[hidden]{display:none!important}

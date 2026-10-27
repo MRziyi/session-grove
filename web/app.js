@@ -92,11 +92,18 @@ const route = () => state.tree?.paths.find(p => p.branchId === state.branchId);
 const selectedNode = () => state.tree?.nodes.find(n => n.id === state.nodeId);
 let labeledTree, nodeLabels;
 const nodeName = n => { if(labeledTree!==state.tree){labeledTree=state.tree;nodeLabels=pendingLabels(state.tree.nodes);}return n.name||`${t('Pending')} ${nodeLabels.get(n.id)}`; };
-function toast(message,action) { const box=$('#toast');box.textContent=message;if(action){const button=document.createElement('button');button.type='button';button.textContent=action.label;button.onclick=()=>{box.classList.remove('show');action.run();};box.append(button);}box.classList.add('show');clearTimeout(toastTimer);toastTimer=setTimeout(()=>box.classList.remove('show'),action?15000:6000); }
-function storageUpgradeNotice(){
-    const key='grove-storage-upgrade-v1:'+state.data?.device?.id;
-    if(!state.data?.storage?.needsOptimization||!state.data.device?.id||localStorage.getItem(key)||$('#dialog').open||working||opening)return;
-    localStorage.setItem(key,'shown');toast(t('Storage optimization is available for this library.'),{label:t('Review storage'),run:()=>settings()});
+function toast(message) { const box=$('#toast');box.textContent=message;box.classList.add('show');clearTimeout(toastTimer);toastTimer=setTimeout(()=>box.classList.remove('show'),6000); }
+function renderStorageStatus(){
+    const button=$('#storage-status'),op=operations.trash,active=['storage','storage-cleanup'].includes(op?.action)&&op.state==='running';
+    const sync=state.data?.cloud,transferring=sync?.operation?.state==='running'||['syncing','migrating'].includes(sync?.phase);
+    button.hidden=!active&&(!state.data?.storage?.needsOptimization||transferring||sync?.operation?.state==='error'||!!sync?.error);
+    $('#cloud-status').hidden=!button.hidden;
+    button.textContent=t(active?op.progress?.phase||(op.action==='storage-cleanup'?'Clearing unused storage':'Optimize storage'):'Storage optimization available');
+    button.classList.toggle('has-error',!active);button.onclick=()=>settings({focusCard:'storage-settings'});
+}
+function focusSettingsCard(id){
+    const card=document.getElementById(id);if(!card||!$('#dialog-content').contains(card))return;
+    card.scrollIntoView({block:'center',behavior:'instant'});card.classList.remove('restored-highlight');void card.offsetWidth;card.classList.add('restored-highlight');card.addEventListener('animationend',()=>card.classList.remove('restored-highlight'),{once:true});
 }
 async function api(path, method = 'GET', body, retried = false, options = {}) {
     let r;
@@ -117,7 +124,7 @@ async function api(path, method = 'GET', body, retried = false, options = {}) {
 function modal(title, html, action, label = 'Save') {
     modalVersion++;
     $$('[data-modal-action]').forEach(el=>el.remove());
-    $('#dialog').dataset.kind = ({About:'about',Settings:'settings',Information:'information'})[title] || 'normal'; $('#dialog-title').textContent = t(title); $('#dialog-content').inert=false;$('#dialog-content').style.opacity='';$('#dialog-content').innerHTML = html; $('#dialog-error').textContent = '';
+    $('#dialog').dataset.kind = ({About:'about',Settings:'settings',Information:'information'})[title] || 'normal'; $('#dialog-title').textContent = t(title); $('#dialog-content').inert=false;delete $('#dialog-content').dataset.storageBusy;$('#dialog-content').style.opacity='';$('#dialog-content').innerHTML = html; $('#dialog-error').textContent = '';
     $('.dialog-actions').hidden = !action;
     $('#dialog-submit').textContent = t(label); $('#dialog-submit').hidden = !action; $('#dialog-submit').disabled = false;
     $('#dialog-cancel').textContent = t(action ? 'Cancel' : 'Close'); submitAction = action;
@@ -197,7 +204,7 @@ function renderIntelligence(){
     const phase=t(value?.phase||'Smart organization queued');
     button.textContent=t(value?.error||value?.awaitingConfirmation?'Smart organization needs attention':value?.phase||'Smart organization queued');
     button.title=value?.error?[value.current,errorText(value.error)].filter(Boolean).join(' · '):[value?.current,value?.pending?t('{count} remaining',{count:value.pending}):''].filter(Boolean).join(' · ');
-    button.classList.toggle('has-error',!!value?.error||!!value?.awaitingConfirmation);button.onclick=()=>settings();
+    button.classList.toggle('has-error',!!value?.error||!!value?.awaitingConfirmation);button.onclick=()=>settings({focusCard:'intelligence-settings'});
     const detail=$('#intelligence-status');if(detail)detail.textContent=value?.error?[t('Smart organization needs attention'),value.current,errorText(value.error)].filter(Boolean).join(' · '):value?.pending||value?.running?[phase,value.current,value.activeRequests?t('{count} active',{count:value.activeRequests}):'',t('{count} remaining',{count:value.pending})].filter(Boolean).join(' · '):value?.waitingForEvidence?t('{count} sessions are waiting for their own first request and reply.',{count:value.waitingForEvidence}):'';
     if(value?.awaitingConfirmation&&detail)detail.textContent=[detail.textContent,t('Discarded organization is paused for {count} sessions. Choose Continue to organize them again.',{count:value.awaitingConfirmation})].filter(Boolean).join(' ');
     const retry=$('#retry-intelligence');if(retry){retry.hidden=!value?.error&&!value?.awaitingConfirmation;retry.textContent=t(value?.awaitingConfirmation?'Continue':'Retry');}
@@ -223,9 +230,14 @@ function renderCloudStatus(){
     const updating=operations.update?.state==='running'||state.uiBusy==='update';$('#collect').dataset.operation=updating?'running':'';$('#collect').disabled=offline||working||updating||storageBusy;
     $('#collect .button-label').textContent=t(updating?'Updating…':'Update');$('#settings').disabled=!!storageBusy;
     $$('.actions button,button[data-compaction],[data-trash-restore],[data-trash-native]').forEach(el=>el.disabled=actionDisabled(el));
-    renderTransfer();renderCountdowns();renderTrashProgress();renderIntelligence();if(state.tree)$('#prefix-active').disabled=!state.tree.paths.some(p=>p.active)||actionDisabled(null);
+    renderTransfer();renderCountdowns();renderTrashProgress();renderIntelligence();renderStorageStatus();if(state.tree)$('#prefix-active').disabled=!state.tree.paths.some(p=>p.active)||actionDisabled(null);
     for(const el of $$('[data-guide-update]'))el.disabled=offline||working||updating||storageBusy;
     if(!syncReady){hideSyncPanel($('#pending-uploads'));$('#push-zone').tabIndex=-1;$('#cloud-status').textContent=t(offline?'Service disconnected':'Sync not connected');}else $('#push-zone').tabIndex=0;
+    const content=$('#dialog-content');
+    if($('#dialog').open&&$('#dialog').dataset.kind==='settings'){
+        if(storageBusy){content.inert=true;content.dataset.storageBusy='true';}
+        else if(content.dataset.storageBusy){delete content.dataset.storageBusy;content.inert=false;$('#refresh-storage')?.click();}
+    }
     const ticking=!document.hidden&&!offline&&(d.update?.nextRunAt||d.cloud?.nextRunAt||busy);
     if(ticking&&!clockTimer)clockTimer=setInterval(()=>{renderCountdowns();renderTransfer();},1000);if(!ticking&&clockTimer){clearInterval(clockTimer);clockTimer=null;}
 }
@@ -1077,7 +1089,7 @@ async function settings(options = {}) {
           </section>
           <section class="settings-card" id="storage-settings"><div class="settings-section-heading"><h3>${t('Storage')}</h3><span id="storage-total" class="context-limit" role="status">${t('Scanning…')}</span><button type="button" id="refresh-storage" aria-label="${t('Refresh storage usage')}">↻</button></div><dl id="storage-usage" class="storage-breakdown"></dl><div class="storage-actions"><button type="button" id="optimize-storage">${t('Optimize storage')}</button><button type="button" id="cleanup-storage" disabled>${t('Review cleanup')}</button><span id="storage-state" role="status" class="setting-state"></span></div></section>`, null);
         $('#dialog-cancel').textContent = t('Close');
-        if(options.focusSync){$('#git-settings').scrollIntoView({block:'start'});$('#git-settings input').focus();}
+        if(options.focusSync){focusSettingsCard('git-settings');$('#git-settings input').focus();}else if(options.focusCard)focusSettingsCard(options.focusCard);
         const busy = async (button, fn) => { if (working) return; working = true; button.disabled = true; const original = button.textContent; button.textContent = t(['verify-connection','save-intelligence-key'].includes(button.id)?'Verifying connection…':'Working…'); const error=$(['verify-connection'].includes(button.id)?'#git-settings-error':['save-intelligence-key','remove-intelligence-key'].includes(button.id)?'#key-settings-error':'#dialog-error');error.textContent = '';
             try { await fn(); } catch(e) { error.textContent = e.message; } finally { working = false; renderCloudStatus(); if (button.isConnected) { button.disabled = false; button.textContent = original; } } };
         const saveSmart=async body=>{state.data.intelligence=await api('/settings/intelligence','POST',body);if('apiKey' in body||body.removeKey)await settings(options);else renderIntelligence();renderCloudStatus();};
@@ -1098,10 +1110,10 @@ async function settings(options = {}) {
         const storageModal=modalVersion;
         const loadStorage=async()=>{
             const total=$('#storage-total'),badge=$('#storage-state'),refreshButton=$('#refresh-storage');refreshButton.disabled=true;
-            try{const value=await api('/storage');if(modalVersion!==storageModal)return;usage=value;total.textContent=bytesLabel(value.totalBytes);
+            try{const value=await api('/storage');if(modalVersion!==storageModal)return;usage=value;state.data.storage={needsOptimization:value.needsOptimization};renderCloudStatus();total.textContent=bytesLabel(value.totalBytes);
                 const labels={database:'Local library',git:'Git cache',backups:'Maintenance backups',temporary:'Temporary cache',trash:'Trash',other:'Other local files'};
                 $('#storage-usage').innerHTML=Object.entries(labels).filter(([key])=>value.categories[key]||key!=='other').map(([key,label])=>`<div><dt>${t(label)}</dt><dd>${bytesLabel(value.categories[key])}</dd></div>`).join('');
-                badge.textContent=t(value.needsOptimization?'Optimization available':'Up to date');badge.dataset.state=value.needsOptimization?'warning':'on';$('#cleanup-storage').disabled=!value.cleanup.bytes;
+                badge.textContent=t(value.needsOptimization?'Optimization available':'Up to date');badge.dataset.state=value.needsOptimization?'warning':'on';$('#cleanup-storage').disabled=!value.cleanup.bytes;if(options.focusCard==='storage-settings')$('#storage-settings').scrollIntoView({block:'nearest',behavior:'instant'});
             }catch(error){if(modalVersion===storageModal){total.textContent=t('Unavailable');badge.textContent=error.message;badge.dataset.state='error';}}
             finally{if(modalVersion===storageModal)refreshButton.disabled=false;}
         };
@@ -1158,6 +1170,7 @@ async function settings(options = {}) {
             queueSave(async()=>{await api('/settings/timers','POST',{[key]:value});await refresh();});
         }
 
+        renderCloudStatus();
     } catch(e) { toast(e.message); }
 }
 function information() {
@@ -1310,7 +1323,7 @@ for (;;) {
         if(!response.ok||!boot.token)throw Error(boot.error||'Local service unavailable');
         state.token=boot.token;state.data=boot;state.roots=boot.roots;if(!boot.items.length&&!boot.update.started)state.scope=PROJECTS;
         $('#demo-badge').textContent=boot.demo?'DEMO':'';
-        setLocale(locale());translateBanner();await refresh();$('#settings').disabled=false;storageUpgradeNotice();break;
+        setLocale(locale());translateBanner();await refresh();$('#settings').disabled=false;break;
     } catch(e) {
         state.connected=false;
         if(state.data)renderCloudStatus();
@@ -1332,7 +1345,7 @@ async function pollStatus(){
         if(next.discardOperation&&working)showOperation('discard',next.discardOperation);
         if(next.trashOperation)showOperation('trash',next.trashOperation);
         if(next.update.operation)showOperation('update',next.update.operation);
-        state.data.storage=next.storage;storageUpgradeNotice();
+        state.data.storage=next.storage;renderStorageStatus();
         const canRefresh=!working&&!inlineNames.editing&&!opening&&!$('#dialog').open&&!state.chats.size;
         if(next.stateVersion!==state.data.stateVersion&&canRefresh)await refresh();
         else {state.data.cloud=next.cloud;state.data.update=next.update;state.data.trashOperation=next.trashOperation;renderCloudStatus();}

@@ -24,12 +24,12 @@ jobs:
           - { os: ubuntu-latest, suite: all }
           - { os: ubuntu-latest, suite: browser }
           - os: macos-latest
-            suite: ${{ (startsWith(github.ref, 'refs/tags/v') || inputs.full == true) && 'all' || 'platform' }}
+            suite: ${{ (startsWith(github.ref, 'refs/tags/v') || inputs.full == true || contains(github.event.head_commit.message, '[full-ci]')) && 'all' || 'platform' }}
           - os: windows-latest
-            suite: ${{ (startsWith(github.ref, 'refs/tags/v') || inputs.full == true) && 'unit' || 'platform' }}
+            suite: ${{ (startsWith(github.ref, 'refs/tags/v') || inputs.full == true || contains(github.event.head_commit.message, '[full-ci]')) && 'unit' || 'platform' }}
           - { os: windows-latest, suite: git }
           - os: windows-latest
-            suite: ${{ (startsWith(github.ref, 'refs/tags/v') || inputs.full == true) && 'browser' || 'browser-compat' }}
+            suite: ${{ (startsWith(github.ref, 'refs/tags/v') || inputs.full == true || contains(github.event.head_commit.message, '[full-ci]')) && 'browser' || 'browser-compat' }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 10
     steps:

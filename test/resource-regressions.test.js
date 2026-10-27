@@ -5,10 +5,22 @@ import os from 'node:os';
 import path from 'node:path';
 import {Store} from '../src/store.js';
 import {CloudView as Cloud,treeSnapshot,graphFingerprint} from '../src/cloud-view.js';
+import {GitCloud} from '../src/git-cloud.js';
+import {changeSnapshot} from '../src/session-changes.js';
 import {codexSample} from '../src/demo.js';
 import {hash} from '../src/util.js';
 function setup(t){const root=fs.mkdtempSync(path.join(os.tmpdir(),'grove-resources-')),store=new Store(root);t.after(()=>{store.close();fs.rmSync(root,{recursive:true,force:true});});return store;}
 function requireFingerprints(s,cloud){cloud.useSavedCache();const cache=cloud.cache();for(const item of s.syncCollections().items)cache.ack[item.id]='0'.repeat(64);s.local(cloud.cacheKey,cache);}
+
+test('pending review releases expanded histories while preserving its result and an enclosing transfer snapshot',t=>{
+ const s=setup(t),b=s.branch(null,'Before','codex',codexSample('/fixture',[['Question','Answer']])),cloud=new GitCloud(s,()=>({})),graph=treeSnapshot(s,b.id);cloud.useSavedCache();const cache=cloud.cache();cache.ack[b.id]=graphFingerprint(graph);cache.baselines={[b.id]:changeSnapshot(graph)};cloud.save(cache);s.edit(b.id,{name:'After'});const raw=s.raw(s.get('branch',b.id).head);
+ const result=cloud.pendingItems();assert.equal(result.length,1);assert.ok(result[0].changes.some(c=>c.kind==='session-renamed'));assert.ok(![...s.memoCache.keys()].some(k=>k==='exportGraph'||k==='cloud-snapshot-index'||k.startsWith('cloud-tree:')));assert.deepEqual(cloud.pendingItems(),result);assert.equal(s.raw(s.get('branch',b.id).head),raw);
+ const existing=treeSnapshot(s,b.id);assert.deepEqual(cloud.pendingItems(),result);assert.equal(treeSnapshot(s,b.id),existing,'a snapshot held by an enclosing upload remains intact');
+});
+test('failed pending review also releases its temporary graph snapshots',t=>{
+ const s=setup(t),b=s.branch(null,'Session','codex',codexSample('/fixture',[['Question','Answer']])),cloud=new GitCloud(s,()=>({})),local=s.local.bind(s);s.local=(key,...args)=>{if(key.startsWith('organization-undo:'))throw Error('Synthetic review failure');return local(key,...args);};
+ assert.throws(()=>cloud.pendingItems(),/Synthetic review failure/);assert.ok(![...s.memoCache.keys()].some(k=>k==='exportGraph'||k==='cloud-snapshot-index'||k.startsWith('cloud-tree:')));s.local=local;assert.equal(cloud.pendingItems()[0].id,b.id);
+});
 
 test('status fingerprints preserve sync bytes without retaining export graphs',t=>{
     const s=setup(t),b=s.branch(null,'Unicode 测试','codex',codexSample('/fixture',[['Question','Answer']])),cloud=new Cloud(s,()=>({}));
