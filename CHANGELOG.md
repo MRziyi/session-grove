@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Reduce daily CI to six jobs: run complete logic/UI coverage on Linux, repeat desktop platform boundaries on macOS/Windows, and retain full Windows Git plus sync-browser checks. Expand to full desktop regression on version tags or manual request, avoid duplicate branch-push/PR runs, and keep all checks blocking without failure retries.
+- Enable long-path handling for all Grove Git commands, including offline recovery and interrupted-write cleanup, so hashed graph parts and media can sync from Windows library paths beyond MAX_PATH without changing global Git settings.
 - Make Source cover the entire Session tree with its latest capture time, working directories and grouped client sources. Read lightweight metadata without parsing transcripts or reconstructing revision history; show immediate loading state and preserve the full underlying history.
 - Make Information disclosure headers clickable across the full card, with clearer triangle spacing and native keyboard controls.
 - Reconcile empty/default context policies and equivalent node groupings without false sync conflicts; preserve local node identities and acknowledge both layout histories. Show message counts/boundaries and specific compaction choices for real differences, and consolidate single-option settings below the reordered primary sections.

@@ -2,6 +2,26 @@ import test from 'node:test';import assert from 'node:assert/strict';
 import fs from 'node:fs';import os from 'node:os';import path from 'node:path';
 import {GitRemote} from '../src/git-remote.js';import {GitCloud} from '../src/git-cloud.js';import {hash} from '../src/util.js';
 
+test('Git cache preserves hashed graph parts in long library paths without global configuration',async()=>{
+ const root=fs.mkdtempSync(path.join(os.tmpdir(),'grove-long-cache-'));
+ const directory=path.join(root,'Library with spaces '.repeat(3).trim(),'git-cache',hash('synthetic remote'));
+ const remote=new GitRemote(directory,'git@example.invalid:fixture.git');
+ try{
+  await remote.init();await remote.run(['config','core.longpaths','false']);
+  const name='trees/'+hash('tree')+'/graph/'+hash('part')+'.jsonl',file=path.join(directory,name),raw='{"name":"Unicode \u4e2d\u6587","records":[]}\n';
+  assert.ok(file.length>260);fs.mkdirSync(path.dirname(file),{recursive:true});fs.writeFileSync(file,raw);
+  await remote.run(['add','--all']);await remote.run(['commit','-m','Synthetic long-path graph part']);
+  fs.unlinkSync(file);
+  // A fresh offline reader must work without init or rewriting checkout config.
+  const offline=new GitRemote(directory,remote.url);await offline.run(['reset','--hard','HEAD']);
+  assert.equal(fs.readFileSync(file,'utf8'),raw);
+  const extra=path.join(path.dirname(file),hash('interrupted')+'.jsonl');fs.writeFileSync(extra,raw);
+  await offline.run(['clean','-fd']);assert.equal(fs.existsSync(extra),false);
+  assert.equal((await offline.run(['status','--porcelain'])).stdout,'');
+  assert.equal((await offline.run(['config','--local','--get','core.longpaths'])).stdout,'false');
+ }finally{fs.rmSync(root,{recursive:true,force:true,maxRetries:5,retryDelay:100});}
+});
+
 test('offline baseline lookup reads graphs above the generic Git limit without corrupting Unicode',async()=>{
  const root=fs.mkdtempSync(path.join(os.tmpdir(),'grove-large-baseline-')),remote=new GitRemote(root,'git@example.invalid:fixture.git');
  try{

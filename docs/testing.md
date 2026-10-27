@@ -7,6 +7,10 @@ Public tests use synthetic histories, disposable Git remotes and isolated browse
 ```sh
 npm test
 npm run test:browser
+node scripts/ci-test.js --suite=platform
+node scripts/ci-test.js --suite=git
+node scripts/ci-test.js --suite=unit
+node scripts/ci-test.js --suite=browser-compat
 node scripts/ci-test.js --suite=core
 node scripts/ci-test.js --suite=native
 node scripts/ci-test.js --suite=git-1
@@ -15,7 +19,13 @@ node scripts/ci-test.js --suite=browser-1
 node scripts/ci-test.js --suite=browser-2
 ```
 
-The Git and browser partitions are complete and nonoverlapping; `test/ci-plan.test.js` checks this. Windows runs expensive native/Git/browser groups separately. CI reports public test names and timings without uploading fixture contents. A pass on macOS does not establish Windows ACL or COM behavior; those cases run on Windows.
+Daily CI uses six jobs: Linux runs every unit/integration test and every browser flow; macOS and Windows repeat 18 platform-boundary files; Windows additionally runs all Git integration/output checks and the sync browser flow, including native-copy and Discard invariants. Pure logic and the other UI flows are not repeated on every OS. Push checks run on main and version tags; pull requests test working branches without also launching a duplicate branch-push run.
+
+Version tags automatically expand macOS to all unit/integration files and Windows to the complete unit/Git and browser sets. Workflow dispatch offers the same expansion with the **full** checkbox. Every job remains blocking, including the release dependency; there are no automatic failure retries. Windows full `unit` plus `git` covers every test file exactly once. `test/ci-plan.test.js` also ensures all platform-conditional test files remain in daily desktop coverage. The older core/native, Git-case and browser partitions remain available for targeted local work.
+
+Native PowerShell/COM and Git integration run without competing test-file workers inside their Windows job; the remaining platform files use at most three workers and browser flows run sequentially. CI reports public test names and timings without uploading fixture contents. A pass on macOS does not establish Windows ACL or COM behavior; those cases run on Windows. Hosted CI time savings require measurement after the workflow is pushed; local timings are not a prediction of runner duration.
+
+Classify failures before reducing coverage: an interaction test reading stale UI state needs a readiness condition, while reproducible Git/filesystem failures can affect real libraries. Windows Git coverage includes hashed graph-part/media paths beyond MAX_PATH, interrupted writes and offline recovery without relying on global long-path configuration. Shortening test paths would hide that compatibility boundary. Keep platform behavior checks blocking; assess duplicated platform-independent assertions separately from them.
 
 ## Acceptance matrix
 

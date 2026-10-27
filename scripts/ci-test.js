@@ -31,7 +31,7 @@ function run({file,names}){return new Promise(resolve=>{
         const lines=tail.replace(/\x1b\[[0-9;]*m/g,'').split(/\r?\n/);
         const failed=tests.filter(test=>test.file===file&&lines.some(line=>line.trim().startsWith('✖ '+test.name+' (')));
         for(const test of failed)console.error(`::error file=${test.file},line=${test.line},title=Regression test failure::${test.name.replaceAll('%','%25')}`);
-        for(const [label,pattern] of [['Windows ACL helper',/private-file\.js/],['PowerShell module mismatch',/Could not load file or assembly|requires PowerShell/],['Access denied',/Access is denied|UnauthorizedAccessException/],['Command unavailable',/is not recognized/],['Assertion failed',/ERR_ASSERTION/],['PowerShell type unavailable',/Cannot find type|Method invocation failed/]])if(pattern.test(tail))console.error(`::error file=${file},title=Failure category::${label}`);
+        for(const [label,pattern] of [['Windows Git path exceeds MAX_PATH',/Filename too long/],['Windows ACL helper',/private-file\.js/],['PowerShell module mismatch',/Could not load file or assembly|requires PowerShell/],['Access denied',/Access is denied|UnauthorizedAccessException/],['Command unavailable',/is not recognized/],['Assertion failed',/ERR_ASSERTION/],['PowerShell type unavailable',/Cannot find type|Method invocation failed/]])if(pattern.test(tail))console.error(`::error file=${file},title=Failure category::${label}`);
         if(!failed.length&&!timedOut){
             const positions=[...tail.matchAll(new RegExp(file.split('/').at(-1).replaceAll('.','\\.')+':(\\d+):','g'))];
             const line=browser&&positions.length?Number(positions.at(-1)[1]):1;
@@ -46,9 +46,9 @@ function run({file,names}){return new Promise(resolve=>{
 // Native PowerShell/COM startup and Git integration spawn many subprocesses.
 // Run these Windows suites without competing test workers; keep their existing
 // watchdogs and every assertion, rather than extending a timeout after failure.
-const exclusive=suite==='all'&&process.platform==='win32'?['test/autostart.test.js','test/git-cloud.test.js']:[];
+const exclusive=process.platform==='win32'?['test/autostart.test.js','test/git-cloud.test.js']:[];
 for(const task of plan.filter(task=>exclusive.includes(task.file)))await run(task);
-await Promise.all(Array.from({length:browser||suite!=='all'&&suite!=='core'?1:3},async()=>{for(;;){const task=plan[cursor++];if(!task)return;if(exclusive.includes(task.file))continue;await run(task);}}));
+await Promise.all(Array.from({length:browser||!['all','core','unit','platform'].includes(suite)?1:3},async()=>{for(;;){const task=plan[cursor++];if(!task)return;if(exclusive.includes(task.file))continue;await run(task);}}));
 // Persist only public filenames, counts and timings, never test output or data.
 fs.mkdirSync('test-results/ci',{recursive:true});
 fs.writeFileSync('test-results/ci/'+suite+'.json',JSON.stringify({suite,platform:process.platform,node:process.version,results},null,2));

@@ -22,7 +22,10 @@ export class GitRemote {
         assert(Number.isSafeInteger(maxOutputBytes)&&maxOutputBytes>0&&maxOutputBytes<=128*1024*1024,'Invalid Git output limit.');
         this.controller.signal.throwIfAborted();
         return new Promise((resolve, reject) => {
-            const child = spawn('git', ['-c', 'core.hooksPath=/dev/null', '-c', 'commit.gpgsign=false', '-c', 'core.quotePath=false', '-c', 'core.pager=cat', ...args], {
+            // Content-addressed cache paths exceed Windows MAX_PATH even for
+            // ordinary library locations. Cover offline reads/cleanup too,
+            // without relying on user config or writing it during recovery.
+            const child = spawn('git', ['-c', 'core.longpaths=true', '-c', 'core.hooksPath=/dev/null', '-c', 'commit.gpgsign=false', '-c', 'core.quotePath=false', '-c', 'core.pager=cat', ...args], {
                 cwd: this.directory, env: { ...process.env, GIT_TERMINAL_PROMPT: '0', GIT_SSH_COMMAND: 'ssh -o BatchMode=yes -o ConnectTimeout=15', GIT_CONFIG_NOSYSTEM: '1', ...env },
                 windowsHide: true, stdio: [input === null ? 'ignore' : 'pipe', 'pipe', 'pipe'], signal: this.controller.signal,
             });

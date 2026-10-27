@@ -1,7 +1,19 @@
 import assert from 'node:assert/strict';
 export const browserFiles=['scripts/node-browser-smoke.js','scripts/sync-browser-smoke.js','scripts/session-drag-browser-smoke.js','scripts/inline-name-browser-smoke.js','scripts/tree-loading-browser-smoke.js','scripts/onboarding-browser-smoke.js','scripts/conflict-browser-smoke.js','scripts/reconnect-browser-smoke.js','scripts/detail-tools-browser-smoke.js'];
+// Repeat OS/filesystem/client boundaries on each supported desktop platform.
+// Pure logic and the complete UI suite run on Linux for every change.
+export const platformFiles=['activation-diagnostics','autostart','client-refresh','conversion','instance-baselines','native-context-settings','native-readiness','node-activation','prefix-titles','quick-update','record-fidelity','recovery-storage','service','storage-usage','transcription-rename','transcription-titles','trash-actions','windows'].map(name=>'test/'+name+'.test.js');
+export const gitFiles=['test/git-cloud.test.js','test/git-output.test.js'];
+export const browserCompatibilityFiles=['scripts/sync-browser-smoke.js'];
 export function testPlan(files,tests,suite='all'){
-    assert.ok(['all','core','native','git-1','git-2','browser','browser-1','browser-2'].includes(suite),'Unknown test suite');
+    assert.ok(['all','unit','platform','git','core','native','git-1','git-2','browser','browser-compat','browser-1','browser-2'].includes(suite),'Unknown test suite');
+    if(suite==='platform'||suite==='git'){
+        const selected=suite==='platform'?platformFiles:gitFiles;
+        assert.ok(selected.every(file=>files.includes(file)),'A compatibility test file is missing');
+        return selected.map(file=>({file}));
+    }
+    if(suite==='unit')return files.filter(file=>!gitFiles.includes(file)).map(file=>({file}));
+    if(suite==='browser-compat')return browserCompatibilityFiles.map(file=>({file}));
     if(suite==='browser')return browserFiles.map(file=>({file}));
     // The main interaction smoke is about as expensive as the other eight
     // flows together. Keep it isolated; each flow owns its server and profile.
