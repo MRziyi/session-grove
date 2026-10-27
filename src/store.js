@@ -17,6 +17,7 @@ import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { id, now, hash, assert, text, atomic, json } from './util.js';
 import { parse, recordRefs, blank } from './transcript.js';
+import {StorageCodec,packStorage,unpackStorage,sameStorage,sameRevision,packView,unpackView} from './storage-codec.js';
 import { initializeOrganization, rootOf, metadata, pendingDetail, commitPending, moveTree, forest, detectFamilies } from './organization.js';
 export class Store {
     constructor(root) {
@@ -33,19 +34,26 @@ export class Store {
       CREATE TABLE IF NOT EXISTS objects (hash TEXT PRIMARY KEY, body TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS summaries (id TEXT, agent TEXT, version INTEGER, body TEXT, PRIMARY KEY(id,agent));
       CREATE TABLE IF NOT EXISTS local (key TEXT PRIMARY KEY, body TEXT NOT NULL);
-      CREATE TABLE IF NOT EXISTS instance_baselines (hash TEXT PRIMARY KEY, body TEXT NOT NULL);`);
+      CREATE TABLE IF NOT EXISTS instance_baselines (hash TEXT PRIMARY KEY, body TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS revision_bases (id TEXT PRIMARY KEY REFERENCES entities(id) ON DELETE CASCADE, base TEXT NOT NULL);
+      CREATE INDEX IF NOT EXISTS revision_bases_base ON revision_bases(base);
+      CREATE TABLE IF NOT EXISTS conversation_views (id TEXT NOT NULL REFERENCES entities(id) ON DELETE CASCADE, agent TEXT NOT NULL, cutoff INTEGER NOT NULL, version INTEGER NOT NULL, body BLOB NOT NULL, PRIMARY KEY(id,agent,cutoff));`);
         fs.chmodSync(path.join(root, 'grove.sqlite'), 0o600);
         this.syncFingerprintDeps = new Map(); this.version = 0; this.cloudVersion = 0; this.cloudCache = new Map(); this.memoCache = new Map(); this.parseCache = new Map(); this.parseBytes = 0; this.summaryCache = new Map(); this.recordCache = new Map(); this.recordBytes = 0;
         this.getStatement = this.db.prepare('SELECT body FROM entities WHERE kind=? AND id=?');
         this.entityById = this.db.prepare('SELECT body FROM entities WHERE id=?');
-        this.objectStatement = this.db.prepare('SELECT body FROM objects WHERE hash=?');
-        this.insertObject = this.db.prepare('INSERT OR IGNORE INTO objects VALUES (?,?)');
+        this.storage=new StorageCodec(this.db);
+        const objectRead=this.db.prepare('SELECT body FROM objects WHERE hash=?'),objectWrite=this.db.prepare('INSERT OR IGNORE INTO objects VALUES (?,?)'),objectExists=this.db.prepare('SELECT 1 FROM objects WHERE hash=?');
+        this.objectStatement={get:key=>{const row=objectRead.get(key);return row&&{body:unpackStorage(row.body)};}};
+        this.insertObject={run:(key,value)=>{const body=unpackStorage(value);if(body.length>=16*1024&&objectExists.get(key))return {changes:0,lastInsertRowid:0};return objectWrite.run(key,packStorage(body));}};
         this.allStatement = this.db.prepare('SELECT body FROM entities WHERE kind=?');
         this.entityWrite = this.db.prepare('INSERT INTO entities VALUES (?,?,?) ON CONFLICT(id) DO UPDATE SET body=excluded.body WHERE entities.kind=excluded.kind AND entities.body<>excluded.body');
         this.localRead = this.db.prepare('SELECT body FROM local WHERE key=?');
         this.localWrite = this.db.prepare('INSERT OR REPLACE INTO local VALUES (?,?)');
         this.summaryRead = this.db.prepare('SELECT body FROM summaries WHERE id=? AND agent=? AND version=5');
         this.summaryWrite = this.db.prepare('INSERT OR REPLACE INTO summaries VALUES (?,?,5,?)');
+        this.viewRead=this.db.prepare('SELECT body FROM conversation_views WHERE id=? AND agent=? AND cutoff=? AND version=2');
+        this.viewWrite=this.db.prepare('INSERT OR REPLACE INTO conversation_views VALUES (?,?,?,2,?)');
         initializeOrganization(this);
     }
     invalidate(change = null) {
@@ -111,11 +119,30 @@ export class Store {
             background: backgroundKind(provenance), titleSource: title?.titleSource || 'first-prompt',
             excluded:sessionExclusion({...provenance,chats}) };
         if(this.summaryCache.size >= 4096) this.summaryCache.delete(this.summaryCache.keys().next().value);
-        this.summaryCache.set(key,value); if (!revisionId.startsWith('scan:')) this.summaryWrite.run(revisionId, agent, JSON.stringify(value)); return value;
+        this.summaryCache.set(key,value); if (!this.storageBusy&&!revisionId.startsWith('scan:')) this.summaryWrite.run(revisionId, agent, JSON.stringify(value)); return value;
     }
     activity(revisionId, agent, end, parsed) { const p = parsed || this.parsed(revisionId, agent, end), entry = this.parseCache.get(agent + ':' + revisionId + (end===undefined?'':':'+end)); if (entry) return entry.ledger ||= ledger(p, agent); return ledger(p, agent); }
+    viewProjection(revisionId,agent,end){
+        const saved=this.viewRead.get(revisionId,agent,end??-1);
+        if(saved)try{return unpackView(saved.body);}catch{ /* Derived data can be rebuilt from the authoritative records. */ }
+        const p=this.parsed(revisionId,agent,end),inventory=this.activity(revisionId,agent,end,p);
+        const value={p:{messages:p.messages.filter(m=>m.role!=='tool'),context:p.context,checkpoints:p.checkpoints,supported:supportedHistory(p)},inventory};
+        const encoded=packView(value);if(!this.storageBusy)this.viewWrite.run(revisionId,agent,end??-1,encoded);
+        return unpackView(encoded);
+    }
+    rememberParsed(revisionId,agent,value){
+        const key=agent+':'+revisionId,size=value.records.reduce((n,r)=>n+Buffer.byteLength(r.raw),0);
+        if(this.parseCache.has(key)){this.parseBytes-=this.parseCache.get(key).size;this.parseCache.delete(key);}
+        while(this.parseCache.size&&(this.parseBytes+size>24*1024*1024||this.parseCache.size>=24)){const oldest=this.parseCache.keys().next().value;this.parseBytes-=this.parseCache.get(oldest).size;this.parseCache.delete(oldest);}
+        if(size<=100*1024*1024){this.parseCache.set(key,{value,size});this.parseBytes+=size;}
+    }
+    pruneViews(){
+        const required=[...new Set([...this.all('branch').flatMap(b=>[b.head,b.forkRevision]),...this.all('node').map(n=>n.revisionId)].filter(Boolean))];
+        this.db.prepare('DELETE FROM conversation_views WHERE version<>2 OR id NOT IN (SELECT value FROM json_each(?))').run(JSON.stringify(required));
+    }
     close() { this.db.close(); }
     transaction(fn) {
+        assert(!this.storageBusy,'Storage optimization is in progress.',409);
         this.db.exec('BEGIN IMMEDIATE');
         try {
             const result = fn();
@@ -123,17 +150,27 @@ export class Store {
             return result;
         }
         catch (e) {
-            this.db.exec('ROLLBACK'); this.graphProjections=null; this.invalidate(); this.parseCache.clear(); this.parseBytes = 0; this.recordCache.clear(); this.recordBytes = 0; this.instanceCache = undefined; this.summaryCache.clear(); this.cloudCache.clear(); this.cloudVersion++;
+            this.db.exec('ROLLBACK');this.storage.clear(); this.graphProjections=null; this.invalidate(); this.parseCache.clear(); this.parseBytes = 0; this.recordCache.clear(); this.recordBytes = 0; this.instanceCache = undefined; this.summaryCache.clear(); this.cloudCache.clear(); this.cloudVersion++;
             throw e;
         }
     }
-    all(kind) { return this.allStatement.all(kind).map(x => JSON.parse(x.body)); }
-    get(kind, key) { const row = this.getStatement.get(kind, key); assert(row, `${kind} 不存在`, 404); return JSON.parse(row.body); }
-    find(kind, key) { const row = this.getStatement.get(kind, key); return row ? JSON.parse(row.body) : undefined; }
-    put(kind, value) { if(this.entityWrite.run(kind, value.id, JSON.stringify(value)).changes){if(kind==='revision')this.graphProjections=null;this.invalidate({kind,id:value.id,value});} return value; }
+    all(kind) { return this.storage.entities(kind,this.allStatement.all(kind)); }
+    get(kind, key) { const row = this.getStatement.get(kind, key); assert(row, `${kind} 不存在`, 404); return this.storage.entity(kind,key,row.body); }
+    find(kind, key) { const row = this.getStatement.get(kind, key); return row ? this.storage.entity(kind,key,row.body) : undefined; }
+    put(kind, value, options={}) {
+        assert(!this.storageBusy,'Storage optimization is in progress.',409);
+        if(kind==='revision'&&!this.db.isTransaction)return this.transaction(()=>this.put(kind,value,options));
+        if(kind==='revision'){
+            const previous=this.find(kind,value.id);if(previous&&sameRevision(previous,value))return value;
+            if(previous&&(previous.refs.length!==value.refs.length||previous.refs.some((h,i)=>h!==value.refs[i])))this.storage.detachDependents(value.id);
+        }
+        const body=this.storage.encodeEntity(kind,value,options);
+        if(this.entityWrite.run(kind,value.id,body).changes){if(kind==='revision'){this.storage.trackRevision(value.id,body);this.storage.clear();this.db.prepare('DELETE FROM conversation_views WHERE id=?').run(value.id);for(const [key,entry]of this.parseCache)if(['codex','claude'].some(agent=>key===agent+':'+value.id||key.startsWith(agent+':'+value.id+':'))){this.parseBytes-=entry.size;this.parseCache.delete(key);}this.summaryCache.delete('codex:'+value.id);this.summaryCache.delete('claude:'+value.id);this.db.prepare('DELETE FROM summaries WHERE id=?').run(value.id);this.graphProjections=null;}this.invalidate({kind,id:value.id,value});}return value;
+    }
     checkpointOrganization(id){checkpointOrganization(this,id);}
     checkpointProject(id){for(const root of new Set(this.all('branch').filter(b=>b.projectId===id).map(b=>rootOf(this,b.id).id)))this.checkpointOrganization(root);}
     local(key, value, options = {}) {
+        if(arguments.length>1)assert(!this.storageBusy,'Storage optimization is in progress.',409);
         if (key.startsWith('cloud:')) {
             if (!this.cloudCache.has(key)) { const body = this.localRead.get(key)?.body; this.cloudCache.set(key, { body, value: body ? JSON.parse(body) : null }); }
             const cached = this.cloudCache.get(key);
@@ -174,15 +211,17 @@ export class Store {
             return this.instanceCache.map(i => ({ ...i }));
         }
         if (arguments.length === 2) {
-            if (JSON.stringify(this.local(key)) === JSON.stringify(value)) return value;
+            const body=this.storage.encodeLocal(key,value),previous=this.localRead.get(key)?.body;
+            if (previous!==undefined&&sameStorage(previous,body)) return value;
             if (key === 'instances' || key === 'conflicts') this.invalidate();
-            this.localWrite.run(key, JSON.stringify(value));
+            this.localWrite.run(key,body);
             return value;
         }
         const r = this.localRead.get(key);
-        return r ? JSON.parse(r.body) : null;
+        return r ? this.storage.local(key,r.body) : null;
     }
     instances() { return this.local('instances') || []; }
+    revisionMetadata(id){return this.storage.metadata(id);}
     project(name, description = '') { return this.put('project', { id: id(), name: text(name), description: String(description).slice(0, 2000), createdAt: now(), updatedAt: now(), metaVersion: id(), metaAncestors: [] }); }
     revision(raw, parent = null, source = {}, prefixRaw = null) {
         if(!this.db.isTransaction)return this.transaction(()=>this.revision(raw,parent,source,prefixRaw));
@@ -195,7 +234,9 @@ export class Store {
     availableRaw(revisionId) { return this.get('revision',revisionId).refs.map(h=>this.objectStatement.get(h)?.body||'\n').join(''); }
     raw(revisionId, end) {
         const rev = this.get('revision', revisionId);
-        return rev.refs.slice(0, end ?? rev.refs.length).map(h => { const row = this.objectStatement.get(h); assert(row, `缺少历史对象 ${h}`, 409); return row.body; }).join('');
+        const count=end??rev.refs.length,cached=[...this.parseCache.entries()].find(([key,v])=>key.endsWith(':'+revisionId)&&v.value.records.length>=count)?.[1].value.records;
+        if(cached)return cached.slice(0,count).map(r=>r.raw).join('');
+        return rev.refs.slice(0,count).map(h => {const memo=this.recordCache.get(h);if(memo)return memo.record.raw;const row = this.objectStatement.get(h); assert(row, `缺少历史对象 ${h}`, 409); return row.body; }).join('');
     }
     branch(projectId, name, agent, raw = null, source = {}) {
         if(!this.db.isTransaction)return this.transaction(()=>this.branch(projectId,name,agent,raw,source));
@@ -246,7 +287,7 @@ export class Store {
             if (older === newer)
                 return true;
             seen.add(newer);
-            newer = this.get('revision', newer).parent;
+            newer = this.revisionMetadata(newer).parent;
         }
         return false;
     }
@@ -354,15 +395,7 @@ export class Store {
         // Preserve frozen ancestry dependencies, while excluding unrelated helpers.
         for (const id of [...wanted]) { let b = this.get('branch', id); while (b.parentId) { wanted.add(b.parentId); b = this.get('branch', b.parentId); } }
         const branches = all.filter(b => wanted.has(b.id)).map(b => ({ ...b, projectId: cloudProjectId(b.projectId) })), branchIds = new Set(branches.map(b => b.id));
-        const nodes = this.all('node').filter(n => branchIds.has(n.branchId)), revisions = new Map();
-        const visit = revisionId => { if (!revisionId || revisions.has(revisionId))
-            return; const r = this.get('revision', revisionId); revisions.set(r.id, r); visit(r.parent); };
-        for (const b of branches) {
-            visit(b.head);
-            visit(b.forkRevision);
-        }
-        for (const n of nodes)
-            visit(n.revisionId);
+        const nodes = this.all('node').filter(n => branchIds.has(n.branchId)), revisions = this.storage.revisionGraph([...branches.flatMap(b=>[b.head,b.forkRevision]),...nodes.map(n=>n.revisionId)]);
         const graph = { schema: 3, layouts: this.all('layout').filter(l => branchIds.has(l.rootId)), projects: [...this.all('project'), ...(branches.some(b => b.projectId === INBOX_ID) ? [inboxProject()] : [])], branches, nodes, revisions: [...revisions.values()] };
         const removed=deletedIds(this,graph);
         if(this.localArchivesOnly)for(const b of graph.branches)if(b.archived||b.projectId&&this.find('project',b.projectId)?.archived)removed.add(b.id);
@@ -381,7 +414,8 @@ export class Store {
             return b.projectId===root.projectId?b:{...b,projectId:root.projectId};
         })};
         return this.transaction(() => {
-            for (const [h, body] of Object.entries(objects)) {
+            for (const [h, stored] of Object.entries(objects)) {
+                const body=unpackStorage(stored);
                 assert(hash(body) === h, '远端对象校验失败');
                 this.insertObject.run(h, body);
             }
@@ -389,7 +423,7 @@ export class Store {
                 assert(typeof r.id === 'string' && Array.isArray(r.refs) && r.refs.every(h => typeof h === 'string' && /^[a-f0-9]{64}$/.test(h)), '无效版本');
                 const old = this.entityById.get(r.id);
                 if (old)
-                    assert(old.body === JSON.stringify(r), '不可变版本发生冲突');
+                    assert(this.find('revision',r.id)&&sameRevision(this.get('revision',r.id),r), '不可变版本发生冲突');
                 else
                     this.put('revision', r);
             }

@@ -3,6 +3,10 @@
 ## Unreleased
 
 - Split oversized Git graph metadata into verified, content-addressed JSONL parts while preserving canonical graph hashes and every history reference. Read existing single-file graphs and recover sharded baselines from committed local Git objects for offline Discard; use container schema 2 only when parts are present.
+- Pack large local values with checksummed Zstandard and encode shared revision prefixes losslessly; preserve original records, graph identities and legacy reads. Persist bounded, rebuildable conversation views to reduce cold-tree latency and memory.
+- Deduplicate embedded image and opaque payloads within Git trees, use compact revision manifests (container schema 3), skip native reads on metadata-only Push, and release full export graphs before Git packing. Existing repository history is preserved; update other devices before syncing the new format.
+- Add Settings → Local service → Optimize storage with worker progress, verified temporary rollback protection and SQLite space reclamation. Keep every historical recovery point, compress older independent SQLite snapshots after byte verification, and leave the newest uncompressed.
+
 ## 1.2.1
 
 - Wait for the refreshed pending list before starting another Discard in browser checks; reproduce slow refresh explicitly and retain all native-file and activation invariants.

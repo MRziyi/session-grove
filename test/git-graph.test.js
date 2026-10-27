@@ -16,3 +16,8 @@ test('graph part readers reject missing, modified, unsafe and mislabelled data',
  const raw=JSON.stringify(['unknown',{id:'x'}])+'\n',wrong={hash:hash(raw),bytes:Buffer.byteLength(raw),rows:1},manifest={...e.manifest,parts:[wrong]};assert.throws(()=>graphPartsReader(manifest).append(wrong,raw),/Invalid Git graph row/);
  const count={...part,rows:2},counts={...e.manifest,parts:[count]};assert.throws(()=>graphPartsReader(counts).append(count,e.data.get(part.hash)),/row count/);
 });
+
+test('compact graph parts retain canonical identities with parent-prefix deltas',()=>{
+ const refs=Array.from({length:1000},(_,i)=>hash('reference '+i)),graph={schema:3,projects:[],branches:[],nodes:[],layouts:[],revisions:[{id:'parent',parent:null,refs},{id:'child',parent:'parent',refs:[...refs,hash('tail')]}]},parts=new Map(),manifest=writeGraphParts(graph,(part,text)=>parts.set(part.hash,text),{compact:true,targetBytes:8000}),reader=graphPartsReader(manifest);
+ assert.equal(manifest.schema,2);for(const part of manifest.parts)reader.append(part,parts.get(part.hash));assert.equal(JSON.stringify(reader.finish()),JSON.stringify(graph));assert.ok([...parts.values()].join('').length<JSON.stringify(graph).length*.6);
+});

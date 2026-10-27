@@ -80,8 +80,7 @@ function* graphSteps(store, branchId) {
         const key=agent+':'+revisionId+':'+(end??'all');
         if(!projections.has(key)&&previousProjections?.has(key))projections.set(key,previousProjections.get(key));
         if(!projections.has(key)){
-            const p=store.parsed(revisionId,agent,end),inventory=store.activity(revisionId,agent,end,p);
-            projections.set(key,{p:{messages:p.messages.filter(m=>m.role!=='tool'),context:p.context,checkpoints:p.checkpoints,supported:supportedHistory(p)},inventory});
+            projections.set(key,store.viewProjection(revisionId,agent,end));
         }
         return projections.get(key);
     }

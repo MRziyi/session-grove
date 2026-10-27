@@ -57,6 +57,16 @@ test('unavailable automatic upload timers skip all-library fingerprint work',asy
  auto.unlocked=true;auto.reconcileTimer(true);assert.ok(auto.interval);auto.reconcileTimer(false);assert.equal(auto.interval,null);
 });
 
+test('storage maintenance pauses automatic transfer and reclamation without touching remote state',async t=>{
+ const e=await setup(t),a=e.device('maintenance'),auto=new AutoSync(a.store,()=>({url:'git@example.invalid:test/data.git'}));t.after(()=>auto.close());
+ savePreferences(a.store,{autoUploadEnabled:true});a.store.storageBusy=true;
+ try{
+  auto.cloud.dirtyIds=()=>assert.fail('Maintenance must not start transfer preparation');auto.reconcileTimer();assert.equal(auto.interval,null);await auto.fallback();await auto.flush('queued');
+  assert.throws(()=>auto.startTransfer('push'),e=>e.status===409);await assert.rejects(auto.exclusive(async()=>assert.fail('Transfer started')),e=>e.status===409);
+  assert.equal(cleanupLocal(a.store).deferred,true);assert.equal(auto.running,false);assert.equal(a.store.transferReaders||0,0);
+ }finally{a.store.storageBusy=false;}
+});
+
 
 test('backend project directory and content listing agree through archive and restore',async t=>{
  const e=await syncFixture(t),a=e.device('directory');const p=a.store.project('Project'),empty=a.store.project('Empty');const b=branch(a.store,p.id,'Session');

@@ -322,7 +322,7 @@ export class Native {
                 else if(mappedForkEnd!==undefined)b=this.store.put('branch',{...b,forkEnd:mappedForkEnd});
                 i.branchId = b.id;
                 i.baseRevision = b.head;
-                if(logical===raw)this.store.rememberSummary(b.head,i.agent,p);
+                if(logical===raw){this.store.rememberSummary(b.head,i.agent,p);this.store.rememberParsed(b.head,i.agent,p);}
                 const summary=this.store.summary(b.head,i.agent);
                 if(b.excluded==='empty' && !summary.excluded){this.store.put('branch',metadata(b,{excluded:null}));i.excluded=false;}
                 i.summaryJson=JSON.stringify(summary);i.summaryRevision=b.head;i.summaryVersion=5;i.observedStamp=stamp;

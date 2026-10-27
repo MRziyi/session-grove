@@ -43,6 +43,8 @@ Use `npm run bench:store`, `npm run bench:local`, `npm run bench:ui` and `npm ru
 
 For Trash, compare the same consistent library backup and path selection before and after a change. Include the following state refresh and measure event-loop heartbeat gaps separately from end-to-end latency. Tests that omit native copies do not measure native archive/removal costs. Check cached sync digests against fresh calculations across edits, forks, shared revisions, retention changes, rollback and reclamation.
 
+For storage changes, pin one consistent real-library backup for both implementations. Compare canonical graph digests, native record hashes/bytes, identity counts, organization rollback and native materialization, including archived/shared histories. Measure cold/warm views, acknowledged and unacknowledged sync status, metadata-only Push reads, and encode/decode/Git packing separately. Record one-time migration cost separately from normal reads. Verify mixed legacy/packed values, cache rebuilds, interrupted maintenance, byte-exact recovery archives and idempotent repeat maintenance. Never benchmark against a moving live database or rewrite remote Git history to claim storage savings.
+
 ## Release checks
 
 Follow [AGENTS.md](../AGENTS.md): accumulate fixes under Unreleased, keep the published version until release is requested, run appropriate tests, and verify cross-platform CI. A code push for another-device testing does not create a release.

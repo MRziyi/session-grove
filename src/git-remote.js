@@ -83,7 +83,7 @@ export class GitRemote {
             assert(rows.some(line => line.endsWith('\tgrove.json')), 'This repository is not a Grove data repository.');
             const marker = await probe.run(['show', 'FETCH_HEAD:grove.json'], {timeout:30000});
             const format = JSON.parse(marker.stdout);
-            assert(format.format === 'session-grove-git' && [1,2].includes(format.schema), 'Unsupported Grove Git data format. Update Grove on every device.');
+            assert(format.format === 'session-grove-git' && [1,2,3].includes(format.schema), 'Unsupported Grove Git data format. Update Grove on every device.');
         } finally { fs.rmSync(directory, {recursive:true,force:true}); }
     }
     async fetch() {
@@ -106,9 +106,9 @@ export class GitRemote {
             await this.run(['fetch', '--progress', '--no-tags', 'origin', '+refs/heads/main:refs/remotes/origin/main'], { progress: true });
         const marker = await this.run(['show', 'refs/remotes/origin/main:grove.json']);
         const format = JSON.parse(marker.stdout);
-        assert(format.format === 'session-grove-git' && [1,2].includes(format.schema), 'Unsupported Grove Git data format. Update Grove on every device.');
+        assert(format.format === 'session-grove-git' && [1,2,3].includes(format.schema), 'Unsupported Grove Git data format. Update Grove on every device.');
         const files = await this.run(['ls-tree', '-r', 'refs/remotes/origin/main']);
-        assert(files.stdout.split('\n').every(line => !line || /^100644 blob [a-f0-9]+\t(?:grove\.json|trash\.json|trees\/[a-f0-9]{64}\/(?:index\.json|graph\.json|records\/[0-9]{6}\.jsonl|graph\/[a-f0-9]{64}\.jsonl))$/.test(line)), 'Unexpected file or link in Git data repository.');
+        assert(files.stdout.split('\n').every(line => !line || /^100644 blob [a-f0-9]+\t(?:grove\.json|trash\.json|trees\/[a-f0-9]{64}\/(?:index\.json|graph\.json|records\/[0-9]{6}\.jsonl|graph\/[a-f0-9]{64}\.jsonl|payloads\/[a-f0-9]{64}\.bin))$/.test(line)), 'Unexpected file or link in Git data repository.');
         await this.run(['reset', '--hard', 'refs/remotes/origin/main']);
         // Only the dedicated application cache is cleaned, never native/source files.
         await this.run(['clean', '-fd']);

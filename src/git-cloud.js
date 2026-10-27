@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import {jsonLines} from './jsonl.js';
 import { setImmediate as yieldToLocal } from 'node:timers/promises';
-import { CloudView, treeSnapshot } from './cloud-view.js';
+import { CloudView, treeSnapshot, graphFingerprint } from './cloud-view.js';
 import { GitRemote, gitRemote } from './git-remote.js';
 import { assert, hash, now, atomic } from './util.js';
 import { bodyRefs, retainedGraph } from './retention.js';
@@ -11,12 +11,14 @@ import { changeSnapshot, sessionChanges, commitMessage } from './session-changes
 import { cloudProjectId } from './inbox.js';
 import {organizationUndoKey,currentOrganization,organizationSnapshot,organizationSignature,hasOrganizationChanges} from './organization-undo.js';
 import {GIT_FILE_BYTES,GRAPH_PART_BYTES,isGraphManifest,writeGraphParts,graphPartsReader} from './git-graph.js';
+import {packRevisions,isRevisionDelta} from './revision-codec.js';
+import {encodeRecord,decodeRecord,payloadTextCache} from './record-codec.js';
 const digest = value => hash(JSON.stringify(value));
 
 // Git owns history, content deduplication, packing and atomic ref publication.
 // Grove owns graph semantics, modification clocks and local materialization.
 export class GitCloud extends CloudView {
-    constructor(store, readConfig, {graphSplitBytes=GIT_FILE_BYTES,graphPartBytes=GRAPH_PART_BYTES}={}) { super(store, readConfig); this.provider = 'git';this.graphSplitBytes=graphSplitBytes;this.graphPartBytes=graphPartBytes;store.localArchivesOnly=true;store.invalidate(); }
+    constructor(store, readConfig, {graphSplitBytes=GIT_FILE_BYTES,graphPartBytes=GRAPH_PART_BYTES,graphCompact=true}={}) { super(store, readConfig); this.provider = 'git';this.graphSplitBytes=graphSplitBytes;this.graphPartBytes=graphPartBytes;this.graphCompact=graphCompact;store.localArchivesOnly=true;store.invalidate(); }
     useSavedCache() {
         this.cacheKey ||= 'cloud:git:' + hash(this.readConfig().url || '');
     }
@@ -70,13 +72,22 @@ export class GitCloud extends CloudView {
     }
     writeGraph(name,graph){
         assert(Number.isSafeInteger(this.graphSplitBytes)&&this.graphSplitBytes>0&&this.graphSplitBytes<=GIT_FILE_BYTES,'Invalid Git graph split threshold.');
+        if(this.graphCompact){
+            const rows=packRevisions(graph.revisions||[]);let saved=0;
+            for(let i=0;i<rows.length;i++)if(isRevisionDelta(rows[i]))saved+=(graph.revisions[i].refs.length-rows[i].append.length)*67-JSON.stringify({...rows[i],append:[]}).length;
+            if(saved>64*1024)return this.writeGraphManifest(name,graph,true);
+        }
         const compact=JSON.stringify(graph)+'\n',size=Buffer.byteLength(compact),directory=name.slice(0,-'graph.json'.length)+'graph';
         if(size<this.graphSplitBytes){
             const pretty=size<GRAPH_PART_BYTES?JSON.stringify(graph,null,2)+'\n':compact;
             this.writeRaw(name,Buffer.byteLength(pretty)<GIT_FILE_BYTES?pretty:compact);
             fs.rmSync(this.file(directory),{recursive:true,force:true});return;
         }
-        const manifest=writeGraphParts(graph,(part,text)=>this.writeRaw(directory+'/'+part.hash+'.jsonl',text),{targetBytes:this.graphPartBytes});
+        return this.writeGraphManifest(name,graph,false);
+    }
+    writeGraphManifest(name,graph,compact){
+        const directory=name.slice(0,-'graph.json'.length)+'graph';
+        const manifest=writeGraphParts(graph,(part,text)=>this.writeRaw(directory+'/'+part.hash+'.jsonl',text),{targetBytes:this.graphPartBytes,compact});
         // Parts are immutable and content addressed; replace the manifest last.
         this.writeRaw(name,manifest);const keep=new Set(manifest.parts.map(p=>p.hash+'.jsonl'));
         if(fs.existsSync(this.file(directory)))for(const file of fs.readdirSync(this.file(directory)))if(/^[a-f0-9]{64}\.jsonl$/.test(file)&&!keep.has(file))fs.rmSync(this.file(directory+'/'+file));
@@ -84,36 +95,52 @@ export class GitCloud extends CloudView {
     hasGraphParts(){
         const directory=this.file('trees');return fs.existsSync(directory)&&fs.readdirSync(directory).some(id=>/^[a-f0-9]{64}$/.test(id)&&fs.existsSync(this.file('trees/'+id+'/graph')));
     }
+    dataSchema(){
+        const directory=this.file('trees');let schema=1;if(!fs.existsSync(directory))return schema;
+        for(const id of fs.readdirSync(directory).filter(id=>/^[a-f0-9]{64}$/.test(id))){
+            if(fs.existsSync(this.file('trees/'+id+'/payloads')))return 3;
+            if(fs.existsSync(this.file('trees/'+id+'/graph'))){schema=2;const manifest=JSON.parse(fs.readFileSync(this.file('trees/'+id+'/graph.json'),'utf8'));if(manifest.schema===2)return 3;}
+        }return schema;
+    }
     folder(id) { return 'trees/' + hash(id); }
+    readPayload(id,key){
+        assert(/^[a-f0-9]{64}$/.test(key),'Invalid native payload reference.');const file=this.file(this.folder(id)+'/payloads/'+key+'.bin');assert(fs.existsSync(file),'Missing native payload.');assert(fs.statSync(file).size<GIT_FILE_BYTES,'Native payload exceeds the Git file limit.');return fs.readFileSync(file);
+    }
+    writePayload(id,key,data){
+        assert(/^[a-f0-9]{64}$/.test(key)&&data.length<GIT_FILE_BYTES,'Invalid native payload.');const file=this.file(this.folder(id)+'/payloads/'+key+'.bin');fs.mkdirSync(path.dirname(file),{recursive:true,mode:0o700});
+        if(!fs.existsSync(file)||fs.statSync(file).size!==data.length||!fs.readFileSync(file).equals(data))atomic(file,data,{durable:false});
+    }
     *records(id) {
-        const dir = this.file(this.folder(id) + '/records');
+        const dir = this.file(this.folder(id) + '/records'),cache=payloadTextCache();
         for (const name of fs.readdirSync(dir).filter(n => /^[0-9]{6}\.jsonl$/.test(n)).sort()) {
             const file = this.file(this.folder(id) + '/records/' + name);
             assert(fs.statSync(file).size < 95 * 1024 * 1024, 'Git record file exceeds size limit.');
-            for (const line of fs.readFileSync(file, 'utf8').split('\n')) if (line) yield JSON.parse(line);
+            for (const line of fs.readFileSync(file, 'utf8').split('\n')) if (line){const [key,value]=JSON.parse(line);yield [key,decodeRecord(value,h=>this.readPayload(id,h),cache)];}
         }
     }
     async *streamRecords(id){
-        const directory=this.file(this.folder(id)+'/records');
+        const directory=this.file(this.folder(id)+'/records'),cache=payloadTextCache();
         for(const name of fs.readdirSync(directory).filter(n=>/^[0-9]{6}\.jsonl$/.test(n)).sort()){
             const file=this.file(this.folder(id)+'/records/'+name);
             assert(fs.statSync(file).size<95*1024*1024,'Git record file exceeds size limit.');
             const stream=fs.createReadStream(file,{encoding:'utf8'});
-            try{yield* jsonLines(stream);}finally{stream.destroy();}
+            try{for await(const [key,value]of jsonLines(stream))yield [key,decodeRecord(value,h=>this.readPayload(id,h),cache)];}finally{stream.destroy();}
         }
     }
     writeRecords(id, records) {
         const dir = this.folder(id) + '/records';
         fs.mkdirSync(this.file(dir), { recursive: true });
-        let lines = [], bytes = 0, part = 0;
+        let lines = [], bytes = 0, part = 0;const payloads=new Set(),cache=new Map();
         const flush = () => { this.write(dir + '/' + String(part++).padStart(6, '0') + '.jsonl', lines.join('')); lines = []; bytes = 0; };
-        for (const record of records) {
-            const line = JSON.stringify(record) + '\n', size = Buffer.byteLength(line);
+        for (const [key,body] of records) {
+            const value=encodeRecord(body,(h,data)=>{if(!payloads.has(h))this.writePayload(id,h,data);payloads.add(h);},cache);
+            const line = JSON.stringify([key,value]) + '\n', size = Buffer.byteLength(line);
             if (bytes && bytes + size > 8 * 1024 * 1024) flush();
             lines.push(line); bytes += size;
         }
         if (bytes || !part) flush();
         for (const name of fs.readdirSync(this.file(dir))) if (/^[0-9]{6}\.jsonl$/.test(name) && Number(name.slice(0, 6)) >= part) fs.rmSync(this.file(dir + '/' + name));
+        const directory=this.file(this.folder(id)+'/payloads');if(fs.existsSync(directory)){for(const name of fs.readdirSync(directory))if(/^[a-f0-9]{64}\.bin$/.test(name)&&!payloads.has(name.slice(0,-4)))fs.rmSync(this.file(this.folder(id)+'/payloads/'+name));if(!fs.readdirSync(directory).length)fs.rmdirSync(directory);}
     }
     *entryIterator() {
         const dir = this.file('trees');
@@ -127,7 +154,7 @@ export class GitCloud extends CloudView {
     entries(){return [...this.entryIterator()];}
     async loadDirectory() {
         const format = this.read('grove.json');
-        assert(format?.format === 'session-grove-git' && [1,2].includes(format.schema), 'Unsupported Grove Git data format. Update Grove on every device.');
+        assert(format?.format === 'session-grove-git' && [1,2,3].includes(format.schema), 'Unsupported Grove Git data format. Update Grove on every device.');
         const projects = new Map(), indexes = {}, archiveEntries=[];let completed=0;
         for (const entry of this.entryIterator()) {
             const { project, ...item } = entry;
@@ -171,7 +198,7 @@ export class GitCloud extends CloudView {
         this.report('Importing session from Git cache', 0, 1, Date.now(), item.name);
         // Stream immutable records before comparing the latest local snapshot.
         let graph = this.read(this.folder(treeId) + '/graph.json');
-        assert(digest(graph) === item.ref && graph.branches.some(b => b.id === treeId), 'Git session integrity check failed.');
+        assert(graphFingerprint(graph) === item.ref && graph.branches.some(b => b.id === treeId), 'Git session integrity check failed.');
         const deleted = deletedIds(this.store, graph);
         const archivedProjects=new Set(graph.projects.filter(p=>p.archived).map(p=>p.id));
         for(const b of graph.branches)if(b.archived||archivedProjects.has(b.projectId))deleted.add(b.id);
@@ -188,12 +215,12 @@ export class GitCloud extends CloudView {
         assert(!needed.size, 'Missing Git session record.');
         const currentDeleted=deletedIds(this.store,graph);if(currentDeleted.size)graph=retainedGraph(graph,currentDeleted);
         const before = treeSnapshot(this.store, treeId), c = this.cache();
-        const wasDirty = before && digest(before) !== c.ack[treeId];
+        const wasDirty = before && graphFingerprint(before) !== c.ack[treeId];
         const result = this.store.merge(graph, {}, { latest });
         c.loaded[treeId] = [item.ref];
         (c.baselines ||= {})[treeId] = changeSnapshot(graph);
         const extraLocal = before?.branches.some(b => !graph.branches.some(r => r.id === b.id));
-        if ((!wasDirty || !result.keptLocal && !extraLocal) && !(this.store.local('conflicts') || []).length) {const baseline=treeSnapshot(this.store,treeId);c.ack[treeId]=digest(baseline);this.rememberBaseline(treeId,baseline);}
+        if ((!wasDirty || !result.keptLocal && !extraLocal) && !(this.store.local('conflicts') || []).length) {const baseline=treeSnapshot(this.store,treeId);c.ack[treeId]=graphFingerprint(baseline);this.rememberBaseline(treeId,baseline);}
         this.save(c); this.report('Importing session from Git cache', 1, 1, Date.now(), item.name);
         await yieldToLocal();
     }
@@ -210,10 +237,10 @@ export class GitCloud extends CloudView {
         });
     }
     undoKey(id) { return 'git-undo:'+hash(this.readConfig().url||'')+':'+id; }
-    rememberBaseline(id,graph) { this.store.local(this.undoKey(id),{ack:digest(graph),graph}); }
+    rememberBaseline(id,graph,ack=graphFingerprint(graph)) { this.store.local(this.undoKey(id),{ack,graph}); }
     async organizationBaseline(id){
         const cache=this.cache();let graph;try{graph=this.read(this.folder(id)+'/graph.json');}catch{}
-        if(graph&&cache.loaded?.[id]?.includes(digest(graph))&&cache.baselines?.[id]&&digest(changeSnapshot(graph))===digest(cache.baselines[id]))return graph;
+        if(graph&&cache.loaded?.[id]?.includes(graphFingerprint(graph))&&cache.baselines?.[id]&&digest(changeSnapshot(graph))===digest(cache.baselines[id]))return graph;
         return this.undoBaseline(id);
     }
     async committedGraph(remote,commit,folder){
@@ -235,10 +262,10 @@ export class GitCloud extends CloudView {
     async undoBaseline(id) {
         this.useSavedCache();const ack=this.cache().ack[id];
         if(!ack)return null;
-        const saved=this.store.local(this.undoKey(id));if(saved?.ack===ack&&digest(saved.graph)===ack)return saved.graph;
+        const saved=this.store.local(this.undoKey(id));if(saved?.ack===ack&&graphFingerprint(saved.graph)===ack)return saved.graph;
         // Older libraries can reuse a verified local checkout. Never fetch just to undo.
         let graph;try{graph=this.read(this.folder(id)+'/graph.json');}catch{}
-        if(graph&&digest(graph)===ack)return graph;
+        if(graph&&graphFingerprint(graph)===ack)return graph;
         // A failed Push may have rewritten the working cache. Read committed local objects,
         // never fetch/push to make Discard work and never trust an unmatched snapshot.
         // Offline recovery must not initialize a checkout or write Git config.
@@ -249,14 +276,14 @@ export class GitCloud extends CloudView {
         for(const commit of new Set([head,...history.stdout.split(/\s+/)].filter(v=>/^[a-f0-9]{40,64}$/.test(v||'')))){
             // Resolve literal entries and all verified parts from the same
             // commit, even if a failed Push replaced/pruned the working files.
-            try{const candidate=await this.committedGraph(remote,commit,this.folder(id));if(candidate&&digest(candidate)===ack){this.rememberBaseline(id,candidate);return candidate;}}
+            try{const candidate=await this.committedGraph(remote,commit,this.folder(id));if(candidate&&graphFingerprint(candidate)===ack){this.rememberBaseline(id,candidate);return candidate;}}
             catch(error){if(error.code==='GIT_OUTPUT_LIMIT'||error.name==='AbortError'||error.gitExitCode!==undefined)throw error;}
         }
         // Old libraries can lack the acknowledged graph while a later Pull kept
         // newer local edits. Fall back only to a fully imported remote graph
         // whose content hash AND semantic baseline were already verified.
         const cache=this.cache();
-        if(graph&&cache.loaded?.[id]?.includes(digest(graph))&&cache.baselines?.[id]&&digest(changeSnapshot(graph))===digest(cache.baselines[id]))return graph;
+        if(graph&&cache.loaded?.[id]?.includes(graphFingerprint(graph))&&cache.baselines?.[id]&&digest(changeSnapshot(graph))===digest(cache.baselines[id]))return graph;
         assert(false,'No verified local sync snapshot is available for this session. Its current data was kept.',409);
     }
     pendingItems() {
@@ -273,7 +300,7 @@ export class GitCloud extends CloudView {
         }).concat((this.store.local('trashPending') || []).map(e=>({id:e.id,name:(this.store.local('trashEntries')||[]).find(t=>t.id===e.id)?.names.join(', ') || 'Removed sessions',project:this.store.all('project').find(p=>p.id===this.store.find('branch',e.branchIds[0])?.projectId)?.name || 'Ungrouped',action:'remove',updatedAt:e.at,changes:[{kind:'session-removed',label:'Session removed'}]})));
         return items.map(item=>({...item,version:digest([this.readConfig().url||'',item.action==='remove'?(this.store.local('trashPending')||[]).find(e=>e.id===item.id):organizationSignature(currentOrganization(this.store,item.id)),c.ack[item.id]||null])}));
     }
-    async publish(treeIds, { catalogFresh = false } = {}) {
+    async publish(treeIds, { catalogFresh = false, rewriteStorage = false } = {}) {
         if (!catalogFresh) {
             await this.catalog();
             for (const item of this.items()) await this.hydrate(item.id);
@@ -282,7 +309,7 @@ export class GitCloud extends CloudView {
         const remote = this.connection.remote;
         // Capture exactly what this commit will acknowledge before yielding to local edits.
         const changes = this.pendingItems();
-        const snapshots = new Map(this.dirtyIds().map(id => [id, treeSnapshot(this.store, id)]));
+        const snapshots = new Map((rewriteStorage?this.store.syncCollections().items.map(i=>i.id):this.dirtyIds()).map(id => [id, treeSnapshot(this.store, id)]));
         const items = new Map(this.store.syncCollections().items.map(i => [i.id, i]));
         const pending = structuredClone(this.store.local('trashPending') || []);
         const state = { schema: 1, cleanupComplete: true, events: [...new Map([...trashState(this.store).events, ...pending].map(e => [e.id, e])).values()] };
@@ -300,34 +327,40 @@ export class GitCloud extends CloudView {
                 // A removed suffix only changes its own tree in the fetched checkout.
                 const graph = retainedGraph(this.read(this.folder(old.id) + '/graph.json'), new Set(state.events.flatMap(e => e.branchIds)));
                 const alive = new Set(graph.branches.filter(b => !b.synthetic).map(b => b.id));
-                const item = { ...old, sessions: old.sessions.filter(s => alive.has(s.id)), sessionIds: old.sessionIds.filter(id => alive.has(id)), ref: digest(graph) };
+                const item = { ...old, sessions: old.sessions.filter(s => alive.has(s.id)), sessionIds: old.sessionIds.filter(id => alive.has(id)), ref: graphFingerprint(graph) };
                 this.write(this.folder(old.id) + '/graph.json', graph); this.write(this.folder(old.id) + '/index.json', item);
                 const refs = new Set(bodyRefs(graph));
-                const records = [...this.records(old.id)].filter(([h]) => refs.has(h));
-                this.writeRecords(old.id, records);
+                const records=this.records(old.id);this.writeRecords(old.id,(function*(){for(const row of records)if(refs.has(row[0]))yield row;})());
             }
         }
-        let completed = 0;
+        let completed = 0;const preparedSnapshots=new Map();
         for (const [id, graph] of snapshots) {
             if (!graph) continue;
             const item = items.get(id); if (!item) continue; const projectId = cloudProjectId(item.projectId);
-            const entry = { ...item, projectId, sessions: item.sessions.map(s => ({ ...s, active: false })), ref: digest(graph), ancestors: [], project: graph.projects.find(p => p.id === projectId) };
+            const entry = { ...item, projectId, sessions: item.sessions.map(s => ({ ...s, active: false })), ref: graphFingerprint(graph), ancestors: [], project: graph.projects.find(p => p.id === projectId) };
+            const refs=bodyRefs(graph),recordsRef=digest([...refs].sort()),previous=this.read(this.folder(id)+'/index.json');
             this.report('Preparing Git commit',completed,snapshots.size,Date.now(),item.name);await yieldToLocal();
             this.write(this.folder(id) + '/graph.json', graph);
-            this.write(this.folder(id) + '/index.json', entry);
             const store = this.store;
-            this.writeRecords(id, (function* () { for (const h of bodyRefs(graph)) { const body = store.objectStatement.get(h)?.body; assert(typeof body === 'string', 'Missing local record.'); yield [h, body]; } })());
+            if(rewriteStorage||previous?.recordsCodec!==1||previous.recordsRef!==recordsRef)this.writeRecords(id, (function* () { for (const h of refs) { const body = store.objectStatement.get(h)?.body; assert(typeof body === 'string', 'Missing local record.'); yield [h, body]; } })());
+            // Publish the content stamp only after all record chunks/assets exist.
+            this.write(this.folder(id) + '/index.json', {...entry,recordsCodec:1,recordsRef});
+            preparedSnapshots.set(id,{ref:entry.ref,organization:organizationSignature(organizationSnapshot(graph))});
+            snapshots.set(id,null);
             this.report('Preparing Git commit', ++completed, snapshots.size, Date.now(), item.name);
             await yieldToLocal();
         }
-        this.write('grove.json',{format:'session-grove-git',schema:this.hasGraphParts()?2:1});
+        // Prepared files are the frozen upload snapshot. Do not retain the full
+        // library's expanded reference vectors while Git packs/sends its data.
+        for(const key of this.store.memoCache.keys())if(key==='exportGraph'||key==='cloud-snapshot-index'||key.startsWith('cloud-tree:'))this.store.memoCache.delete(key);
+        this.write('grove.json',{format:'session-grove-git',schema:this.dataSchema()});
         this.report('Pushing Git commit');
         await remote.commitAndPush(archivedRemovals.length&&!changes.length?'Grove: keep previous archives local':commitMessage(changes));
         // A failed/non-fast-forward push never clears pending work or acknowledges data.
         const c = this.cache();
         for(const id of archivedRemovals){delete c.ack[id];delete c.loaded[id];if(c.baselines)delete c.baselines[id];}
-        for (const [id, graph] of snapshots) { c.ack[id] = digest(graph); this.rememberBaseline(id,graph); (c.baselines ||= {})[id] = changeSnapshot(graph); c.loaded[id] = [digest(graph)];
-            if(organizationSignature(currentOrganization(this.store,id))===organizationSignature(organizationSnapshot(graph)))this.store.db.prepare('DELETE FROM local WHERE key=?').run(organizationUndoKey(id));
+        for (const [id, snapshot] of preparedSnapshots) {const graph=this.read(this.folder(id)+'/graph.json');assert(graphFingerprint(graph)===snapshot.ref,'Prepared Git snapshot changed during upload.');c.ack[id] = snapshot.ref; this.rememberBaseline(id,graph,snapshot.ref); (c.baselines ||= {})[id] = changeSnapshot(graph); c.loaded[id] = [snapshot.ref];
+            if(organizationSignature(currentOrganization(this.store,id))===snapshot.organization)this.store.db.prepare('DELETE FROM local WHERE key=?').run(organizationUndoKey(id));
         }
         c.lastUpload = now(); c.gitHead = remote.head; this.save(c);
         if (state.events.length) applyTrashState(this.store, state); await this.loadDirectory(); this.saveDirectory();

@@ -27,7 +27,8 @@ test('a shared compaction is one control that atomically changes all inherited c
 
 test('old per-copy decisions survive reading and display mixed until an explicit shared choice',t=>{
  const s=setup(t),{a,b}=family(s),event=s.parsed(a.head,'codex').context.compactions[0],legacy={disabled:[event.legacyId]};s.put('branch',{...a,contextPolicy:legacy});
- for(const branch of s.all('branch'))s.summary(branch.head,branch.agent);
+ // Warm derived read caches; the check below isolates organization decisions.
+ for(const branch of s.all('branch')){s.summary(branch.head,branch.agent);s.viewProjection(branch.head,branch.agent);if(branch.forkRevision)s.viewProjection(branch.forkRevision,branch.agent,branch.forkParentEnd??branch.forkEnd);}
  const before=s.db.prepare('SELECT total_changes() n').get().n,g=s.treeGraph(a.id,'in-use');assert.equal(s.db.prepare('SELECT total_changes() n').get().n,before,'reading mixed settings never silently normalizes user decisions');
  assert.deepEqual(s.get('branch',a.id).contextPolicy,legacy);assert.ok(g.paths.every(p=>p.context.compactions[0].groupMixed));
  assert.equal(parse(renderNative(s.raw(a.head),'codex','new-id','/fixture','Expanded',legacy),'codex').context.compactions.length,0,'legacy Off still applies to native materialization');

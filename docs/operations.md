@@ -18,6 +18,12 @@ Context settings edit the selected Codex profile's supported limits or Claude's 
 
 Activity-date settings affect display ordering, not synchronization clocks. The choices are conversation activity, manual edits (default) and automatic organization. Legacy records use available provenance where separate clocks were not recorded.
 
+## Storage maintenance
+
+Settings → Local service → **Optimize storage** performs lossless library packing in a worker, reports phases in the task panel, and reclaims free SQLite pages. Browsing remains available; writes and transfers wait until maintenance finishes. Node.js 24 or later is required to read the packed library. A verified temporary database backup is retained on failure and removed after successful integrity checks. Repeating optimization does not create another full backup or repack unchanged data.
+
+Older independent SQLite files under `recovery-snapshots/` become verified standard `.sqlite.gz` archives; the newest eligible copy stays uncompressed. All recovery points are retained. Linked files, active WAL databases and unknown existing archives are skipped. To use an archived SQLite recovery point, decompress it into a separate directory first; never overwrite a running library. Context/configuration backups, native client files and existing Git history are not compacted by this operation.
+
 ## Troubleshooting
 
 - If sessions do not appear, use Update and check the configured native roots. Reading saved histories does not require an API key or Git configuration.

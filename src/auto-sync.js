@@ -26,7 +26,7 @@ export class AutoSync {
     reconcileTimer(dirty) {
         const p=preferences(this.store);
         // Disabled/busy timers do not need an all-library sync fingerprint pass.
-        const available=!this.running&&!this.closed&&!this.needsReview&&p.autoUploadEnabled&&this.store.local('syncStarted')!==false&&this.unlocked&&!!this.readConfig()?.url;
+        const available=!this.store.storageBusy&&!this.running&&!this.closed&&!this.needsReview&&p.autoUploadEnabled&&this.store.local('syncStarted')!==false&&this.unlocked&&!!this.readConfig()?.url;
         if(!available){clearTimeout(this.interval);this.interval=null;this.nextFallbackAt=null;return;}
         const pending=(dirty??(this.cloud.dirtyIds().length>0))||this.trashPending();
         if(!pending){clearTimeout(this.interval);this.interval=null;this.nextFallbackAt=null;return;}
@@ -50,7 +50,7 @@ export class AutoSync {
         if(this.progressPhase!==value.phase || value.completed===value.total || at-(this.progressAt||0)>=200) { this.progressAt=at;this.progressPhase=value.phase;this.onOperation?.(this.operation); }
     }
     async fallback() {
-        if (this.migrating || this.store.local('syncStarted') === false || !preferences(this.store).autoUploadEnabled || this.running || this.closed || !this.readConfig()?.url || !this.unlocked || this.retryAt > Date.now()) return;
+        if (this.store.storageBusy || this.migrating || this.store.local('syncStarted') === false || !preferences(this.store).autoUploadEnabled || this.running || this.closed || !this.readConfig()?.url || !this.unlocked || this.retryAt > Date.now()) return;
         if (this.needsReview) return;
         await this.beforeUpload?.();
         if (!this.cloud.dirtyIds().length && !this.trashPending()) return;
@@ -79,6 +79,7 @@ export class AutoSync {
     }
     startTransfer(direction, manual = true, captured = false) {
         assert(['pull', 'push'].includes(direction), 'Choose Pull or Push.');
+        assert(!this.store.storageBusy,'Storage optimization is in progress.',409);
         assert(!this.running && !this.pending && !this.migrating, 'A cloud transfer is already running.', 409);
         assert(this.unlocked && this.readConfig()?.url, 'Configure sync in Settings first.');
         assert(this.rateLimitUntil <= Date.now(), 'Provider requested a pause before retrying.', 429);
@@ -131,6 +132,7 @@ export class AutoSync {
     }
     async exclusive(fn, allowMigration = false, direction = 'pull', manual = false) {
         if (this.closed) throw new Error('Server is stopping.');
+        assert(!this.store.storageBusy,'Storage optimization is in progress.',409);
         if (this.pending) await this.pending.catch(() => {});
         // Multiple GETs may wait together; recheck after yielding.
         if (this.pending) return this.exclusive(fn, allowMigration, direction, manual);
@@ -145,7 +147,7 @@ export class AutoSync {
         finally { if(manual){this.lastManualOperation=this.operation;this.store.local('lastManualSync',this.operation);} this.pending = null; this.running = false; this.store.transferReaders--; if (!this.store.transferReaders && this.store.cleanupDeferred) { this.store.cleanupDeferred = false; cleanupLocal(this.store); } this.reconcileTimer(); this.onOperation?.(this.operation); }
     }
     async flush(direction = 'queued', explicit = false, captured = false) {
-        if (!explicit && (this.closed || !this.unlocked || !this.readConfig()?.url || this.migrating || this.retryAt > Date.now() || this.store.local('syncStarted') === false)) return null;
+        if (!explicit && (this.closed || !this.unlocked || !this.readConfig()?.url || this.store.storageBusy || this.migrating || this.retryAt > Date.now() || this.store.local('syncStarted') === false)) return null;
         if (!explicit && (!preferences(this.store).autoUploadEnabled || this.needsReview || !this.cloud.dirtyIds().length && !this.trashPending())) return null;
         this.startTransfer(direction === 'pull' ? 'pull' : 'push', explicit, captured);
         return this.syncJob;

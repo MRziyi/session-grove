@@ -1,4 +1,5 @@
 import {PrefixTitles} from './prefix-titles.js';
+import {optimizeStorage} from './storage-maintenance.js';
 import {conflictItems,resolveConflicts,repairInheritedProjectConflicts,clearConflictFailure,conflictId} from './conflicts.js';
 import {TranscriptionTitles} from './transcription-titles.js';
 import {Autostart} from './autostart.js';
@@ -69,7 +70,7 @@ export function createApp({ root, roots, guard, demo = false, startupOptions = {
     const intelligence = new Intelligence(store, { transcriptions:new TranscriptionTitles(store,native,demo?{support:()=>({supported:false,reason:'Transcription updates are unavailable in demo mode.'})}:{}), onChange: id => autoSync.schedule([id]), onStatus: value => operation('intelligence', value), canApply: () => !autoSync.running && !capturePromise && !trashPromise && !discardPromise && !transcriptionPromise && !stopping });
     const prefixTitles=new PrefixTitles(store,native,intelligence.transcriptions);
     const timing = () => ({ discardOperation, intelligence: intelligence.status(), trashOperation, appVersion: VERSION, serverNow: Date.now(), stateVersion: diagnostics.startedAt + ':' + store.version + ':' + store.cloudVersion, update: { nextRunAt: nextCaptureAt, lastRunAt: lastCaptureAt, started: !!store.local('localUpdateStarted'), operation: updateOperation } });
-    let expiryTimer;const configureExpiry=()=>{clearTimeout(expiryTimer);const entries=expireTrash(store),next=entries.filter(e=>!e.expired).map(e=>Date.parse(e.expiresAt)).sort((a,b)=>a-b)[0];if(next){expiryTimer=setTimeout(configureExpiry,Math.max(1000,Math.min(2147483647,next-Date.now())));expiryTimer.unref();}};configureExpiry();
+    let expiryTimer;const configureExpiry=()=>{clearTimeout(expiryTimer);if(store.storageBusy){expiryTimer=setTimeout(configureExpiry,1000);expiryTimer.unref();return;}const entries=expireTrash(store),next=entries.filter(e=>!e.expired).map(e=>Date.parse(e.expiresAt)).sort((a,b)=>a-b)[0];if(next){expiryTimer=setTimeout(configureExpiry,Math.max(1000,Math.min(2147483647,next-Date.now())));expiryTimer.unref();}};configureExpiry();
     const trashSnapshot = () => ({ trashEntries:(store.local('trashEntries')||[]).filter(e=>!e.expired&&!e.restoredAt).map(e=>({...e,projectIds:e.projectIds||[...new Set(e.branchIds.map(id=>store.find('branch',id)?.projectId||INBOX_ID))]})), trashNative:nativeTrashCandidates(store) });
     const snapshot = () => ({ clientLinks, ...autoSync.decorate(store.snapshot()), preferences: preferences(store), ...trashSnapshot() });
     const server = http.createServer(async (req, res) => {
@@ -118,7 +119,7 @@ export function createApp({ root, roots, guard, demo = false, startupOptions = {
                 catch {
                     throw Object.assign(new Error('JSON 格式错误'), { status: 400 });
                 }
-                assert(!trashPromise, 'A Trash operation is in progress.', 409);
+                assert(!trashPromise, trashOperation?.action==='storage'?'Storage optimization is in progress.':'A Trash operation is in progress.', 409);
                 assert(!transcriptionPromise,'A transcription title is being updated.',409);
                 assert(!capturePromise || route==='/api/collect', 'Local update in progress.', 409);
                 assert(settings.job?.state !== 'running' || !/^\/api\/(sync|synchronize|settings)/.test(route), 'Settings migration in progress.', 409);
@@ -135,6 +136,11 @@ export function createApp({ root, roots, guard, demo = false, startupOptions = {
                 return send(200,{path:directory,parent:path.dirname(directory),home:os.homedir(),folders});
             }
             if (req.method === 'GET' && route === '/api/status') return send(200, { ...timing(), cloud: autoSync.status() });
+            if(req.method==='POST'&&route==='/api/storage/optimize'){
+                assert(!autoSync.running&&!autoSync.pending&&!autoSync.migrating&&!intelligence.pending&&!capturePromise&&!discardRequest&&!transcriptionPromise&&settings.job?.state!=='running','Wait for the current operation before optimizing storage.',409);
+                const result=await runTrash('storage',report=>optimizeStorage(store,{onProgress:report,packBackups:body.packBackups===true}));
+                store.local('storage-last-optimization',{at:new Date().toISOString(),savedBytes:Math.max(0,result.beforeFileBytes-result.afterFileBytes)+(result.recoveryCopies?.savedBytes||0)});return send(200,result);
+            }
             if(req.method==='GET'&&route==='/api/conflicts')return send(200,{items:conflictItems(store),stateVersion:timing().stateVersion});
             if (req.method === 'GET' && route === '/api/synchronize/pending') return send(200, { items: autoSync.pendingItems() });
             if(req.method==='POST'&&route==='/api/synchronize/discard'){
@@ -169,7 +175,7 @@ export function createApp({ root, roots, guard, demo = false, startupOptions = {
             if (req.method === 'GET' && route === '/api/diagnostics') return send(200, { ...diagnostics.report(), git: { commit: autoSync.cloud.connection?.remote.head || null, progress: autoSync.status().operation?.progress || null }, fallbackMinutes: autoSync.status().fallbackMinutes });
             if (req.method === 'GET' && route === '/api/discover')
                 return send(200, native.discover());
-            if (req.method === 'GET' && route === '/api/settings') return send(200, { ...settings.status(), intelligence: intelligence.status(), context:contextSettings.status(),autostart:await autostart.status() });
+            if (req.method === 'GET' && route === '/api/settings') return send(200, { ...settings.status(), intelligence: intelligence.status(), context:contextSettings.status(),autostart:await autostart.status(),storage:store.local('storage-last-optimization') });
             if (req.method === 'POST' && route === '/api/settings/autostart') return send(200,await autostart.set(body.enabled));
             if (req.method === 'POST' && route === '/api/settings/context') return send(200,contextSettings.save(body));
             if (req.method === 'POST' && route === '/api/settings/intelligence') return send(200, await intelligence.save(body));
@@ -191,6 +197,7 @@ export function createApp({ root, roots, guard, demo = false, startupOptions = {
                     await new Promise(r=>setImmediate(r));
                 };
                 await report({phase:'Reading session history'});
+                if(store.storageBusy&&!store.find('branch',tree[1])){await report({phase:'Waiting for storage optimization'});await trashPromise;}
                 await autoSync.openTree(tree[1], { check: url.searchParams.get('check') === '1' });
                 let graph;
                 for(let attempt=0;attempt<3;attempt++){
@@ -485,7 +492,7 @@ export function createApp({ root, roots, guard, demo = false, startupOptions = {
         // Flush the operation event before synchronous native parsing starts.
         await new Promise(resolve => setImmediate(resolve));
         try {
-            const start = performance.now(), r = native.refreshLocal(); lastCaptureAt = Date.now();
+            const start = performance.now(), r = native.refreshLocal();if(r.updates.length||r.discovered>0)store.pruneViews(); lastCaptureAt = Date.now();
             diagnostics.record('capture', { updated: r.updates.length, discovered: r.discovered, count: r.errors.length, durationMs: Math.round(performance.now() - start) });
             for (const [phase, durationMs] of Object.entries(r.timings || {})) diagnostics.record('capture-phase', { phase, durationMs });
             intelligence.observe();

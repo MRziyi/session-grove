@@ -103,6 +103,15 @@ test('an interrupted first graph-part write retries without losing local history
  a.cloud.writeRaw=write;await push(a);assert.deepEqual(a.cloud.dirtyIds(),[]);assert.equal(a.store.raw(session.head),raw);assert.equal(a.cloud.read('grove.json').schema,2);
 });
 
+test('media storage shares payloads while native records and compact graph identities stay independent',async t=>{
+ const e=fixture(t),a=e.device('payload-source'),b=e.device('payload-reader'),session=branch(a),image=Buffer.alloc(18000,71),url='data:image/png;base64,'+image.toString('base64');let raw=a.store.raw(session.head);
+ for(let i=0;i<32;i++){const turn=codexTurn('Question '+i,'Answer '+i),call='image-'+i;turn.splice(-1,0,{type:'response_item',payload:{type:'function_call',name:'screenshot',call_id:call,arguments:'{}'}},{type:'response_item',payload:{type:'function_call_output',call_id:call,output:[{type:'input_image',image_url:url}]}});raw+=turn.map(v=>JSON.stringify(v)+'\n').join('');a.store.ingest(session.id,raw,a.store.get('branch',session.id).head,{});}
+ const {treeSnapshot,graphFingerprint}=await import('../src/cloud-view.js'),expected=graphFingerprint(treeSnapshot(a.store,session.id));await push(a);assert.equal(a.cloud.read('grove.json').schema,3);
+ const payloadDir=a.cloud.file(a.cloud.folder(session.id)+'/payloads');assert.equal(fs.readdirSync(payloadDir).length,1);const manifest=JSON.parse(fs.readFileSync(a.cloud.file(a.cloud.folder(session.id)+'/graph.json'),'utf8'));assert.equal(manifest.schema,2);assert.equal(graphFingerprint(a.cloud.read(a.cloud.folder(session.id)+'/graph.json')),expected);
+ await pull(b);assert.equal(b.store.raw(b.store.get('branch',session.id).head),raw);assert.deepEqual(b.cloud.dirtyIds(),[]);
+ const file=path.join(payloadDir,fs.readdirSync(payloadDir)[0]);fs.writeFileSync(file,Buffer.alloc(image.length,72));await a.cloud.connection.remote.commitAndPush('Synthetic payload corruption');const c=e.device('payload-corrupt-reader');await c.cloud.catalog();await assert.rejects(c.cloud.hydrate(session.id),/payload integrity/);assert.equal(c.store.all('branch').length,0);
+});
+
 test('Git roundtrip, metadata-only rename and no-op Push preserve bodies and history', async t => {
     const e = fixture(t), a = e.device('a'), b = e.device('b'), session = branch(a);
     assert.equal(a.auto.status().unlocked, true);
@@ -111,7 +120,7 @@ test('Git roundtrip, metadata-only rename and no-op Push preserve bodies and his
     await pull(b); assert.equal(b.store.all('branch').length, 1);
     await b.auto.openTree(session.id); assert.equal(b.store.raw(b.store.get('branch', session.id).head), a.store.raw(session.head));
     assert.deepEqual(b.cloud.dirtyIds(), []);
-    a.store.edit(session.id, { name: 'Renamed' }); await push(a);
+    a.store.edit(session.id, { name: 'Renamed' });const readRecord=a.store.objectStatement.get;let recordReads=0;a.store.objectStatement.get=(...args)=>{recordReads++;return readRecord(...args);};try{await push(a);}finally{a.store.objectStatement.get=readRecord;}assert.equal(recordReads,0,'metadata-only Push does not reread unchanged native bodies');
     const files = execFileSync('git', ['--git-dir', e.url, 'diff', '--name-only', first, 'main'], { encoding: 'utf8' });
     assert.ok(!files.includes('records/')); assert.match(files, /graph.json/);
     const second = a.cloud.connection.remote.head; const current = await pull(a); assert.equal(current.unchanged, true); assert.equal(a.auto.operation.summary.unchanged, true); await push(a); assert.equal(a.cloud.connection.remote.head, second);

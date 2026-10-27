@@ -332,7 +332,7 @@ export function prepareCleanupPlan(store) {
     for(const row of store.db.prepare("SELECT key,body FROM local WHERE key LIKE 'git-undo:%'").iterate()){
         const rootId=row.key.split(':').at(-1);
         if(removed.has(rootId)||!store.find('branch',rootId))continue;
-        const baseline=JSON.parse(row.body);if(baseline?.graph)addBodyRefs(baseline.graph,refs);
+        const baseline=store.storage?store.storage.local(row.key,row.body):JSON.parse(row.body);if(baseline?.graph)addBodyRefs(baseline.graph,refs);
     }
     const exists=store.db.prepare('SELECT 1 FROM entities WHERE kind=? AND id=?');
     const dependencies=new Set(kept.branches.map(b=>b.id));
@@ -363,18 +363,18 @@ function applyCleanupPlan(store,plan){
     pruneCompletedJournals(store);if(count)store.db.exec('PRAGMA wal_checkpoint(PASSIVE)');return store.local('lastTrashCleanup');
 }
 export function cleanupLocal(store){
-    if(store.transferReaders){store.cleanupDeferred=true;return {records:0,deferred:true};}
+    if(store.transferReaders||store.storageBusy){store.cleanupDeferred=true;return {records:0,deferred:true};}
     store.cleanupDeferred=false;return applyCleanupPlan(store,prepareCleanupPlan(store));
 }
 export async function cleanupLocalAsync(store,{onProgress=async()=>{}}={}){
-    if(store.transferReaders){store.cleanupDeferred=true;return {records:0,deferred:true};}
+    if(store.transferReaders||store.storageBusy){store.cleanupDeferred=true;return {records:0,deferred:true};}
     await onProgress({phase:'Checking retained history',completed:0,total:null});
     const version=store.version,cloudVersion=store.cloudVersion,changes=store.db.prepare('SELECT total_changes() n').get().n;
     const worker=new Worker(new URL('./cleanup-worker.js',import.meta.url),{workerData:{root:store.root},execArgv:[]});
     try{
         const plan=await new Promise((resolve,reject)=>{let done=false;worker.on('message',value=>{done=true;value.error?reject(Error(value.error)):resolve(value.plan);});worker.on('error',reject);worker.on('exit',code=>{if(!done)reject(Error('Local cleanup worker stopped ('+code+').'));});});
         await onProgress({phase:'Removing unused local records',completed:0,total:null});
-        if(store.version!==version||store.cloudVersion!==cloudVersion||store.transferReaders||store.db.prepare('SELECT total_changes() n').get().n!==changes){store.cleanupDeferred=true;await onProgress({phase:'Storage cleanup deferred',completed:0,total:null});return {records:0,deferred:true};}
+        if(store.version!==version||store.cloudVersion!==cloudVersion||store.transferReaders||store.storageBusy||store.db.prepare('SELECT total_changes() n').get().n!==changes){store.cleanupDeferred=true;await onProgress({phase:'Storage cleanup deferred',completed:0,total:null});return {records:0,deferred:true};}
         store.cleanupDeferred=false;return applyCleanupPlan(store,plan);
     }finally{await worker.terminate();}
 }

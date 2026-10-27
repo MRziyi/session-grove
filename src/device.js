@@ -11,8 +11,9 @@ export function deviceDetails() {
 }
 export function contentOrigin(store, revisionId) {
     return store.memo('origin:' + revisionId, () => {
-        let r = store.get('revision', revisionId), seen = new Set();
-        while (r.parent && ['fork', 'shared-prefix', 'native-fork-snapshot', 'native-settings'].includes(r.source?.operation) && !seen.has(r.id)) { seen.add(r.id); r = store.get('revision', r.parent); }
+        const read=id=>store.revisionMetadata?store.revisionMetadata(id):store.get('revision',id);
+        let r = read(revisionId), seen = new Set();
+        while (r.parent && ['fork', 'shared-prefix', 'native-fork-snapshot', 'native-settings'].includes(r.source?.operation) && !seen.has(r.id)) { seen.add(r.id); r = read(r.parent); }
         const s = r.source || {}, here = s.deviceId === store.device.id ? store.device : {};
         return { id: s.deviceId || null, name: here.name || s.deviceName || 'Unknown device', model: here.model || s.deviceModel || null, platform: here.platform || s.devicePlatform || null, kind: here.kind || s.deviceKind || (/book|laptop/i.test(s.deviceName || '') ? 'laptop' : 'desktop'), observed: s.operation === 'import' };
     });

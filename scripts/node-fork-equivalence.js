@@ -2,10 +2,11 @@
 import {execFileSync} from 'node:child_process';
 import fs from 'node:fs';import os from 'node:os';import path from 'node:path';import assert from 'node:assert/strict';import {DatabaseSync} from 'node:sqlite';
 import {Store} from '../src/store.js';import {Native} from '../src/native.js';import {parse,renderNative} from '../src/transcript.js';import {connect} from '../src/codex-rpc.js';import {hash,id} from '../src/util.js';import {claudeSample} from '../src/demo.js';import {forkSession,getSessionMessages} from '@anthropic-ai/claude-agent-sdk';
+import {StorageCodec,unpackStorage} from '../src/storage-codec.js';
 const [library,branchId]=process.argv.slice(2);assert(library&&branchId,'Pass library path and selected branch ID.');
 const db=new DatabaseSync(path.join(library,'grove.sqlite'),{readOnly:true});
-const b=JSON.parse(db.prepare('SELECT body FROM entities WHERE id=?').get(branchId).body),r=JSON.parse(db.prepare('SELECT body FROM entities WHERE id=?').get(b.head).body);
-const source=r.refs.map(h=>db.prepare('SELECT body FROM objects WHERE hash=?').get(h).body).join('');db.close();
+const codec=new StorageCodec(db),b=codec.entity('branch',branchId,db.prepare('SELECT body FROM entities WHERE id=?').get(branchId).body),r=codec.revision(b.head);
+const source=r.refs.map(h=>unpackStorage(db.prepare('SELECT body FROM objects WHERE hash=?').get(h).body)).join('');db.close();
 const p=parse(source,'codex');assert(p.checkpoints.length>2);
 const root=fs.mkdtempSync(path.join(os.tmpdir(),'grove-node-native-')),home=path.join(root,'codex'),store=new Store(path.join(root,'library')),native=new Native(store,{roots:{codex:home,claude:path.join(root,'claude')},guard:()=>{}});
 let client;const report={codexVersion:execFileSync(process.env.CODEX_BIN||'codex',['--version'],{encoding:'utf8'}).trim(),claudeSdk:'0.3.283',modelTurnsSubmitted:0,originalFilesChanged:false};

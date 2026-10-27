@@ -9,6 +9,7 @@ Grove is a local Node.js 24+ service with a DOM/SVG browser interface. Node prov
 | HTTP, authentication and operation scheduling | `src/server.js` |
 | Background service and login startup | `src/service.js`, `src/autostart.js` |
 | SQLite records, immutable revisions and bounded caches | `src/store.js` |
+| Lossless encodings and off-thread maintenance | `src/storage-codec.js`, `src/revision-codec.js`, `src/storage-worker.js`, `src/recovery-storage.js` |
 | Native discovery, materialization and client adapters | `src/native.js`, `src/codex-history.js`, `src/claude.js` |
 | Trees, naming ownership and organization checkpoints | `src/workspace.js`, `src/organization.js`, `src/organization-undo.js` |
 | Shared local/sync projections | `src/cloud-view.js`, `src/project-view.js` |
@@ -23,6 +24,10 @@ Grove is a local Node.js 24+ service with a DOM/SVG browser interface. Node prov
 The local library uses `grove.sqlite` for records, revision references, durable project identities, local instances and caches. Original transcript fragments are addressed by content hash. A logical Session groups related paths; each native path and each named conversation node has its own identity. Display names are not identifiers.
 
 SQLite, native activation choices, credentials, context-configuration backups and recovery copies stay on the device. The Git data repository contains readable history, graph metadata and deletion identities, as described in [Git sync](git-sync.md). It is separate from the application's source checkout.
+
+Large SQLite values use checksummed Zstandard frames. Revision reference vectors can store a shared parent prefix and an appended suffix; same-ID parent replacement first materializes dependent children. Public Store reads reconstruct independent canonical values. Native record hashes, byte sequences, graph digests and conversation identities do not depend on physical encoding. Existing uncompressed values remain readable.
+
+Versioned conversation projections persist message previews, context and activity summaries without tool bodies. They are derived caches: changes invalidate them, old/unreferenced projections are pruned, and invalid entries rebuild from original records. This keeps cold tree reads from decompressing and parsing entire native histories. Reference, metadata and payload caches have explicit size limits.
 
 ## Invariants
 
