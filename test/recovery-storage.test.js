@@ -13,3 +13,13 @@ test('active WAL companions, unknown existing archives and linked files are unto
  const {root,directory}=fixture(t),old=path.join(directory,'old.sqlite'),latest=path.join(directory,'latest.sqlite'),active=path.join(directory,'active.sqlite');fs.writeFileSync(old,'original');fs.utimesSync(old,1,1);fs.writeFileSync(old+'.gz','not our archive');fs.writeFileSync(latest,'latest');fs.writeFileSync(active,'active');fs.writeFileSync(active+'-wal','pending WAL');const linked=path.join(directory,'linked.sqlite');fs.linkSync(old,linked);
  assert.equal(recoveryPackingPlan(root).length,0);fs.unlinkSync(linked);assert.equal(recoveryPackingPlan(root).length,1);const result=await packRecoveryCopies(root);assert.equal(result.skipped,1);assert.equal(fs.readFileSync(old,'utf8'),'original');assert.equal(fs.readFileSync(old+'.gz','utf8'),'not our archive');assert.ok(fs.existsSync(active));
 });
+test('a WAL created during packing keeps all original recovery databases',async t=>{
+ const {directory,root}=fixture(t),old=path.join(directory,'old.sqlite'),latest=path.join(directory,'latest.sqlite');fs.writeFileSync(old,'snapshot '.repeat(1000));fs.utimesSync(old,1,1);fs.writeFileSync(latest,'latest');
+ await assert.rejects(packRecoveryCopies(root,{onProgress:async p=>{if(p.phase==='Verifying recovery copies')fs.writeFileSync(old+'-wal','new database writes');}}),/active WAL/);
+ assert.ok(fs.existsSync(old));assert.ok(fs.existsSync(latest));assert.equal(fs.readFileSync(old+'-wal','utf8'),'new database writes');
+});
+test('an archive replaced after packing cannot remove its original database',async t=>{
+ const {directory,root}=fixture(t),old=path.join(directory,'old.sqlite'),latest=path.join(directory,'latest.sqlite');fs.writeFileSync(old,'snapshot '.repeat(1000));fs.utimesSync(old,1,1);fs.writeFileSync(latest,'latest');
+ await assert.rejects(packRecoveryCopies(root,{onProgress:async p=>{if(p.phase==='Verifying recovery copies')fs.writeFileSync(old+'.gz','damaged archive');}}));
+ assert.ok(fs.existsSync(old));assert.ok(fs.existsSync(latest));
+});

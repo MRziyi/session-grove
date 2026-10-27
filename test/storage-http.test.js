@@ -1,0 +1,10 @@
+import test from 'node:test';import assert from 'node:assert/strict';import fs from 'node:fs';import os from 'node:os';import path from 'node:path';
+import {createApp} from '../src/server.js';import {listenForTests} from '../scripts/test-server.js';import {codexSample} from '../src/demo.js';
+test('storage HTTP is authenticated, previews exact cleanup and reports progress without changing sessions',async t=>{
+ const root=fs.mkdtempSync(path.join(os.tmpdir(),'grove-storage-http-')),app=createApp({root:root+'/library',roots:{codex:root+'/codex',claude:root+'/claude'},guard:()=>{}});await listenForTests(app.server);t.after(async()=>{await new Promise(r=>app.close(r));fs.rmSync(root,{recursive:true,force:true});});
+ const s=app.store,b=s.branch(null,'Keep','codex',codexSample(root,[['Question','Answer']])),raw=s.raw(b.head),base='http://127.0.0.1:'+app.server.address().port,boot=await fetch(base+'/api/bootstrap').then(r=>r.json()),headers={'X-Grove-Token':boot.token,'Content-Type':'application/json'};
+ fs.mkdirSync(root+'/library/transfer-cache');fs.writeFileSync(root+'/library/transfer-cache/obsolete','old');assert.equal((await fetch(base+'/api/storage')).status,403);
+ const value=await fetch(base+'/api/storage',{headers}).then(r=>r.json());assert.equal(value.cleanup.temporaryBytes,3);assert.ok(value.categories.database>0);
+ const stale=await fetch(base+'/api/storage/cleanup',{method:'POST',headers,body:JSON.stringify({version:'old preview'})});assert.ok(!stale.ok);assert.ok(fs.existsSync(root+'/library/transfer-cache/obsolete'));
+ const response=await fetch(base+'/api/storage/cleanup',{method:'POST',headers,body:JSON.stringify({version:value.cleanup.version})});assert.equal(response.status,200);assert.equal((await response.json()).savedBytes,3);assert.equal(s.raw(b.head),raw);assert.equal((await fetch(base+'/api/status',{headers}).then(r=>r.json())).trashOperation.state,'success');assert.equal((await fetch(base+'/api/storage',{headers}).then(r=>r.json())).cleanup.bytes,0);
+});

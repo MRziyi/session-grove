@@ -38,6 +38,8 @@ Keep previous and Keep current compare the synced and current local versions. Th
 
 Project membership follows the tree root. Old conflicts caused only by stale derived child membership can be repaired; real field differences remain explicit.
 
+Empty context-policy defaults and reordered disabled sets compare by behavior. Independently identified layout nodes with identical names, grouping and naming metadata join both history lineages while retaining local node identities. These equivalent states do not require a source choice. Real grouping differences show affected message counts and boundary excerpts; compaction-policy differences identify the affected compactions even when their counts match.
+
 ## Organization-only Discard
 
 Only pending rows with reversible Grove organization edits can be discarded: labels, project assignment, node grouping and context preferences. Discard preserves messages, revisions, new sessions/forks, native files, client transcription titles, activation state and Trash identities. Conversation/client changes remain queued for Push.

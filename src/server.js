@@ -1,5 +1,7 @@
 import {PrefixTitles} from './prefix-titles.js';
 import {optimizeStorage} from './storage-maintenance.js';
+import {storageUsage,storageUpgrade} from './storage-usage.js';
+import {reconcileEquivalentConflicts} from './sync-equivalence.js';
 import {conflictItems,resolveConflicts,repairInheritedProjectConflicts,clearConflictFailure,conflictId} from './conflicts.js';
 import {TranscriptionTitles} from './transcription-titles.js';
 import {Autostart} from './autostart.js';
@@ -40,7 +42,7 @@ const webRoot = fileURLToPath(new URL('../web/', import.meta.url));
 export function createApp({ root, roots, guard, demo = false, startupOptions = {} }) {
     const store = new Store(root), native = new Native(store, { roots, guard }), token = randomBytes(32).toString('hex');
     const lineageRepair=repairLegacyRecoveries(store);
-    const repairedConflicts=repairInheritedProjectConflicts(store);
+    const repairedConflicts=repairInheritedProjectConflicts(store)+reconcileEquivalentConflicts(store);
     const webAssets = new Map(['index.html', 'app.js', 'graph-ancestors.js', 'tree-search.js', 'chat-selection.js', 'library-view.js', 'session-drag.js', 'inline-name.js', 'select.js', 'markdown.js', 'i18n.js', 'style.css'].map(file => [file, fs.readFileSync(path.join(webRoot, file))]));
     const configFile = path.join(root, 'git-sync.json');
     const diagnostics = new Diagnostics(root);
@@ -69,7 +71,7 @@ export function createApp({ root, roots, guard, demo = false, startupOptions = {
     autoSync.onOperation = value => {operation('sync', {...value, status:autoSync.status()});if(value.state!=='running')intelligence.observe();};
     const intelligence = new Intelligence(store, { transcriptions:new TranscriptionTitles(store,native,demo?{support:()=>({supported:false,reason:'Transcription updates are unavailable in demo mode.'})}:{}), onChange: id => autoSync.schedule([id]), onStatus: value => operation('intelligence', value), canApply: () => !autoSync.running && !capturePromise && !trashPromise && !discardPromise && !transcriptionPromise && !stopping });
     const prefixTitles=new PrefixTitles(store,native,intelligence.transcriptions);
-    const timing = () => ({ discardOperation, intelligence: intelligence.status(), trashOperation, appVersion: VERSION, serverNow: Date.now(), stateVersion: diagnostics.startedAt + ':' + store.version + ':' + store.cloudVersion, update: { nextRunAt: nextCaptureAt, lastRunAt: lastCaptureAt, started: !!store.local('localUpdateStarted'), operation: updateOperation } });
+    const timing = () => ({ storage:{needsOptimization:storageUpgrade(store)},discardOperation, intelligence: intelligence.status(), trashOperation, appVersion: VERSION, serverNow: Date.now(), stateVersion: diagnostics.startedAt + ':' + store.version + ':' + store.cloudVersion, update: { nextRunAt: nextCaptureAt, lastRunAt: lastCaptureAt, started: !!store.local('localUpdateStarted'), operation: updateOperation } });
     let expiryTimer;const configureExpiry=()=>{clearTimeout(expiryTimer);if(store.storageBusy){expiryTimer=setTimeout(configureExpiry,1000);expiryTimer.unref();return;}const entries=expireTrash(store),next=entries.filter(e=>!e.expired).map(e=>Date.parse(e.expiresAt)).sort((a,b)=>a-b)[0];if(next){expiryTimer=setTimeout(configureExpiry,Math.max(1000,Math.min(2147483647,next-Date.now())));expiryTimer.unref();}};configureExpiry();
     const trashSnapshot = () => ({ trashEntries:(store.local('trashEntries')||[]).filter(e=>!e.expired&&!e.restoredAt).map(e=>({...e,projectIds:e.projectIds||[...new Set(e.branchIds.map(id=>store.find('branch',id)?.projectId||INBOX_ID))]})), trashNative:nativeTrashCandidates(store) });
     const snapshot = () => ({ clientLinks, ...autoSync.decorate(store.snapshot()), preferences: preferences(store), ...trashSnapshot() });
@@ -119,7 +121,7 @@ export function createApp({ root, roots, guard, demo = false, startupOptions = {
                 catch {
                     throw Object.assign(new Error('JSON 格式错误'), { status: 400 });
                 }
-                assert(!trashPromise, trashOperation?.action==='storage'?'Storage optimization is in progress.':'A Trash operation is in progress.', 409);
+                assert(!trashPromise, ['storage','storage-cleanup'].includes(trashOperation?.action)?'Storage optimization is in progress.':'A Trash operation is in progress.', 409);
                 assert(!transcriptionPromise,'A transcription title is being updated.',409);
                 assert(!capturePromise || route==='/api/collect', 'Local update in progress.', 409);
                 assert(settings.job?.state !== 'running' || !/^\/api\/(sync|synchronize|settings)/.test(route), 'Settings migration in progress.', 409);
@@ -136,10 +138,12 @@ export function createApp({ root, roots, guard, demo = false, startupOptions = {
                 return send(200,{path:directory,parent:path.dirname(directory),home:os.homedir(),folders});
             }
             if (req.method === 'GET' && route === '/api/status') return send(200, { ...timing(), cloud: autoSync.status() });
-            if(req.method==='POST'&&route==='/api/storage/optimize'){
+            if(req.method==='GET'&&route==='/api/storage')return send(200,await storageUsage(store));
+            if(req.method==='POST'&&['/api/storage/optimize','/api/storage/cleanup'].includes(route)){
                 assert(!autoSync.running&&!autoSync.pending&&!autoSync.migrating&&!intelligence.pending&&!capturePromise&&!discardRequest&&!transcriptionPromise&&settings.job?.state!=='running','Wait for the current operation before optimizing storage.',409);
-                const result=await runTrash('storage',report=>optimizeStorage(store,{onProgress:report,packBackups:body.packBackups===true}));
-                store.local('storage-last-optimization',{at:new Date().toISOString(),savedBytes:Math.max(0,result.beforeFileBytes-result.afterFileBytes)+(result.recoveryCopies?.savedBytes||0)});return send(200,result);
+                const cleanup=route.endsWith('/cleanup');
+                const result=await runTrash(cleanup?'storage-cleanup':'storage',report=>optimizeStorage(store,{onProgress:report,packBackups:!cleanup&&body.packBackups===true,action:cleanup?'cleanup':'optimize',version:body.version}));
+                if(!cleanup)store.local('storage-last-optimization',{at:new Date().toISOString(),savedBytes:Math.max(0,result.beforeFileBytes-result.afterFileBytes)+(result.recoveryCopies?.savedBytes||0)});return send(200,result);
             }
             if(req.method==='GET'&&route==='/api/conflicts')return send(200,{items:conflictItems(store),stateVersion:timing().stateVersion});
             if (req.method === 'GET' && route === '/api/synchronize/pending') return send(200, { items: autoSync.pendingItems() });
@@ -398,6 +402,8 @@ export function createApp({ root, roots, guard, demo = false, startupOptions = {
             if (req.method === 'POST' && compaction) return send(200, store.setCompaction(compaction[1], body));
             const record = route.match(/^\/api\/branches\/([^/]+)\/records\/(\d+)$/);
             if (req.method === 'GET' && record) { const branch = store.get('branch', record[1]); assert(url.searchParams.get('head') === branch.head, 'History changed. Refresh before opening this record.', 409); const ref=store.get('revision',branch.head).refs[Number(record[2])-1];assert(ref,'Record not found.',404);const raw=store.objectStatement.get(ref)?.body;assert(raw,'Record not found.',404);return send(200,recordPreview(JSON.parse(raw),Number(url.searchParams.get('offset')||0))); }
+            const source = route.match(/^\/api\/trees\/([^/]+)\/source$/);
+            if(req.method==='GET'&&source)return send(200,store.sourceInfo(source[1]));
             const detail = route.match(/^\/api\/branches\/([^/]+)$/);
             if (req.method === 'GET' && detail)
                 return send(200, store.detail(detail[1]));

@@ -1,5 +1,7 @@
 import { hash } from './util.js';
 const fingerprint = value => hash(JSON.stringify(value));
+const emptyContext=fingerprint({}),defaultContext=fingerprint({disabled:[]});
+const contextHash=value=>value===defaultContext?emptyContext:value;
 const entries = rows => Object.fromEntries(rows.map(row => [row.id, row]));
 
 // Small semantic baselines; original transcript bodies stay in SQLite/Git.
@@ -41,7 +43,7 @@ export function sessionChanges(before, after, store) {
             const appended = current && prior && current.refs.length > prior.refs.length && prior.refs.every((h,i)=>current.refs[i]===h);
             add(appended?'transcript-appended':'transcript-updated',appended?'Transcript appended: {count} records':'Transcript updated',{...scope,count:Math.max(0,b.records-old.records)});
         }
-        if (old.context !== b.context) add('context-changed','Context settings changed',scope);
+        if (contextHash(old.context) !== contextHash(b.context)) add('context-changed','Context settings changed',scope);
         if (old.archived !== b.archived) add('archive-changed',b.archived?'Session archived':'Session restored',scope);
         if (old.endpoint !== b.endpoint) add('node-renamed','Node renamed: {from} → {to}',{...scope,from:old.endpoint || 'Pending',to:b.endpoint || 'Pending'});
     }

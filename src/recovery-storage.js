@@ -3,6 +3,10 @@ import {assert,id,inside} from './util.js';
 const owner='grove-recovery-storage-v1';
 function snapshot(file){const s=fs.lstatSync(file,{bigint:true});assert(s.isFile()&&!s.isSymbolicLink()&&s.nlink===1n,'Recovery copy is not an independent regular file.');return {bytes:Number(s.size),mtime:String(s.mtimeNs),ino:String(s.ino),dev:String(s.dev)};}
 const equal=(a,b)=>a.bytes===b.bytes&&a.mtime===b.mtime&&a.ino===b.ino&&a.dev===b.dev;
+function independentCopy(file,state){
+    assert(equal(snapshot(file),state),'Recovery copy changed. Its original was kept.');
+    assert(!fs.existsSync(file+'-wal')||fs.statSync(file+'-wal').size===0,'Recovery copy has active WAL data. Its original was kept.');
+}
 async function checksum(...streams){const digest=createHash('sha256');await pipeline(...streams,new Transform({transform(chunk,encoding,done){digest.update(chunk);done();}}));return digest.digest('hex');}
 
 export function recoveryPackingPlan(root){
@@ -15,7 +19,7 @@ export async function packRecoveryCopies(root,{onProgress=async()=>{}}={}){
     if(!plan.length)return {files:0,beforeBytes:0,afterBytes:0,savedBytes:0,skipped:0};
     const report=async()=>onProgress({phase:'Packing recovery copies',completed,total,unit:'bytes'});await report();
     for(const item of plan){
-        assert(inside(path.join(root,'recovery-snapshots'),item.file)&&equal(snapshot(item.file),item),'Recovery copy changed. Its original was kept.');
+        assert(inside(path.join(root,'recovery-snapshots'),item.file),'Invalid recovery copy path.');independentCopy(item.file,item);
         const target=item.file+'.gz',metadata=target+'.json';
         if(fs.existsSync(target)){
             snapshot(target);
@@ -31,11 +35,15 @@ export async function packRecoveryCopies(root,{onProgress=async()=>{}}={}){
                 fs.linkSync(temporary,target);fs.writeFileSync(metadata,JSON.stringify({owner,bytes:item.bytes,sha256:expected,createdAt:new Date().toISOString()}),{flag:'wx',mode:0o600});
             }finally{fs.rmSync(temporary,{force:true});}
         }
-        prepared.push({...item,target,metadata});await report();
+        prepared.push({...item,target,metadata,targetState:snapshot(target),metadataState:snapshot(metadata)});await report();
     }
     await onProgress({phase:'Verifying recovery copies',completed:0,total:prepared.length});
-    // Validate every source again before removing any uncompressed copy.
-    for(const item of prepared)assert(equal(snapshot(item.file),item),'Recovery copy changed. Its original was kept.');
+    // Revalidate archives after progress callbacks and asynchronous packing.
+    // A newly opened WAL database or replaced archive must keep every source.
+    for(const item of prepared){
+        independentCopy(item.file,item);
+        assert(equal(snapshot(item.target),item.targetState)&&equal(snapshot(item.metadata),item.metadataState),'Recovery archive changed. Its original was kept.');
+    }
     let before=0,after=0;
     for(const item of prepared){before+=item.bytes;after+=fs.statSync(item.target).size+fs.statSync(item.metadata).size;fs.unlinkSync(item.file);}
     return {files:prepared.length,beforeBytes:before,afterBytes:after,savedBytes:before-after,skipped};

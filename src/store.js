@@ -18,7 +18,8 @@ import { DatabaseSync } from 'node:sqlite';
 import { id, now, hash, assert, text, atomic, json } from './util.js';
 import { parse, recordRefs, blank } from './transcript.js';
 import {StorageCodec,packStorage,unpackStorage,sameStorage,sameRevision,packView,unpackView} from './storage-codec.js';
-import { initializeOrganization, rootOf, metadata, pendingDetail, commitPending, moveTree, forest, detectFamilies } from './organization.js';
+import {samePolicy,mergeEquivalentLayouts,reconcileEquivalentConflicts} from './sync-equivalence.js';
+import { initializeOrganization, rootOf, treeMembers, metadata, pendingDetail, commitPending, moveTree, forest, detectFamilies } from './organization.js';
 export class Store {
     constructor(root) {
         this.root = root;
@@ -312,6 +313,26 @@ export class Store {
         b.contentUpdatedAt = source.operation === 'native-settings' ? previousContentTime : b.updatedAt;
         return this.put('branch', b);
     }
+    sourceInfo(branchId) {
+        const showBackground=this.local('preferences')?.showScheduledSessions===true;
+        const root=rootOf(this,branchId),members=treeMembers(this,root.id).filter(b=>!b.synthetic&&!b.trashed&&(!b.excluded||showBackground&&['scheduled','agent-owned','background'].includes(b.excluded))&&(showBackground||!b.background&&!b.scheduled)&&!isTrashed(this,b.id)).sort((a,b)=>a.createdAt.localeCompare(b.createdAt)||a.id.localeCompare(b.id));
+        assert(members.length,'This session is in Trash.',410);
+        const ids=new Set(members.map(b=>b.id)),savedInstances=this.instanceCache??JSON.parse(this.localRead.get('instances')?.body||'[]'),instances=savedInstances.filter(i=>ids.has(i.branchId)&&!i.excluded),directories=new Set(),warnings=new Set(),sources=[],seenSources=new Set();let lastCapturedAt=null;
+        for(const b of members){
+            const revision=this.revisionMetadata(b.head),source=revision.source||{};
+            if(revision.createdAt&&(!lastCapturedAt||revision.createdAt>lastCapturedAt))lastCapturedAt=revision.createdAt;
+            if(source.cwd)directories.add(source.cwd);
+            if(b.prefixUnavailable)warnings.add('Native parent is known, but its shared prefix was changed or compacted. Ancestry is retained without merging unverifiable chats.');
+            const copies=instances.filter(i=>i.branchId===b.id);
+            if((source.requiresAuxiliary||copies.some(i=>i.requiresAuxiliary))&&!source.auxiliary)warnings.add('来源含尚未收纳的伴随目录；当前版本禁止激活或移除原生实例');
+            for(const i of copies){
+                if(i.cwd)directories.add(i.cwd);if(!i.file&&!i.nativeId)continue;
+                const key=JSON.stringify([i.agent,i.nativeId,i.file]);if(seenSources.has(key))continue;seenSources.add(key);
+                sources.push({agent:i.agent||b.agent,name:b.transcriptionTitle||i.observedTitle||b.name,nativeId:i.nativeId||null,file:i.file||null,missing:!!i.missing});
+            }
+        }
+        return {id:root.id,name:root.sessionName||(root.synthetic?members[0]?.name:root.name),automaticName:root.sessionAutomaticName?(root.sessionNameOrigin==='automatic'?root.sessionName:root.sessionAutomaticName.name):null,lastCapturedAt,workingDirectories:[...directories].sort(),sources,warnings:[...warnings]};
+    }
     detail(branchId) {
         assert(!isTrashed(this,branchId),'This session is in Trash.',410);
         const b = this.get('branch', branchId), cached = this.parsed(b.head, b.agent), p = { ...cached, warnings: [...cached.warnings] };
@@ -496,7 +517,7 @@ export class Store {
                         remapped.set(b.id, forkId);
                     }
                 }
-                if (old.name !== b.name || old.endpointName !== b.endpointName || old.archived !== b.archived || old.group !== b.group || old.projectId !== b.projectId&&(!old.parentId||old.parentId!==b.parentId) || old.parentId !== b.parentId || old.forkRevision !== b.forkRevision || JSON.stringify(old.contextPolicy || {}) !== JSON.stringify(b.contextPolicy || {})) {
+                if (old.name !== b.name || old.endpointName !== b.endpointName || old.archived !== b.archived || old.group !== b.group || old.projectId !== b.projectId&&(!old.parentId||old.parentId!==b.parentId) || old.parentId !== b.parentId || old.forkRevision !== b.forkRevision || !samePolicy(old.contextPolicy,b.contextPolicy)) {
                     if (b.metaAncestors?.includes(old.metaVersion))
                         this.put('branch', { ...this.get('branch', b.id), name: b.name, endpointName: b.endpointName, archived: b.archived, group: b.group, projectId: b.projectId, contextPolicy: b.contextPolicy, parentId: b.parentId, forkRevision: b.forkRevision, forkEnd: b.forkEnd, forkParentEnd: b.forkParentEnd, metaVersion: b.metaVersion, metaAncestors: b.metaAncestors });
                     else if (!old.metaAncestors?.includes(b.metaVersion))
@@ -568,7 +589,9 @@ export class Store {
                 const current = this.get('branch', b.id);
                 if (current.layoutHead === b.layoutHead) continue;
                 if (layoutAncestor(current.layoutHead, b.layoutHead)) this.put('branch', { ...current, layoutHead: b.layoutHead });
-                else if (!layoutAncestor(b.layoutHead, current.layoutHead)) conflicts.push({ kind: 'layout', local: { id: b.id, name: b.name, layoutHead: current.layoutHead }, remote: { id: b.id, name: b.name, layoutHead: b.layoutHead } });
+                else if (!layoutAncestor(b.layoutHead, current.layoutHead)) {
+                    if(!mergeEquivalentLayouts(this,current,b.layoutHead))conflicts.push({ kind: 'layout', local: { id: b.id, name: b.name, layoutHead: current.layoutHead }, remote: { id: b.id, name: b.name, layoutHead: b.layoutHead } });
+                }
             }
             const nodeAncestor=(older,newer)=>{
                 if(!older)return true;
@@ -621,6 +644,7 @@ export class Store {
                 for (const id of visited) checkedBranches.add(id);
             }
             this.local('conflicts', [...new Map(conflicts.map(c => [hash(JSON.stringify(c)), c])).values()]);
+            reconcileEquivalentConflicts(this);
             return { forks, conflicts: this.local('conflicts').length, keptLocal, appliedRemote };
         });
     }

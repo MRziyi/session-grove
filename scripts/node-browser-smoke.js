@@ -175,11 +175,17 @@ try{
    assert.ok(await evaluate('(()=>{const a=document.querySelector("[name=intelligenceKey]").getBoundingClientRect(),b=document.querySelector("#save-intelligence-key").getBoundingClientRect();return b.left>=a.right&&Math.abs(a.bottom-b.bottom)<2})()'));
    assert.equal(await evaluate('!!document.querySelector("#language")'),false);
    assert.ok(await evaluate('(()=>{const h=document.querySelector("#modify-connection").closest(".settings-section-heading").querySelector("h3").getBoundingClientRect(),b=document.querySelector("#modify-connection").getBoundingClientRect();return b.left>h.right&&Math.abs(h.y+h.height/2-b.y-b.height/2)<2})()'));
-   assert.ok(await evaluate('[...document.querySelectorAll(".settings-card")].every(c=>{const style=getComputedStyle(c),h=c.querySelector("h3");return style.paddingTop===style.paddingBottom&&style.paddingTop===style.paddingLeft&&getComputedStyle(h).marginTop==="0px"})'));
+   assert.ok(await evaluate('[...document.querySelectorAll(".settings-card")].every(c=>{const style=getComputedStyle(c),h=c.querySelector("h3");return style.paddingTop===style.paddingBottom&&style.paddingTop===style.paddingLeft&&(h?getComputedStyle(h).marginTop==="0px":c.classList.contains("compact-settings")&&!!c.getAttribute("aria-label")&&c.querySelectorAll(".compact-setting").length===3)})'));
    assert.ok(await evaluate('[...document.querySelectorAll(".settings-card")].every(c=>{const v=[...c.children].filter(e=>getComputedStyle(e).display!=="none"),r=c.getBoundingClientRect();return Math.abs((v[0].getBoundingClientRect().top-r.top)-(r.bottom-v.at(-1).getBoundingClientRect().bottom))<2})'));
    fs.mkdirSync('test-results',{recursive:true});fs.writeFileSync('test-results/settings-spacing.png',Buffer.from((await call('Page.captureScreenshot',{format:'png'})).data,'base64'));
   }
-  if(selector==='#information')assert.equal(await evaluate('/diagnostic/i.test(document.querySelector("#dialog-content").textContent)'),false);
+  if(selector==='#information'){
+   assert.equal(await evaluate('/diagnostic/i.test(document.querySelector("#dialog-content").textContent)'),false);
+   assert.ok(await evaluate('[...document.querySelectorAll("#dialog-content>details")].every(d=>{const s=d.querySelector("summary"),r=s.getBoundingClientRect();return parseFloat(getComputedStyle(s).columnGap)>=10&&r.width>=d.clientWidth-2&&r.height>=44})'),'Information disclosures use spaced triangles and full-width headers');
+   const point=await evaluate('(()=>{const d=document.querySelectorAll("#dialog-content>details")[1];d.scrollIntoView({block:"center"});const r=d.querySelector("summary").getBoundingClientRect();return {x:r.right-5,y:r.top+5}})()');
+   await call('Input.dispatchMouseEvent',{type:'mousePressed',...point,button:'left',clickCount:1});await call('Input.dispatchMouseEvent',{type:'mouseReleased',...point,button:'left',clickCount:1});await wait('document.querySelectorAll("#dialog-content>details")[1].open');
+   await evaluate('document.querySelectorAll("#dialog-content>details")[1].querySelector("summary").focus()');assert.ok(await evaluate('document.activeElement===document.querySelectorAll("#dialog-content>details")[1].querySelector("summary")'));await call('Input.dispatchKeyEvent',{type:'keyDown',key:'Enter',code:'Enter',windowsVirtualKeyCode:13,text:'\r',unmodifiedText:'\r'});await call('Input.dispatchKeyEvent',{type:'keyUp',key:'Enter',code:'Enter',windowsVirtualKeyCode:13});await wait('!document.querySelectorAll("#dialog-content>details")[1].open');
+  }
   await call('Input.dispatchMouseEvent',{type:'mousePressed',x:5,y:150,button:'left',clickCount:1});await call('Input.dispatchMouseEvent',{type:'mouseReleased',x:5,y:150,button:'left',clickCount:1});await wait('!document.querySelector("#dialog").open');
  }
  app.intelligence.running=true;app.intelligence.phase='Naming branch point';app.intelligence.current='A very long session title '.repeat(20);app.intelligence.publish();

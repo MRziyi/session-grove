@@ -1,11 +1,14 @@
 import {assert,hash,id,now} from './util.js';
+import {isDeepStrictEqual} from 'node:util';
 import {metadata,rootOf,treeMembers} from './organization.js';
 import {nextModifiedAt} from './session-time.js';
 import {stageTrashAsync} from './trash.js';
 import {isActive} from './workspace.js';
+import {conflictBranchFields,sameConflictField} from './sync-equivalence.js';
+import {matchesCompaction} from './compaction-identity.js';
 
 const digest=value=>hash(JSON.stringify(value));
-const branchFields=['name','endpointName','archived','group','projectId','parentId','forkRevision','forkEnd','forkParentEnd','contextPolicy','sessionName','sessionNameOrigin'];
+const branchFields=conflictBranchFields;
 const kindOf=c=>c.kind==='project'?'project':'branch';
 const currentOf=(store,c)=>store.get(kindOf(c),c.local.id);
 const same=(a,b)=>JSON.stringify(a??null)===JSON.stringify(b??null);
@@ -17,7 +20,7 @@ export function repairInheritedProjectConflicts(store){
     const conflicts=store.local('conflicts')||[],kept=conflicts.filter(c=>{
         if(c.kind!=='branch'||!c.local.parentId||c.local.parentId!==c.remote.parentId||c.local.metaVersion!==c.remote.metaVersion)return true;
         const current=store.find('branch',c.local.id);if(!current||current.parentId!==c.local.parentId)return true;
-        return branchFields.filter(k=>k!=='projectId').some(k=>!same(c.local[k],c.remote[k])||!same(current[k],c.local[k]));
+        return branchFields.filter(k=>k!=='projectId').some(k=>!sameConflictField(k,c.local[k],c.remote[k])||!sameConflictField(k,current[k],c.local[k]));
     });
     if(kept.length!==conflicts.length)store.local('conflicts',kept);
     return conflicts.length-kept.length;
@@ -35,13 +38,33 @@ function valueLabel(store,key,value){
 }
 const labels={name:'Name',sessionName:'Session name',endpointName:'Node name',archived:'Archived',group:'Group',projectId:'Project',parentId:'Parent session',forkRevision:'Fork history',forkEnd:'Fork position',forkParentEnd:'Parent fork position',contextPolicy:'Context policy',head:'Conversation history',layoutHead:'Node labels',nodeHead:'Node organization',description:'Description'};
 function keysFor(c){return c.kind==='project'?['name','description','archived']:c.kind==='layout'?['layoutHead']:c.kind==='organization'?['nodeHead']:c.kind==='session'?['head',...branchFields,'layoutHead','nodeHead']:branchFields;}
+function policyDetails(store,current,policy){
+    let events=[];if(policy?.disabled?.length)try{events=store.viewProjection(current.head,current.agent).p.context.compactions;}catch{}
+    return (policy?.disabled||[]).map(id=>{const i=events.findIndex(e=>matchesCompaction(e,id));return i<0?{label:'Unavailable compaction {id}',values:{id:id.slice(0,8)}}:{label:'Compaction {number}',values:{number:i+1}};});
+}
+function layoutChanges(store,c,current){
+    const groups=head=>{
+        const assignments=head?store.get('layout',head).assignments:{},nodes=new Map(),byChat=new Map();
+        for(const [chat,a]of Object.entries(assignments))if(a){if(!nodes.has(a.id))nodes.set(a.id,{annotation:a,chats:[]});nodes.get(a.id).chats.push(chat);}
+        for(const node of nodes.values()){node.chats.sort();const {id,...metadata}=node.annotation;node.signature={metadata,chats:node.chats};for(const chat of node.chats)byChat.set(chat,node);}return byChat;
+    };
+    const previous=groups(c.remote.layoutHead),local=groups(current.layoutHead),pairs=new Map();
+    for(const chat of new Set([...previous.keys(),...local.keys()])){
+        const a=previous.get(chat),b=local.get(chat);if(isDeepStrictEqual(a?.signature,b?.signature))continue;
+        const key=JSON.stringify([a?.annotation.id,b?.annotation.id]);if(!pairs.has(key))pairs.set(key,{a,b});
+    }
+    let messages,positions;try{messages=new Map(store.treeGraph(current.id).paths.flatMap(p=>p.messages.map(m=>[m.id,m])));positions=new Map([...messages.keys()].map((id,i)=>[id,i]));}catch{}
+    const preview=node=>{const found=(node?.chats||[]).map(id=>messages?.get(id)).filter(Boolean).sort((a,b)=>positions.get(a.id)-positions.get(b.id));return [...new Set([found[0],found.at(-1)])].filter(Boolean).map(m=>({role:m.role,text:m.text.slice(0,400)+(m.text.length>400?'…':'')}));};
+    return [...pairs.values()].map(({a,b})=>{const previousMessages=preview(a),currentMessages=preview(b);return {field:'Node organization',session:current.name,previous:a?.annotation.name||'Pending',current:b?.annotation.name||'Pending',previousCount:a?.chats.length||0,currentCount:b?.chats.length||0,previousMessages,currentMessages,metadataChanged:!!(a&&b&&a.annotation.name===b.annotation.name&&isDeepStrictEqual(a.chats,b.chats)),previewUnavailable:!messages||!!(a?.chats.length&&!previousMessages.length||b?.chats.length&&!currentMessages.length)};});
+}
 export function conflictItems(store){
     const groups=new Map();
     for(const c of store.local('conflicts')||[]){const key=scope(store,c);if(!groups.has(key))groups.set(key,[]);groups.get(key).push(c);}
     return [...groups].map(([id,conflicts])=>{
         const c=conflicts[0],current=currentOf(store,c),root=c.kind==='project'?current:rootOf(store,current.id);
-        const changes=conflicts.flatMap(c=>{const current=currentOf(store,c);return keysFor(c).filter(k=>!same(current[k],c.remote[k])).map(key=>{
+        const changes=conflicts.flatMap(c=>{const current=currentOf(store,c);if(c.kind==='layout')return layoutChanges(store,c,current);return keysFor(c).filter(k=>!sameConflictField(k,current[k],c.remote[k])).map(key=>{
             const change={field:labels[key]||key,session:current.name,previous:valueLabel(store,key,c.remote[key]),current:valueLabel(store,key,current[key])};
+            if(key==='contextPolicy'){change.previousDetails=policyDetails(store,current,c.remote[key]);change.currentDetails=policyDetails(store,current,current[key]);}
             if(key==='head'){try{
                 const previous=store.parsed(c.remote.head,current.agent).messages.filter(m=>m.role!=='tool'),local=store.parsed(current.head,current.agent).messages.filter(m=>m.role!=='tool');let start=0;
                 while(start<previous.length&&start<local.length&&previous[start].role===local[start].role&&previous[start].text===local[start].text)start++;

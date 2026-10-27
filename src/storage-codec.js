@@ -51,7 +51,8 @@ export class StorageCodec{
     metadata(id){
         if(this.metadataCache.has(id))return this.metadataCache.get(id).value;
         const saved=this.read.get('revision',id);assert(saved,'Missing revision metadata.');const row=JSON.parse(unpackStorage(saved.body)),value=isRevisionDelta(row)?row.data:row;
-        const source=Object.fromEntries(['operation','deviceId','deviceName','deviceModel','devicePlatform','deviceKind'].filter(k=>value.source&&Object.hasOwn(value.source,k)).map(k=>[k,value.source[k]]));
+        const source=Object.fromEntries(['operation','cwd','deviceId','deviceName','deviceModel','devicePlatform','deviceKind','requiresAuxiliary'].filter(k=>value.source&&Object.hasOwn(value.source,k)).map(k=>[k,value.source[k]]));
+        if(value.source?.auxiliary)source.auxiliary=true;
         const text=JSON.stringify({id:value.id,parent:value.parent,source,createdAt:value.createdAt}),data=JSON.parse(text),bytes=text.length*2;
         if(bytes<=32*1024){while(this.metadataCache.size&&(this.metadataBytes+bytes>2*1024*1024||this.metadataCache.size>=4096)){const key=this.metadataCache.keys().next().value;this.metadataBytes-=this.metadataCache.get(key).bytes;this.metadataCache.delete(key);}this.metadataCache.set(id,{value:data,bytes});this.metadataBytes+=bytes;}
         return data;

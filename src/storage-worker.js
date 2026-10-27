@@ -2,7 +2,8 @@ import fs from 'node:fs';import path from 'node:path';import {parentPort,workerD
 import {DatabaseSync,backup} from 'node:sqlite';import {createGzip,createGunzip} from 'node:zlib';import {pipeline} from 'node:stream/promises';import {Transform} from 'node:stream';import {createHash} from 'node:crypto';
 import {StorageCodec,packStorage,unpackStorage,sameStorage,sameRevision} from './storage-codec.js';
 import {Store} from './store.js';
-import {packRevision} from './revision-codec.js';import {graphFingerprint} from './cloud-view.js';import {assert,id} from './util.js';
+import {packRevision} from './revision-codec.js';import {graphFingerprint} from './cloud-view.js';import {assert,id,safePath} from './util.js';
+import {storageCleanupPlan,validateCleanupPlan} from './storage-usage.js';
 
 const root=workerData.root,file=path.join(root,'grove.sqlite'),db=new DatabaseSync(file),storage=new StorageCodec(db);
 db.exec('PRAGMA busy_timeout=10000; PRAGMA foreign_keys=ON');let last=0;
@@ -17,16 +18,17 @@ function prepareViews(){
     }finally{views.close();}
 }
 async function makeBackup(){
-    const directory=path.join(root,'storage-backups');fs.mkdirSync(directory,{recursive:true,mode:0o700});const plain=path.join(directory,'before-'+id()+'.sqlite'),packed=plain+'.gz';
+    const directory=safePath(root,path.join(root,'storage-backups'));fs.mkdirSync(directory,{recursive:true,mode:0o700});const plain=path.join(directory,'before-'+id()+'.sqlite'),packed=plain+'.gz';
     const pageBytes=db.prepare('PRAGMA page_size').get().page_size;report('Copying storage recovery copy',0,null);
     const copiedPages=await backup(db,plain,{rate:1024,progress:({totalPages,remainingPages})=>report('Copying storage recovery copy',(totalPages-remainingPages)*pageBytes,totalPages*pageBytes)});report('Copying storage recovery copy',copiedPages*pageBytes,copiedPages*pageBytes);
+    fs.chmodSync(plain,0o600);const verification=new DatabaseSync(plain);try{verification.exec('PRAGMA journal_mode=DELETE');assert(verification.prepare('PRAGMA quick_check').get().quick_check==='ok','Storage recovery copy integrity check failed.');}finally{verification.close();}
     const digest=createHash('sha256');let completed=0,total=fs.statSync(plain).size;
     try{
         await pipeline(fs.createReadStream(plain),new Transform({transform(chunk,encoding,callback){digest.update(chunk);completed+=chunk.length;report('Saving storage recovery copy',completed,total);callback(null,chunk);}}),createGzip({level:1}),fs.createWriteStream(packed,{flags:'wx',mode:0o600}));
         const expected=digest.digest('hex'),check=createHash('sha256');completed=0;report('Verifying storage recovery copy',0,total);await pipeline(fs.createReadStream(packed),createGunzip(),new Transform({transform(chunk,encoding,callback){check.update(chunk);completed+=chunk.length;report('Verifying storage recovery copy',completed,total);callback();}}));
         assert(check.digest('hex')===expected,'Storage recovery copy verification failed.');
         fs.writeFileSync(packed+'.json',JSON.stringify({schema:1,bytes:total,sha256:expected,createdAt:new Date().toISOString()}),{mode:0o600});return packed;
-    }catch(error){fs.rmSync(packed,{force:true});throw error;}finally{fs.rmSync(plain,{force:true});}
+    }catch(error){fs.rmSync(packed,{force:true});throw error;}finally{for(const file of [plain,plain+'-wal',plain+'-shm'])fs.rmSync(file,{force:true});}
 }
 async function optimize(){
     const before=payloadBytes(),beforeFile=fs.statSync(file).size,previous=db.prepare("SELECT body FROM local WHERE key='storage-encoding'").get();
@@ -78,5 +80,18 @@ async function optimize(){
     if(backupFile){fs.rmSync(backupFile);fs.rmSync(backupFile+'.json');db.prepare("UPDATE local SET body=? WHERE key='storage-encoding'").run(JSON.stringify({schema:1,at:new Date().toISOString(),backupFile:null}));db.exec('PRAGMA wal_checkpoint(PASSIVE)');}
     return {beforeBytes:before,afterBytes:payloadBytes(),beforeFileBytes:beforeFile,afterFileBytes:fs.statSync(file).size,changedEntities,changedObjects,changedBaselines,backupFile:null,recoveryCopyVerified:!!backupFile};
 }
-try{const result=await optimize();db.close();parentPort.postMessage({result});
+async function cleanup(){
+    report('Reviewing unused storage',0,null);const plan=await storageCleanupPlan(root);
+    assert(plan.version===workerData.version,'Storage files changed. Review cleanup again.',409);
+    if(!plan.groups.length)return {savedBytes:0,backupFile:null,removedBackups:0};
+    validateCleanupPlan(root,plan);
+    const backupFile=plan.backupCount?await makeBackup():null;
+    // The new recovery point is outside the frozen deletion plan. Recheck all
+    // reviewed files before removing any; changed files keep every old backup.
+    validateCleanupPlan(root,plan);report('Clearing unused storage',0,plan.groups.length);
+    for(const [i,group]of plan.groups.entries()){for(const file of group.paths)fs.rmSync(path.join(root,file),{recursive:true});report('Clearing unused storage',i+1,plan.groups.length);}
+    const backupBytes=backupFile?fs.statSync(backupFile).size+fs.statSync(backupFile+'.json').size:0;
+    return {savedBytes:plan.bytes-backupBytes,removedBytes:plan.bytes,removedBackups:plan.backupCount,backupFile,recoveryCopyVerified:!!backupFile};
+}
+try{const result=await (workerData.action==='cleanup'?cleanup():optimize());db.close();parentPort.postMessage({result});
 }catch(error){try{db.close();}catch{}parentPort.postMessage({error:error.message});}

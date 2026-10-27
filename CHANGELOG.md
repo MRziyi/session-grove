@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Make Source cover the entire Session tree with its latest capture time, working directories and grouped client sources. Read lightweight metadata without parsing transcripts or reconstructing revision history; show immediate loading state and preserve the full underlying history.
+- Make Information disclosure headers clickable across the full card, with clearer triangle spacing and native keyboard controls.
+- Reconcile empty/default context policies and equivalent node groupings without false sync conflicts; preserve local node identities and acknowledge both layout histories. Show message counts/boundaries and specific compaction choices for real differences, and consolidate single-option settings below the reordered primary sections.
+- Detect legacy libraries with a one-time storage upgrade action; show on-demand local space totals in Settings with lossless optimization and reviewed cleanup. Guard cleanup against changed files and retain verified recovery points without deleting conversations, Trash or Git history.
+- Recheck recovery archives and newly created WAL files before removing uncompressed backups; retain every original if a copy changes during packing.
 - Split oversized Git graph metadata into verified, content-addressed JSONL parts while preserving canonical graph hashes and every history reference. Read existing single-file graphs and recover sharded baselines from committed local Git objects for offline Discard; use container schema 2 only when parts are present.
 - Pack large local values with checksummed Zstandard and encode shared revision prefixes losslessly; preserve original records, graph identities and legacy reads. Persist bounded, rebuildable conversation views to reduce cold-tree latency and memory.
 - Deduplicate embedded image and opaque payloads within Git trees, use compact revision manifests (container schema 3), skip native reads on metadata-only Push, and release full export graphs before Git packing. Existing repository history is preserved; update other devices before syncing the new format.
