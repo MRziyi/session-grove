@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Allow access through forwarded domains and ports by removing fixed Host, Origin and Fetch Metadata address checks and the localhost redirect.
+
 ## 1.2.2
 
 - Put legacy-storage attention and maintenance progress in the top status area; open and highlight the relevant Settings card from storage and Smart Organization attention controls. Remove the duplicate upgrade popup.

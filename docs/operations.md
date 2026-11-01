@@ -4,7 +4,7 @@ Installation and first use are covered in the [README](../README.md); in-app **â
 
 ## Service and paths
 
-Run `npm start` from the application checkout to start the background service. `npm run status` checks the matching library's service; `npm stop` requests shutdown through its authenticated local endpoint. `npm run dev` stays in the foreground. Open `http://127.0.0.1:7421`; `localhost` page visits redirect there.
+Run `npm start` from the application checkout to start the background service. `npm run status` checks the matching library's service; `npm stop` requests shutdown through its authenticated local endpoint. `npm run dev` stays in the foreground. Open `http://127.0.0.1:7421`, `http://localhost:7421`, or the address supplied by your port forward. Grove accepts the forwarded hostname and port without redirecting to the service machineâ€™s loopback address.
 
 Defaults are `~/.session-grove` for the library, `~/.codex` for Codex and `~/.claude` for Claude. `--data-dir`, `--codex-home`, `--claude-home` and `--port` override them. Use matching arguments for service management; run `node bin/session-grove.js --help` for the current CLI options.
 

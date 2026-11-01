@@ -83,17 +83,9 @@ export function createApp({ root, roots, guard, demo = false, startupOptions = {
             if (changed.length) { autoSync.schedule(changed); intelligence.observe(); }
         } };
         try {
-            const expected = `127.0.0.1:${server.address().port}`;
-            // Canonicalize human navigation only; API Host/Origin checks stay strict.
-            if(['GET','HEAD'].includes(req.method)&&req.headers.host===`localhost:${server.address().port}`&&/^\/(?:\?.*)?$/.test(req.url)){
-                res.writeHead(302,{Location:`http://${expected}${req.url}`,'Cache-Control':'no-store'});return res.end();
-            }
-            assert(req.headers.host === expected, '请使用启动时显示的本地地址', 403);
-            assert(!req.headers.origin || req.headers.origin === `http://${expected}`, '不允许跨站请求', 403);
-            assert(!req.headers['sec-fetch-site'] || ['same-origin', 'none'].includes(req.headers['sec-fetch-site']), '不允许跨站请求', 403);
-            const url = new URL(req.url, `http://${expected}`), route = url.pathname;
+            const url = new URL(req.url, 'http://localhost'), route = url.pathname;
             if (req.method === 'GET' && route === '/api/service') return send(200, { pid: process.pid, instance, stopping });
-            if (req.method === 'GET' && ['/', '/app.js', '/graph-ancestors.js', '/tree-search.js', '/chat-selection.js', '/library-view.js', '/session-drag.js', '/inline-name.js', '/i18n.js', '/select.js', '/markdown.js', '/style.css'].includes(route)) {
+            if (['GET','HEAD'].includes(req.method) && ['/', '/app.js', '/graph-ancestors.js', '/tree-search.js', '/chat-selection.js', '/library-view.js', '/session-drag.js', '/inline-name.js', '/i18n.js', '/select.js', '/markdown.js', '/style.css'].includes(route)) {
                 const file = route === '/' ? 'index.html' : route.slice(1);
                 return send(200, webAssets.get(file), file.endsWith('.css') ? 'text/css' : file.endsWith('.js') ? 'text/javascript' : 'text/html; charset=utf-8');
             }

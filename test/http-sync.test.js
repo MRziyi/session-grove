@@ -20,9 +20,9 @@ test('HTTP protects local API and implements project to activation lifecycle', a
     const boot = await (await fetch(base + '/api/bootstrap')).json();
     assert.deepEqual(boot.projects.map(p=>p.id), [INBOX_ID]);
     assert.equal((await fetch(base + '/api/projects', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })).status, 403);
-    assert.equal((await fetch(base + '/api/bootstrap', { headers: { Origin: 'https://evil.example' } })).status, 403);
-    const hostStatus = await new Promise((resolve, reject) => http.get(base + '/api/bootstrap', { headers: { Host: 'evil.example' } }, r => { r.resume(); resolve(r.statusCode); }).on('error', reject));
-    assert.equal(hostStatus, 403);
+    assert.equal((await fetch(base + '/api/bootstrap', { headers: { Origin: 'https://forwarded.example' } })).status, 200);
+    const hostStatus = await new Promise((resolve, reject) => http.get(base + '/api/bootstrap', { headers: { Host: 'forwarded.example' } }, r => { r.resume(); resolve(r.statusCode); }).on('error', reject));
+    assert.equal(hostStatus, 200);
     const call = async (route, body, method = 'POST') => { const r = await fetch(base + '/api' + route, { method, headers: { 'Content-Type': 'application/json', 'X-Grove-Token': boot.token }, body: JSON.stringify(body) }); const result = await r.json(); assert.ok(r.ok, JSON.stringify(result)); return result; };
     const b = app.store.branch(null, 'First branch', 'codex', codexSample(cwd, [['Context', 'Ready']]));
     const moved = await call('/projects', { name: 'HTTP project', itemIds: [b.id] });
