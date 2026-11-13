@@ -26,7 +26,7 @@ export class GitRemote {
             // ordinary library locations. Cover offline reads/cleanup too,
             // without relying on user config or writing it during recovery.
             const child = spawn('git', ['-c', 'core.longpaths=true', '-c', 'core.hooksPath=/dev/null', '-c', 'commit.gpgsign=false', '-c', 'core.quotePath=false', '-c', 'core.pager=cat', ...args], {
-                cwd: this.directory, env: { ...process.env, GIT_TERMINAL_PROMPT: '0', GIT_SSH_COMMAND: 'ssh -o BatchMode=yes -o ConnectTimeout=15', GIT_CONFIG_NOSYSTEM: '1', ...env },
+                cwd: this.directory, env: { ...process.env, GIT_TERMINAL_PROMPT: '0', ...(!process.env.GIT_SSH_COMMAND&&!process.env.GIT_SSH?{GIT_SSH_COMMAND:'ssh -o BatchMode=yes -o ConnectTimeout=15'}:{}), GIT_CONFIG_NOSYSTEM: '1', ...env },
                 windowsHide: true, stdio: [input === null ? 'ignore' : 'pipe', 'pipe', 'pipe'], signal: this.controller.signal,
             });
             if (input !== null) { child.stdin.on('error', () => {}); child.stdin.end(input); }

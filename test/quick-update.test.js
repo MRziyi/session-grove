@@ -76,3 +76,12 @@ test('rewriting an activated compressed session preserves the compression format
  f.store.ingest(b.id,raw+codexTurn('Next','Done').map(r=>JSON.stringify(r)+'\n').join(''),b.head,{});
  native.apply([b.id]);assert.ok(zstdDecompressSync(fs.readFileSync(file)).toString().includes('Next'));assert.equal(native.discover().errors.length,0);
 });
+
+test('failed Update retains the actual file error in status instead of only an error flag',async t=>{
+ const f=fixture(t),app=createApp({root:path.join(f.root,'app'),roots:f.roots,guard:()=>{}});f.apps.push(app);await listenForTests(app.server);
+ const errors=[{file:'affected-session.jsonl',message:'The saved revision is missing.'}];
+ app.native.refreshLocal=()=>({updates:[],discovered:0,errors});
+ const base='http://127.0.0.1:'+app.server.address().port,headers={'X-Grove-Token':app.token,'Content-Type':'application/json'};
+ const result=await(await fetch(base+'/api/collect',{method:'POST',headers,body:'{}'})).json();assert.deepEqual(result.errors,errors);
+ const status=await(await fetch(base+'/api/status',{headers})).json();assert.equal(status.update.operation.state,'error');assert.match(status.update.operation.error,/affected-session.jsonl · The saved revision is missing\./);
+});

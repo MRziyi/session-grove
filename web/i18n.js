@@ -899,6 +899,7 @@ export function t(key, values = {}) {
 export const locale = () => language;
 export function setLocale(value) { language = value === 'zh' ? 'zh' : 'en'; localStorage.setItem('grove-language', language); document.documentElement.lang = language === 'zh' ? 'zh-CN' : 'en'; }
 const errors = {
+    'revision 不存在': 'The saved revision is missing.',
     '请先关闭目标 Agent 的运行会话及对应 IDE 扩展，再应用 Active 清单。资料库浏览与分支不受影响。': 'Close the target agent and its IDE extension before applying native changes. Browsing and organization remain available.',
 
     '请先关闭 Codex / Claude 的运行会话及对应 IDE 扩展，再应用 Active 清单。资料库浏览与分支不受影响。': 'Close running Codex / Claude sessions and their IDE extensions before applying the Active set.',
@@ -918,6 +919,6 @@ export function errorText(message) {
     if (errors[message])
         return errors[message];
     if (/[\u4e00-\u9fff]/.test(message))
-        return 'Operation failed. ' + (message.includes('不能为空') ? 'Enter a name within the field length limit.' : 'Check the session compatibility and current native process state.');
+        return 'Operation failed: ' + message;
     return message;
 }

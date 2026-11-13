@@ -436,7 +436,7 @@ function bindSessionGuide(){
 }
 async function updateSessions(){
     const firstLibrary=!state.data.items.length&&!state.tree;
-    return run(async()=>{const r=await api('/collect','POST',{});if(r.errors?.length)toast(r.errors.map(e=>errorText(e.message)).join('\n'));else toast(t('Refresh complete · {updates} updated · {discovered} discovered',{updates:r.updates.length,discovered:r.discovered}));if(firstLibrary){state.scope=PROJECTS;state.query='';$('#search').value='';}},'update');
+    return run(async()=>{const r=await api('/collect','POST',{});if(r.errors?.length)toast(r.errors.map(e=>[e.file||e.instanceId,errorText(e.message)].filter(Boolean).join(' · ')).join('\n'));else toast(t('Refresh complete · {updates} updated · {discovered} discovered',{updates:r.updates.length,discovered:r.discovered}));if(firstLibrary){state.scope=PROJECTS;state.query='';$('#search').value='';}},'update');
 }
 function renderList() {
     if(state.scope==='trash'){renderTrash();return;}

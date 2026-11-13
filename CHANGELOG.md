@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Recover missing device capture baselines only when the native history extends the surviving saved head; skip deleted shared-context placeholders and preserve divergent histories with an explicit error. Show per-session Update errors instead of a generic compatibility failure.
+- Respect custom SSH commands and executables inherited by the service, and document authentication on the service host when accessing Grove through forwarded ports.
 - Allow access through forwarded domains and ports by removing fixed Host, Origin and Fetch Metadata address checks and the localhost redirect.
 
 ## 1.2.2

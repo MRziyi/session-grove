@@ -494,9 +494,9 @@ export function createApp({ root, roots, guard, demo = false, startupOptions = {
             diagnostics.record('capture', { updated: r.updates.length, discovered: r.discovered, count: r.errors.length, durationMs: Math.round(performance.now() - start) });
             for (const [phase, durationMs] of Object.entries(r.timings || {})) diagnostics.record('capture-phase', { phase, durationMs });
             intelligence.observe();
-            updateOperation = { ...updateOperation, state: r.errors.length ? 'error' : 'success', finishedAt: Date.now() };
+            updateOperation = { ...updateOperation, state: r.errors.length ? 'error' : 'success', error:r.errors.length?r.errors.map(e=>[e.file||e.instanceId,e.message].filter(Boolean).join(' · ')).join('\n'):null, finishedAt: Date.now() };
             return r;
-        } catch(e) { updateOperation = { ...updateOperation, state: 'error', finishedAt: Date.now() }; throw e; }
+        } catch(e) { updateOperation = { ...updateOperation, state: 'error', error:e.message, finishedAt: Date.now() }; throw e; }
         finally { autoSync.reconcileTimer(); configureCapture(); operation('update', {...updateOperation,status:{nextRunAt:nextCaptureAt,lastRunAt:lastCaptureAt,started:true}}); }
     }
     function configureCapture() {

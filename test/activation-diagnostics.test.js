@@ -77,3 +77,29 @@ test('historical duplicate rollouts never become a second active instance of the
     assert.equal(store.collections().activeCounts.codex, 1); assert.equal(store.instances().length, 1); assert.equal(store.instances()[0].file, current);
     assert.equal(fs.readFileSync(old, 'utf8'), raw);
 });
+
+for(const scenario of ['extension','divergence','deleted dependency'])test('Update handles a missing device baseline: '+scenario,async t=>{
+ const {root,store,native:options}=fixture(t),{Native}=await import('../src/native.js');
+ const dir=path.join(options.roots.codex,'sessions');fs.mkdirSync(dir);const file=path.join(dir,'session.jsonl');
+ const raw=codexSample(root,[['First question','First answer'],['Later question','Later answer']]);fs.writeFileSync(file,raw);
+ let native=new Native(store,{roots:options.roots,guard:()=>{}});assert.equal(native.refreshLocal().errors.length,0);
+ const instance=store.instances()[0],branch=store.get('branch',instance.branchId),old=branch.head;
+ const prefix=store.raw(old,store.detail(branch.id).checkpoints[0].end);
+ const replacement=store.revision(scenario==='divergence'?codexSample(root,[['Different question','Different answer']]):prefix,null,{agent:'codex',operation:'import'});
+ store.put('branch',{...branch,head:replacement.id,...(scenario==='deleted dependency'?{trashed:true,trashDependency:true,synthetic:true}:{} )});
+ store.db.prepare('DELETE FROM entities WHERE id=?').run(old);store.db.prepare('DELETE FROM summaries WHERE id=?').run(old);store.summaryCache.clear();store.invalidate();
+ native=new Native(store,{roots:options.roots,guard:()=>{}});
+ const before=store.all('branch').length,result=native.refreshLocal();
+ assert.equal(fs.readFileSync(file,'utf8'),raw,'Update never rewrites native history');
+ assert.equal(store.all('branch').length,before,'No duplicate sessions');
+ if(scenario==='divergence'){
+  assert.match(result.errors[0].message,/baseline is missing and the histories differ/);
+  assert.equal(store.get('branch',branch.id).head,replacement.id);assert.equal(store.instances()[0].baseRevision,old);
+ }else{
+  assert.deepEqual(result.errors,[]);assert.deepEqual(native.refreshLocal().errors,[]);
+  if(scenario==='extension'){
+   const updated=store.get('branch',branch.id);assert.equal(store.raw(updated.head),raw);assert.equal(updated.name,branch.name);
+   assert.equal(store.instances()[0].baseRevision,updated.head);assert.equal(store.get('revision',updated.head).parent,replacement.id);
+  }else assert.equal(store.get('branch',branch.id).head,replacement.id);
+ }
+});

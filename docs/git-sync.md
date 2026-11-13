@@ -2,6 +2,8 @@
 
 Native Git over SSH is the only sync transport. Grove uses an application-owned checkout, separate from the user's project/source repository. Local SQLite remains the authoritative library and is never committed.
 
+When accessing Grove through a forwarded port, Git still runs on the machine hosting the Grove service, under that service's account. The browser's machine and forwarded port do not provide Git credentials. Test `ssh -T git@github.com` on the service host as that account (substitute your Git host). GitHub's successful greeting can return exit code 1; `Permission denied (publickey)` means authentication failed. Configure that account's SSH identity and repository access, then retry Pull. An interactive SSH session's forwarded agent may disappear at logout or be unavailable to a background service. Grove inherits `SSH_AUTH_SOCK`, `GIT_SSH_COMMAND` and `GIT_SSH` from its launch environment; restart the service after changing that environment. Do not copy private keys into Grove or its data repository.
+
 ## Repository format
 
 ```text

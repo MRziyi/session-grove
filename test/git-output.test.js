@@ -37,3 +37,16 @@ test('offline baseline lookup reads graphs above the generic Git limit without c
   const restored=await cloud.undoBaseline(id);assert.equal(hash(JSON.stringify(restored)),ack);assert.equal(restored.note,graph.note);assert.equal(saved,restored);
  }finally{fs.rmSync(root,{recursive:true,force:true,maxRetries:5,retryDelay:100});}
 });
+
+test('Git respects the service account custom SSH command instead of replacing its identity setup',async t=>{
+ const root=fs.mkdtempSync(path.join(os.tmpdir(),'grove-ssh-command-'));
+ const previous=process.env.GIT_SSH_COMMAND;
+ t.after(()=>{if(previous===undefined)delete process.env.GIT_SSH_COMMAND;else process.env.GIT_SSH_COMMAND=previous;fs.rmSync(root,{recursive:true,force:true});});
+ const script=path.join(root,'ssh.cjs'),marker=path.join(root,'invoked');
+ fs.writeFileSync(script,'require("node:fs").writeFileSync('+JSON.stringify(marker)+',"invoked");process.exit(1);');
+ const quote=s=>"'"+s.replaceAll("'","'\\''")+"'";
+ process.env.GIT_SSH_COMMAND=quote(process.execPath.replaceAll('\\','/'))+' '+quote(script.replaceAll('\\','/'));
+ const remote=new GitRemote(root,'git@example.invalid:fixture.git');
+ await assert.rejects(remote.run(['ls-remote',remote.url],{timeout:5000}));
+ assert.equal(fs.readFileSync(marker,'utf8'),'invoked');
+});

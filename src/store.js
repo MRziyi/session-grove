@@ -42,6 +42,7 @@ export class Store {
         fs.chmodSync(path.join(root, 'grove.sqlite'), 0o600);
         this.syncFingerprintDeps = new Map(); this.version = 0; this.cloudVersion = 0; this.cloudCache = new Map(); this.memoCache = new Map(); this.parseCache = new Map(); this.parseBytes = 0; this.summaryCache = new Map(); this.recordCache = new Map(); this.recordBytes = 0;
         this.getStatement = this.db.prepare('SELECT body FROM entities WHERE kind=? AND id=?');
+        this.hasStatement = this.db.prepare('SELECT 1 FROM entities WHERE kind=? AND id=?');
         this.entityById = this.db.prepare('SELECT body FROM entities WHERE id=?');
         this.storage=new StorageCodec(this.db);
         const objectRead=this.db.prepare('SELECT body FROM objects WHERE hash=?'),objectWrite=this.db.prepare('INSERT OR IGNORE INTO objects VALUES (?,?)'),objectExists=this.db.prepare('SELECT 1 FROM objects WHERE hash=?');
@@ -158,6 +159,7 @@ export class Store {
     all(kind) { return this.storage.entities(kind,this.allStatement.all(kind)); }
     get(kind, key) { const row = this.getStatement.get(kind, key); assert(row, `${kind} 不存在`, 404); return this.storage.entity(kind,key,row.body); }
     find(kind, key) { const row = this.getStatement.get(kind, key); return row ? this.storage.entity(kind,key,row.body) : undefined; }
+    has(kind, key) { return !!this.hasStatement.get(kind,key); }
     put(kind, value, options={}) {
         assert(!this.storageBusy,'Storage optimization is in progress.',409);
         if(kind==='revision'&&!this.db.isTransaction)return this.transaction(()=>this.put(kind,value,options));

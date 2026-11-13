@@ -42,10 +42,10 @@ export class Native {
         // references that revision instead of duplicating the whole log in local state.
         const instances = store.instances(); let compacted = false;
         for (const i of instances) {
-            if(isTrashed(store,i.branchId)){if(i.baseline){i.baseline=null;compacted=true;}continue;}
+            if(isTrashed(store,i.branchId)||store.get('branch',i.branchId).trashed){if(i.baseline){i.baseline=null;compacted=true;}continue;}
             if (i.summaryVersion === 5 && i.summaryRevision === i.baseRevision && i.summaryJson) { try { store.summaryCache.set(i.agent+':'+i.baseRevision,JSON.parse(i.summaryJson)); } catch {} }
             if (i.adopted && i.baseline) { i.baseline=null; compacted=true; }
-            else if (i.baseline && i.baseRevision && i.baseline === store.raw(i.baseRevision)) { i.baseline = null; compacted = true; }
+            else if (i.baseline && i.baseRevision && store.has('revision',i.baseRevision) && i.baseline === store.raw(i.baseRevision)) { i.baseline = null; compacted = true; }
         }
         if (compacted) store.local('instances', instances);
     }
@@ -58,7 +58,8 @@ export class Native {
     discover() {
         const found = [], errors = [], showScheduled = preferences(this.store).showScheduledSessions;
         const instances = this.store.instances();
-        const ignoredFiles=new Set(instances.filter(i=>isTrashed(this.store,i.branchId)).map(i=>i.file));
+        const removed = new Set(this.store.all('branch').filter(b=>b.trashed).map(b=>b.id));
+        const ignoredFiles=new Set(instances.filter(i=>removed.has(i.branchId)||isTrashed(this.store,i.branchId)).map(i=>i.file));
         const byFile=new Map(),byNativeId=new Map();
         for(const instance of instances){const fileKey=instance.agent+':'+instance.file,nativeKey=instance.agent+':'+instance.nativeId;if(!byFile.has(fileKey))byFile.set(fileKey,instance);if(!byNativeId.has(nativeKey))byNativeId.set(nativeKey,instance);}
         this.catalog.clear(); this.observations = new Map(); this.historyFiles = [...new Set([...codexFiles(this.roots.codex), ...instances.filter(i => i.agent === 'codex' && i.file && inside(this.store.root, i.file) && fs.existsSync(i.file)).map(i => i.file)])];
@@ -113,7 +114,8 @@ export class Native {
                         if (namedId && canonicalPaths.has(namedId) && canonicalPaths.get(namedId) !== path.resolve(file).replace(/\.zst$/,'')) continue;
                         const stat = fs.statSync(file), stamp = `${stat.ino}:${stat.size}:${stat.mtimeMs}:${stat.ctimeMs}`;
                         const known = byFile.get(agent+':'+file) || (indexed?.id && byNativeId.get(agent+':'+indexed.id));
-                        const saved = known?.summaryVersion === 5 && known.observedStamp === stamp && this.store.summary(known.baseRevision,agent);
+                        if(known&&removed.has(known.branchId))continue;
+                        const saved = known?.summaryVersion === 5 && known.observedStamp === stamp && this.store.has('revision',known.baseRevision) && this.store.summary(known.baseRevision,agent);
                         let p = saved ? { nativeId:known.nativeId,cwd:known.cwd,count:saved.chats,firstUser:saved.firstUser,title:agent==='claude'?saved.nativeTitle:known.title,background:saved.background,initialization:saved.background==='background',source:indexed?.source,warnings:[],errors:0 } : this.scanCache.get(file)?.stamp === stamp ? this.scanCache.get(file).summary : null;
                         if (!p) { const full = parse(this.history(file, agent), agent); p = { nativeId: full.nativeId, cwd: full.cwd, title: agent === 'claude' ? claudeTitle(full.records).title : null, initialization: agent === 'claude' && claudeTitle(full.records).initialization, storedSummary: this.store.rememberSummary('scan:' + hash(file) + ':' + stamp, agent, full), firstUser: full.messages.find(m => m.role === 'user')?.text.slice(0, 100), count: full.messages.filter(m => m.role !== 'tool').length, source: full.meta?.source, threadSource:full.meta?.thread_source, sidechain: full.records.find(r => ['user', 'assistant'].includes(r.value?.type))?.value?.isSidechain === true, originKind: full.records.find(r => r.value?.type === 'user' && !r.value.isMeta)?.value?.origin?.kind, sessionKind: full.records.find(r=>r.value?.sessionKind)?.value.sessionKind, warnings: full.warnings, errors: full.errors.length }; this.scanCache.set(file, { stamp, summary: p }); }
                         if (p.errors) { errors.push({ file:path.basename(file), message:'Native record is still being written.' }); continue; }
@@ -267,13 +269,22 @@ export class Native {
         for (const i of instances) {
             if(branchIds&&!branchIds.includes(i.branchId))continue;
             if(i.agent==='codex'&&i.file&&!fs.existsSync(i.file)&&fs.existsSync(i.file+'.zst'))i.file+='.zst';
-            if (isTrashed(this.store,i.branchId) || i.excluded && this.store.get('branch', i.branchId).excluded !== 'empty') continue;
+            if (isTrashed(this.store,i.branchId) || this.store.get('branch',i.branchId).trashed || i.excluded && this.store.get('branch', i.branchId).excluded !== 'empty') continue;
             if (!i.file || !fs.existsSync(i.file)) {
                 if (i.applied)
                     i.missing = true;
                 continue;
             }
             try {
+                if(!this.store.has('revision',i.baseRevision)){
+                    // Pull may replace an imported lineage while this device still
+                    // references its former baseline. Only adopt a surviving head
+                    // when the complete native history proves it is an extension.
+                    const branch=this.store.get('branch',i.branchId),current=this.store.raw(branch.head);
+                    const resolved=i.adopted?this.history(i.file,i.agent):null;
+                    assert(resolved!==null&&resolved.startsWith(current),'The saved native baseline is missing and the histories differ. Keep the native files and resolve this session before updating.');
+                    i.baseRevision=branch.head;i.summaryVersion=null;i.observedHash=null;i.historyResolved=false;
+                }
                 if (i.agent === 'claude' && i.applied && inside(this.roots.claude, i.file)) {
                     const directory = path.join(path.dirname(i.file), i.nativeId), stamp = auxiliaryStamp(directory);
                     if (i.auxiliaryStamp !== stamp) {
