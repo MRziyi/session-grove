@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import {DatabaseSync} from 'node:sqlite';
 import { Store } from '../src/store.js';
 import { activationInfo } from '../src/activation.js';
 import { Diagnostics } from '../src/diagnostics.js';
@@ -102,4 +103,22 @@ for(const scenario of ['extension','divergence','deleted dependency'])test('Upda
    assert.equal(store.instances()[0].baseRevision,updated.head);assert.equal(store.get('revision',updated.head).parent,replacement.id);
   }else assert.equal(store.get('branch',branch.id).head,replacement.id);
  }
+});
+
+for(const source of ['name column','session index','preview'])test('first import respects client title ownership from '+source,async t=>{
+ const {root,store,native:options}=fixture(t),{Native}=await import('../src/native.js'),{parse}=await import('../src/transcript.js');
+ const raw=codexSample(root,[['First question','First answer'],['Second question','Second answer']]),nativeId=parse(raw,'codex').nativeId;
+ const dir=path.join(options.roots.codex,'sessions');fs.mkdirSync(dir);const file=path.join(dir,'session.jsonl');fs.writeFileSync(file,raw);
+ const db=new DatabaseSync(path.join(options.roots.codex,'state_5.sqlite'));db.exec('CREATE TABLE threads(id TEXT,title TEXT,name TEXT,archived INTEGER)');db.prepare('INSERT INTO threads VALUES(?,?,?,0)').run(nativeId,'First question',source==='name column'?'My chosen name':null);db.close();
+ if(source==='session index')fs.writeFileSync(path.join(options.roots.codex,'session_index.jsonl'),JSON.stringify({id:nativeId,thread_name:'My chosen name'})+'\n');
+ const native=new Native(store,{roots:options.roots,guard:()=>{}});native.refreshLocal();const branchId=store.instances()[0].branchId,b=store.get('branch',branchId);
+ if(source==='preview')assert.equal(b.transcriptionNameOrigin,undefined);
+ else{
+  assert.equal(b.transcriptionNameOrigin,'manual');assert.equal(b.transcriptionTitle,'My chosen name');
+  // Older installations already imported the same title without ownership.
+  const {transcriptionNameOrigin,transcriptionTitle,...legacy}=b;store.put('branch',legacy);native.refreshLocal();assert.equal(store.get('branch',branchId).transcriptionNameOrigin,'manual');
+  // Grove-owned automatic names remain eligible on subsequent structural changes.
+  store.put('branch',{...store.get('branch',branchId),transcriptionNameOrigin:'automatic',transcriptionNaming:{name:'My chosen name'}});native.refreshLocal();assert.equal(store.get('branch',branchId).transcriptionNameOrigin,'automatic');
+ }
+ assert.equal(fs.readFileSync(file,'utf8'),raw);
 });

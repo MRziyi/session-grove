@@ -13,7 +13,8 @@ try{
  const wait=async expression=>{for(let i=0;i<150;i++){if(await evaluate(expression))return;await new Promise(r=>setTimeout(r,100));}throw Error('Timeout '+expression);};
  await call('Runtime.enable');await call('Emulation.setFocusEmulationEnabled',{enabled:true});await call('Emulation.setDeviceMetricsOverride',{width:1280,height:900,deviceScaleFactor:1,mobile:false});
  await call('Page.enable');
- await call('Page.navigate',{url:baseURL.replace('127.0.0.1','localhost')});await wait('location.hostname==="127.0.0.1"&&document.querySelector("[data-guide-update]")');
+ await call('Page.navigate',{url:baseURL.replace('127.0.0.1','localhost')});await wait('document.querySelector("[data-guide-update]")');
+ assert.equal(await evaluate('location.origin'),baseURL.replace('127.0.0.1','localhost'),'navigation preserves the host and port used to access Grove');
  await call('Page.addScriptToEvaluateOnNewDocument',{source:`const nativeFetch=window.fetch;let failed=false;window.__injectedFailures=0;window.__requests=[];window.fetch=async(...args)=>{const mode=sessionStorage.getItem('connection-test');if(mode&&!failed&&String(args[0])==='/api/'+mode){failed=true;window.__injectedFailures++;throw new TypeError('Synthetic connection loss');}window.__requests.push(String(args[0]));return nativeFetch(...args);};`});
  for(const mode of ['state','bootstrap']){
   await evaluate(`sessionStorage.setItem('connection-test','${mode}')`);await call('Page.reload');

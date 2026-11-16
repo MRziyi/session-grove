@@ -32,6 +32,8 @@ export class TranscriptionTitles {
     instances(branchId){return this.store.instances().filter(i=>i.branchId===branchId&&i.agent==='codex'&&isActive(i)&&!i.nativeArchived);}
     ready(branchId){return this.capabilities().supported&&this.instances(branchId).length>0&&fs.existsSync(path.join(this.native.roots.codex,'ipc','ipc.sock'));}
     async rename(branchId,title,{signal,expected,validate=()=>true,origin='automatic'}={}){
+        const ensureOwnership=()=>{if(origin==='automatic'&&this.store.get('branch',branchId).transcriptionNameOrigin==='manual')throw Object.assign(Error('The client title changed. Its manual name was kept.'),{status:409,code:'CLIENT_TITLE_CHANGED'});};
+        ensureOwnership();
         assert(this.ready(branchId),'Open the supported Codex VS Code client to update transcription titles.',409);
         this.renaming ||= new Set();assert(!this.renaming.has(branchId),'This transcription title is already being updated.',409);
         const instances=this.instances(branchId),client=this.clientFactory(this.binary(),this.native.roots.codex),changed=[];
@@ -41,7 +43,7 @@ export class TranscriptionTitles {
             for(const instance of instances){
                 signal?.throwIfAborted();const read=await client.request('thread/read',{threadId:instance.nativeId,includeTurns:false}),name=read.thread.name||read.thread.preview||'';
                 const prior=expected?.[instance.nativeId]??instance.observedTitle??instance.title;
-                if(name!==title&&prior&&name!==prior){
+                if(prior&&name!==prior){
                     this.store.local('instances',this.store.instances().map(i=>i.id===instance.id?{...i,title:name,observedTitle:name}:i));
                     this.store.put('branch',metadata(this.store.get('branch',branchId),{transcriptionTitle:name,transcriptionNameOrigin:'manual',originalTitle:name}));
                     throw Object.assign(Error('The client title changed. Its manual name was kept.'),{status:409,code:'CLIENT_TITLE_CHANGED'});
@@ -49,20 +51,28 @@ export class TranscriptionTitles {
             }
             validatePath(validate);
             for(const {instance,name} of snapshots){
-                signal?.throwIfAborted();if(name!==title){await client.request('thread/name/set',{threadId:instance.nativeId,name:title});changed.push({id:instance.nativeId,name});}
+                signal?.throwIfAborted();ensureOwnership();if(name!==title){
+                    const current=await client.request('thread/read',{threadId:instance.nativeId,includeTurns:false}),currentName=current.thread.name||current.thread.preview||'';
+                    if(currentName!==name){
+                        this.store.local('instances',this.store.instances().map(i=>i.id===instance.id?{...i,title:currentName,observedTitle:currentName}:i));
+                        this.store.put('branch',metadata(this.store.get('branch',branchId),{transcriptionTitle:currentName,transcriptionNameOrigin:'manual',originalTitle:currentName}));
+                        throw Object.assign(Error('The client title changed. Its manual name was kept.'),{status:409,code:'CLIENT_TITLE_CHANGED'});
+                    }
+                    ensureOwnership();validatePath(validate);await client.request('thread/name/set',{threadId:instance.nativeId,name:title});changed.push({id:instance.nativeId,name});
+                }
                 const read=await client.request('thread/read',{threadId:instance.nativeId,includeTurns:false});assert(read.thread.name===title,'The client did not confirm the new transcription title.');
             }
             signal?.throwIfAborted();validatePath(validate);
             const refreshed=await this.refresh(this.native.roots.codex);assert(refreshed.status==='sent','The client title refresh is unavailable. The previous name was restored.',409);signal?.throwIfAborted();
             for(const {instance} of snapshots){const current=await client.request('thread/read',{threadId:instance.nativeId,includeTurns:false});assert(current.thread.name===title,'The client title changed before it could be applied in Grove.',409);}
-            validatePath(validate);
+            validatePath(validate);ensureOwnership();
             this.store.transaction(()=>{
                 this.store.checkpointOrganization(branchId);
                 const ids=new Set(instances.map(i=>i.id));this.store.local('instances',this.store.instances().map(i=>ids.has(i.id)?{...i,title,observedTitle:title}:i));
                 const b=this.store.get('branch',branchId);this.store.put('branch',metadata(b,{transcriptionTitle:title,transcriptionNameOrigin:origin,originalTitle:title},{automatic:origin==='automatic'}));
             });return {nativeIds:instances.map(i=>i.nativeId),refresh:refreshed.status,at:now()};
         }catch(error){
-            const failed=[];for(const item of changed.reverse())try{const current=await client.request('thread/read',{threadId:item.id,includeTurns:false});if(current.thread.name===title)await client.request('thread/name/set',{threadId:item.id,name:item.name});}catch{failed.push(item.id);}
+            const failed=[];for(const item of changed.reverse())try{const current=await client.request('thread/read',{threadId:item.id,includeTurns:false}),branch=this.store.get('branch',branchId),chosenManually=branch.transcriptionNameOrigin==='manual'&&branch.transcriptionTitle===title;if(current.thread.name===title&&!chosenManually)await client.request('thread/name/set',{threadId:item.id,name:item.name});}catch{failed.push(item.id);}
             if(changed.length)await this.refresh(this.native.roots.codex).catch(()=>{});
             if(failed.length)throw Error('Some client titles could not be rolled back. Update the client list before retrying.');throw error;
         }finally{try{await client.close();}finally{this.renaming.delete(branchId);}}

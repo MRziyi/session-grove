@@ -2,9 +2,13 @@
 
 ## Unreleased
 
+## 1.2.3
+
+- Protect explicit client transcription names on first import and legacy observation. Recheck manual ownership and client titles before automatic writeback, including when the proposed name matches a concurrent manual rename.
 - Recover missing device capture baselines only when the native history extends the surviving saved head; skip deleted shared-context placeholders and preserve divergent histories with an explicit error. Show per-session Update errors instead of a generic compatibility failure.
 - Respect custom SSH commands and executables inherited by the service, and document authentication on the service host when accessing Grove through forwarded ports.
 - Allow access through forwarded domains and ports by removing fixed Host, Origin and Fetch Metadata address checks and the localhost redirect.
+- Update reconnection browser coverage to preserve the accessed host and port rather than waiting for the removed localhost redirect; retain startup-failure and offline/online recovery checks.
 
 ## 1.2.2
 

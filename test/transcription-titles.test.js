@@ -18,7 +18,7 @@ test('completed evidence caps assistant prose and preserves the human requests',
 });
 test('client rename uses official RPC and verifies persistence before updating Grove',async t=>{
  const f=setup(t),b=f.store.branch(null,'Grove alias','codex',codexSample(f.root,[['Hello','Reply']]));f.store.put('branch',{...b,sessionName:'Tree title',sessionNameOrigin:'manual'});f.store.local('instances',[{id:'copy',branchId:b.id,nativeId:'thread',agent:'codex',applied:true,title:'Client original',observedTitle:'Client original'}]);const calls=[];let title='Client original';const manager=new TranscriptionTitles(f.store,{roots:{codex:f.root}},{support:()=>({supported:true}),binary:()=>'/fixture',refresh:async()=>({status:'sent'}),clientFactory:()=>({init:async()=>{},close:async()=>{},request:async(method,params)=>{calls.push(method);if(method==='thread/read')return {thread:{name:title}};assert.equal(method,'thread/name/set');title=params.name;return {};}})});manager.ready=()=>true;
- await manager.rename(b.id,'Native new',{expected:{thread:'Client original'}});assert.equal(title,'Native new');assert.equal(f.store.get('branch',b.id).transcriptionTitle,'Native new');assert.equal(f.store.get('branch',b.id).sessionName,'Tree title');assert.equal(f.store.instances()[0].observedTitle,'Native new');assert.deepEqual(calls,['thread/read','thread/name/set','thread/read','thread/read']);
+ await manager.rename(b.id,'Native new',{expected:{thread:'Client original'}});assert.equal(title,'Native new');assert.equal(f.store.get('branch',b.id).transcriptionTitle,'Native new');assert.equal(f.store.get('branch',b.id).sessionName,'Tree title');assert.equal(f.store.instances()[0].observedTitle,'Native new');assert.deepEqual(calls,['thread/read','thread/read','thread/name/set','thread/read','thread/read']);
 });
 test('manual client changes win and a failed refresh restores the old native title',async t=>{
  const f=setup(t),b=f.store.branch(null,'Alias','codex',codexSample(f.root,[['Question','Answer']]));f.store.local('instances',[{id:'copy',branchId:b.id,nativeId:'thread',agent:'codex',applied:true,title:'Original'}]);let title='Original',writes=0;const manager=new TranscriptionTitles(f.store,{roots:{codex:f.root}},{support:()=>({supported:true}),binary:()=>'/fixture',refresh:async()=>({status:'unavailable'}),clientFactory:()=>({init:async()=>{},close:async()=>{},request:async(method,p)=>{if(method==='thread/read')return {thread:{name:title}};writes++;title=p.name;return {};}})});manager.ready=()=>true;
@@ -87,4 +87,34 @@ test('restart clears only the legacy stale-path error, preserving genuine failur
 test('archiving a path waiting for the client removes its dormant job on observation',async t=>{
  const f=setup(t),b=f.store.branch(null,'Native','codex',codexSample(f.root,[['First','One'],['Tail','Two']]));f.enabled.add(b.id);await f.smart.save({nameTranscripts:true});f.adapter.ready=()=>false;f.store.fork(b.id,{name:'Fork',end:f.store.detail(b.id).checkpoints[0].end});f.smart.observe();assert.equal(f.smart.data.jobs.length,1);assert.equal(f.smart.data.jobs[0].waitingForClient,true);
  f.store.put('branch',{...f.store.get('branch',b.id),archived:true});f.smart.observe();assert.equal(f.smart.data.jobs.length,0);assert.equal(f.smart.status().phase,null);await f.flush();assert.equal(f.requests.length,0);
+});
+
+for(const scenario of ['already manual','same as suggestion','before write'])test('automatic transcription writeback preserves manual ownership: '+scenario,async t=>{
+ const f=setup(t),b=f.store.branch(null,'Independent Grove alias','codex',codexSample(f.root,[['Question','Answer']]));
+ f.store.local('instances',[{id:'copy',branchId:b.id,nativeId:'thread',agent:'codex',applied:true,title:'Original',observedTitle:'Original'}]);
+ if(scenario==='already manual')f.store.put('branch',{...b,transcriptionTitle:'Original',transcriptionNameOrigin:'manual'});
+ let title=scenario==='same as suggestion'?'Proposed':'Original',reads=0,writes=0,opened=0;
+ const manager=new TranscriptionTitles(f.store,{roots:{codex:f.root}},{support:()=>({supported:true}),binary:()=>'/fixture',refresh:async()=>({status:'sent'}),clientFactory:()=>{opened++;return {init:async()=>{},close:async()=>{},request:async(method,p)=>{
+  if(method==='thread/read'){if(++reads===2&&scenario==='before write')title='My concurrent choice';return {thread:{name:title}};}
+  writes++;title=p.name;return {};
+ }};}});manager.ready=()=>true;
+ await assert.rejects(manager.rename(b.id,'Proposed',{expected:{thread:'Original'}}),e=>e.code==='CLIENT_TITLE_CHANGED');
+ assert.equal(writes,0);assert.equal(f.store.get('branch',b.id).transcriptionNameOrigin,'manual');
+ assert.equal(f.store.get('branch',b.id).transcriptionTitle,title);assert.equal(f.store.get('branch',b.id).name,'Independent Grove alias');
+ if(scenario==='already manual')assert.equal(opened,0);
+});
+
+test('a manual transcription choice during a model request retires the automatic job',async t=>{
+ const f=setup(t),b=f.store.branch(null,'Alias','codex',codexSample(f.root,[['First','Done'],['Tail','Reply']]));f.enabled.add(b.id);await f.smart.save({nameTranscripts:true});
+ let release;f.smart.request=async()=>new Promise(resolve=>{release=resolve;});
+ f.store.fork(b.id,{name:'Fork',end:f.store.detail(b.id).checkpoints[0].end});f.smart.observe();clearTimeout(f.smart.timer);const task=f.smart.run();
+ f.store.put('branch',{...f.store.get('branch',b.id),transcriptionTitle:'My choice',transcriptionNameOrigin:'manual'});
+ release({name:'Unwanted automatic name'});await task;clearTimeout(f.smart.timer);
+ assert.equal(f.renames.length,0);assert.equal(f.store.get('branch',b.id).transcriptionTitle,'My choice');assert.equal(f.smart.error,null);assert.ok(!f.smart.data.jobs.some(j=>j.id===b.id));
+});
+
+test('rollback does not undo a manual confirmation of the just-written automatic text',async t=>{
+ const f=setup(t),b=f.store.branch(null,'Alias','codex',codexSample(f.root,[['Question','Answer']]));f.store.local('instances',[{id:'copy',branchId:b.id,nativeId:'thread',agent:'codex',applied:true,title:'Original'}]);let title='Original',writes=0;
+ const manager=new TranscriptionTitles(f.store,{roots:{codex:f.root}},{support:()=>({supported:true}),binary:()=>'/fixture',refresh:async()=>{f.store.put('branch',{...f.store.get('branch',b.id),transcriptionTitle:'Proposed',transcriptionNameOrigin:'manual'});return {status:'sent'};},clientFactory:()=>({init:async()=>{},close:async()=>{},request:async(method,p)=>{if(method==='thread/read')return {thread:{name:title}};writes++;title=p.name;return {};}})});manager.ready=()=>true;
+ await assert.rejects(manager.rename(b.id,'Proposed'),e=>e.code==='CLIENT_TITLE_CHANGED');assert.equal(title,'Proposed');assert.equal(writes,1);assert.equal(f.store.get('branch',b.id).transcriptionNameOrigin,'manual');
 });

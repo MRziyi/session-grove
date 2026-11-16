@@ -65,7 +65,7 @@ export class Native {
         this.catalog.clear(); this.observations = new Map(); this.historyFiles = [...new Set([...codexFiles(this.roots.codex), ...instances.filter(i => i.agent === 'codex' && i.file && inside(this.store.root, i.file) && fs.existsSync(i.file)).map(i => i.file)])];
         for (const agent of ['codex', 'claude']) {
             const root = this.roots[agent];
-            const titles = new Map(), archivedIds = new Set(), canonicalPaths = new Map(), provenance = new Map(), indexedFiles = new Map();
+            const titles = new Map(), explicitTitles = new Set(), archivedIds = new Set(), canonicalPaths = new Map(), provenance = new Map(), indexedFiles = new Map();
             if (agent === 'codex' && fs.existsSync(path.join(root, 'state_5.sqlite'))) {
                 let db;
                 try {
@@ -76,6 +76,7 @@ export class Native {
                         for (const row of db.prepare('SELECT id,title,archived' + optional.map(c => ',' + c).join('') + ' FROM threads').all()) {
                             // Older clients can keep a display name separate from the title/preview.
                             if (row.name || row.title) titles.set(row.id, row.name || row.title);
+                            if(row.name)explicitTitles.add(row.id);
                             provenance.set(row.id, { source: row.source, threadSource: row.thread_source });
                             if (row.archived) archivedIds.add(row.id);
                             if (row.rollout_path && path.isAbsolute(row.rollout_path)) { canonicalPaths.set(row.id, path.resolve(row.rollout_path).replace(/\.zst$/,'')); indexedFiles.set(path.resolve(row.rollout_path).replace(/\.zst$/,''), row); }
@@ -96,7 +97,7 @@ export class Native {
                 }
                 // Official thread/name/set appends the current name here; the SQLite
                 // legacy name column may retain an earlier value. Last valid entry wins.
-                for(const [id,title] of indexedTitles)titles.set(id,title);
+                for(const [id,title] of indexedTitles){titles.set(id,title);explicitTitles.add(id);}
             }
             const dirs = agent === 'codex' ? ['sessions', 'archived_sessions'] : ['projects'];
             for (const dir of dirs)
@@ -128,6 +129,7 @@ export class Native {
                         const scheduled = [sessionExclusion({agent,source:info.source,threadSource:info.threadSource}),sessionExclusion({agent,source:p.source,threadSource:p.threadSource})].includes('scheduled');
                         const background = p.background || backgroundKind({agent,source: info.source ?? p.source, threadSource: info.threadSource ?? p.threadSource, sidechain:p.sidechain,originKind:p.originKind,sessionKind:p.sessionKind, initialization:p.initialization});
                         const item = { background, scheduled, key: hash(file), agent, nativeId: p.nativeId, cwd: indexed?.cwd || p.cwd || '', cwdAvailable: !(indexed?.cwd || p.cwd) || fs.existsSync(indexed?.cwd || p.cwd), title: nativeTitle || p.firstUser || 'Untitled session', messages: p.count, updatedAt: stat.mtime.toISOString(), managed: byFile.has(agent+':'+file) || byNativeId.has(agent+':'+p.nativeId), warnings: p.warnings, excluded, source: info.source ?? p.source, archived: dir === 'archived_sessions' || archivedIds.has(p.nativeId) };
+                        item.clientNamed=explicitTitles.has(p.nativeId);
                         this.observations.set(file, item);
                         if (excluded) continue;
                         this.catalog.set(item.key, { ...item, file });
@@ -154,6 +156,9 @@ export class Native {
             const displayTitle = String(name || item.title).trim() || 'Untitled session';
             const b = this.store.branch(projectId, displayTitle, item.agent, raw, { cwd: item.cwd, agent: item.agent, nativeId: item.nativeId, client: 'unknown', operation: 'import', requiresAuxiliary, ...(auxiliary.length ? { auxiliary } : {}) });
             b.originalTitle = item.title;
+            // An explicit client name predates Grove's observation. Treat it as
+            // user-owned; the native index does not identify who requested it.
+            if(item.clientNamed){b.transcriptionTitle=item.title;b.transcriptionNameOrigin='manual';}
             b.contentUpdatedAt = item.updatedAt;
             b.archived = !!item.archived; b.scheduled = !!item.scheduled; b.background = item.background || null;
             this.store.put('branch', b);
@@ -162,7 +167,7 @@ export class Native {
             const cached = this.scanCache.get(item.file);
             if (cached?.stamp === stamp && cached.summary.storedSummary) this.store.summaryCache.set(item.agent + ':' + b.head, cached.summary.storedSummary);
             const summary = this.store.summary(b.head, item.agent);
-            instances.push({ summaryVersion: 5, summaryRevision: b.head, summaryJson: JSON.stringify(summary), observedStamp: stamp, ...(sidecarDir ? { auxiliaryStamp: auxiliaryStamp(sidecarDir) } : {}), id: id(), branchId: b.id, agent: b.agent, root: this.roots[b.agent], nativeId: item.nativeId, file: item.file, cwd: item.cwd, cwdAvailable: item.cwdAvailable, desired: observe && !item.archived, applied: !item.archived, baseRevision: b.head, baseline: null, historyResolved: true, observedHash: hash(physical), adopted: true, nativeArchived:!!item.archived, title: b.name, excluded: false, requiresAuxiliary });
+            instances.push({ summaryVersion: 5, summaryRevision: b.head, summaryJson: JSON.stringify(summary), observedStamp: stamp, ...(sidecarDir ? { auxiliaryStamp: auxiliaryStamp(sidecarDir) } : {}), id: id(), branchId: b.id, agent: b.agent, root: this.roots[b.agent], nativeId: item.nativeId, file: item.file, cwd: item.cwd, cwdAvailable: item.cwdAvailable, desired: observe && !item.archived, applied: !item.archived, baseRevision: b.head, baseline: null, historyResolved: true, observedHash: hash(physical), adopted: true, nativeArchived:!!item.archived, title: item.title, observedTitle:item.title, excluded: false, requiresAuxiliary });
             this.store.local('instances', instances);
             return b;
         });
@@ -204,7 +209,8 @@ export class Native {
                 instance.observedTitle = observed.title;
                 instance.title = observed.title;
                 if (observed.title !== branch.originalTitle) patch.originalTitle = observed.title;
-                if(clientRenamed||branch.transcriptionTitle&&observed.title!==branch.transcriptionTitle){patch.transcriptionTitle=observed.title;patch.transcriptionNameOrigin='manual';}
+                const preexistingClientName=observed.clientNamed&&!branch.transcriptionNameOrigin&&!branch.transcriptionNaming;
+                if(clientRenamed||preexistingClientName||branch.transcriptionTitle&&observed.title!==branch.transcriptionTitle){patch.transcriptionTitle=observed.title;patch.transcriptionNameOrigin='manual';}
             }
             if (Object.keys(patch).length) this.store.put('branch', metadata(branch, patch));
         }
